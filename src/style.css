@@ -169,8 +169,8 @@ body {
   width: var(--size);
   height: var(--size);
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #33353f, #16171d 70%);
-  border: 1px solid var(--border);
+  background: var(--panel-raised);
+  border: 2px solid var(--border);
   position: relative;
   cursor: ns-resize;
   touch-action: none;
