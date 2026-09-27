@@ -122,11 +122,11 @@ export class SynthEngine {
     voice.filter.Q.setTargetAtTime(filter.resonance, now, 0.05);
   }
 
-  noteOn(note: number, velocity = 1): void {
-    this.noteOff(note, true);
+  noteOn(note: number, velocity = 1, time?: number): void {
+    this.noteOff(note, true, time);
 
     const { osc, filter, ampEnv, filterEnv, portamentoSeconds } = this.params;
-    const now = this.ctx.currentTime;
+    const now = time ?? this.ctx.currentTime;
     const targetFreq = noteToFrequency(note + osc.octave * 12);
     const startFreq =
       portamentoSeconds > 0 && this.lastFrequency !== null ? this.lastFrequency : targetFreq;
@@ -200,13 +200,13 @@ export class SynthEngine {
     this.voices.set(note, voice);
   }
 
-  noteOff(note: number, immediate = false): void {
+  noteOff(note: number, immediate = false, time?: number): void {
     const voice = this.voices.get(note);
     if (!voice) return;
     this.voices.delete(note);
 
     const releaseSeconds = immediate ? 0.01 : this.params.ampEnv.release;
-    const now = this.ctx.currentTime;
+    const now = time ?? this.ctx.currentTime;
     voice.releasing = true;
 
     voice.ampGain.gain.cancelScheduledValues(now);

@@ -8,6 +8,19 @@ export const drumList: { id: DrumId; label: string }[] = [
   { id: "tom", label: "タム" },
 ];
 
+/** GM準拠に寄せたドラムノート番号。フレーズのノートデータにドラムを乗せるための対応表。 */
+export const drumNoteNumbers: Record<DrumId, number> = {
+  kick: 36,
+  snare: 38,
+  hat: 42,
+  clap: 39,
+  tom: 45,
+};
+
+export const noteNumberToDrum: Record<number, DrumId> = Object.fromEntries(
+  Object.entries(drumNoteNumbers).map(([id, n]) => [n, id as DrumId]),
+) as Record<number, DrumId>;
+
 export class DrumMachine {
   private readonly ctx: AudioContext;
   private readonly noiseBuffer: AudioBuffer;
@@ -19,28 +32,28 @@ export class DrumMachine {
     this.out = out;
   }
 
-  trigger(id: DrumId, velocity = 1): void {
+  trigger(id: DrumId, velocity = 1, time?: number): void {
+    const now = time ?? this.ctx.currentTime;
     switch (id) {
       case "kick":
-        this.playKick(velocity);
+        this.playKick(velocity, now);
         break;
       case "snare":
-        this.playSnare(velocity);
+        this.playSnare(velocity, now);
         break;
       case "hat":
-        this.playHat(velocity);
+        this.playHat(velocity, now);
         break;
       case "clap":
-        this.playClap(velocity);
+        this.playClap(velocity, now);
         break;
       case "tom":
-        this.playTom(velocity);
+        this.playTom(velocity, now);
         break;
     }
   }
 
-  private playKick(velocity: number): void {
-    const now = this.ctx.currentTime;
+  private playKick(velocity: number, now: number): void {
     const osc = this.ctx.createOscillator();
     osc.type = "sine";
     osc.frequency.setValueAtTime(150, now);
@@ -56,9 +69,7 @@ export class DrumMachine {
     osc.stop(now + 0.4);
   }
 
-  private playSnare(velocity: number): void {
-    const now = this.ctx.currentTime;
-
+  private playSnare(velocity: number, now: number): void {
     const noise = this.ctx.createBufferSource();
     noise.buffer = this.noiseBuffer;
     const noiseFilter = this.ctx.createBiquadFilter();
@@ -86,8 +97,7 @@ export class DrumMachine {
     tone.stop(now + 0.15);
   }
 
-  private playHat(velocity: number): void {
-    const now = this.ctx.currentTime;
+  private playHat(velocity: number, now: number): void {
     const noise = this.ctx.createBufferSource();
     noise.buffer = this.noiseBuffer;
     const filter = this.ctx.createBiquadFilter();
@@ -104,8 +114,7 @@ export class DrumMachine {
     noise.stop(now + 0.08);
   }
 
-  private playClap(velocity: number): void {
-    const now = this.ctx.currentTime;
+  private playClap(velocity: number, now: number): void {
     const offsets = [0, 0.01, 0.02, 0.03];
     for (const offset of offsets) {
       const t = now + offset;
@@ -127,8 +136,7 @@ export class DrumMachine {
     }
   }
 
-  private playTom(velocity: number): void {
-    const now = this.ctx.currentTime;
+  private playTom(velocity: number, now: number): void {
     const osc = this.ctx.createOscillator();
     osc.type = "triangle";
     osc.frequency.setValueAtTime(220, now);
