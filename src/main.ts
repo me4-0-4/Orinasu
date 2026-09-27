@@ -35,7 +35,12 @@ async function ensureAudio(): Promise<void> {
   if (started) return;
   started = true;
   await engine.resume();
+  document.documentElement.style.overflow = "";
+  document.body.style.overflow = "";
   startOverlay.remove();
+  // タップで音が鳴ることを確認できるよう、短い確認音を鳴らす
+  synth.noteOn(72, 0.5);
+  window.setTimeout(() => synth.noteOff(72), 150);
 }
 
 // --- フレーズの状態 ---------------------------------------------------------
@@ -331,6 +336,10 @@ const startOverlay = document.createElement("div");
 startOverlay.className = "start-overlay";
 startOverlay.textContent = "タップして音を出す";
 startOverlay.addEventListener("pointerdown", () => void ensureAudio());
+// オーバーレイを消すまでは背後をスクロールさせない（スマホのSafariで固定要素の位置がずれて
+// 見つけにくくなる問題を避けるため、そもそもスクロールできない状態にする）
+document.documentElement.style.overflow = "hidden";
+document.body.style.overflow = "hidden";
 
 app.append(header, main, footer, startOverlay);
 
