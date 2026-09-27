@@ -270,7 +270,7 @@ body {
 }
 
 .start-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(12, 13, 18, 0.85);
   color: var(--text);
