@@ -34,7 +34,13 @@ let started = false;
 async function ensureAudio(): Promise<void> {
   if (started) return;
   started = true;
-  await engine.resume();
+  try {
+    await engine.resume();
+  } catch (err) {
+    console.error("AudioContextの再開に失敗しました", err);
+    started = false; // 失敗した場合は次のタップでもう一度試せるようにする
+    return;
+  }
   document.documentElement.style.overflow = "";
   document.body.style.overflow = "";
   startOverlay.remove();
@@ -335,7 +341,10 @@ footer.append(octaveLabel, keyboard.el);
 const startOverlay = document.createElement("div");
 startOverlay.className = "start-overlay";
 startOverlay.textContent = "タップして音を出す";
+// iOSのSafariなど環境によってポインターイベントの扱いが異なるため、複数のイベントで拾う
 startOverlay.addEventListener("pointerdown", () => void ensureAudio());
+startOverlay.addEventListener("touchend", () => void ensureAudio());
+startOverlay.addEventListener("click", () => void ensureAudio());
 // オーバーレイを消すまでは背後をスクロールさせない（スマホのSafariで固定要素の位置がずれて
 // 見つけにくくなる問題を避けるため、そもそもスクロールできない状態にする）
 document.documentElement.style.overflow = "hidden";
