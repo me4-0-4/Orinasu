@@ -15,7 +15,8 @@ export class PianoKeyboard {
   private keys: KeyGeometry[] = [];
   private activeNotes = new Set<number>();
   private pointerNotes = new Map<number, number>();
-  private height = 140;
+  private keyLabels = new Map<number, string>();
+  private height = 100;
 
   onNoteOn: (note: number) => void = () => {};
   onNoteOff: (note: number) => void = () => {};
@@ -47,6 +48,12 @@ export class PianoKeyboard {
 
   setActiveNotes(notes: Set<number>): void {
     this.activeNotes = notes;
+    this.draw();
+  }
+
+  /** PCキーボードのどのキーがどの音に対応するかを鍵盤上に表示する（音名→キー文字）。 */
+  setKeyLabels(labels: Map<number, string>): void {
+    this.keyLabels = labels;
     this.draw();
   }
 
@@ -110,6 +117,9 @@ export class PianoKeyboard {
     const width = Math.max(rect.width, 280);
     ctx.clearRect(0, 0, width, this.height);
 
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+
     for (const key of this.keys) {
       if (key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
@@ -118,12 +128,25 @@ export class PianoKeyboard {
       ctx.lineWidth = 1;
       ctx.fillRect(key.x, 0, key.width, this.height);
       ctx.strokeRect(key.x, 0, key.width, this.height);
+
+      const label = this.keyLabels.get(key.note);
+      if (label) {
+        ctx.fillStyle = "#15161c";
+        ctx.fillText(label, key.x + key.width / 2, this.height - 10);
+      }
     }
     for (const key of this.keys) {
       if (!key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
       ctx.fillStyle = active ? "#2bbd8f" : "#101014";
-      ctx.fillRect(key.x, 0, key.width, this.height * 0.62);
+      const blackHeight = this.height * 0.62;
+      ctx.fillRect(key.x, 0, key.width, blackHeight);
+
+      const label = this.keyLabels.get(key.note);
+      if (label) {
+        ctx.fillStyle = "#e9e9ee";
+        ctx.fillText(label, key.x + key.width / 2, blackHeight - 8);
+      }
     }
   }
 

@@ -9,6 +9,9 @@ interface Voice {
   ampGain: GainNode;
   lfoConnections: AudioParam[];
   releasing: boolean;
+  /** noteOn時に計算したサステインレベル（noteOffで.valueの代わりに使う。理由はnoteOff内のコメント参照） */
+  sustainGain: number;
+  sustainCutoff: number;
 }
 
 export class SynthEngine {
@@ -195,6 +198,8 @@ export class SynthEngine {
       ampGain,
       lfoConnections: [],
       releasing: false,
+      sustainGain: velocity * ampEnv.sustain,
+      sustainCutoff,
     };
     this.connectLfoTo(voice);
     this.voices.set(note, voice);
@@ -209,13 +214,18 @@ export class SynthEngine {
     const now = time ?? this.ctx.currentTime;
     voice.releasing = true;
 
+    // 注意：voice.ampGain.gain.value / voice.filter.frequency.value は「今この瞬間の実効値」しか
+    // 返さない。noteOnを未来の時刻でスケジュールした直後に（同じタイミングで）noteOffも未来の
+    // 時刻でスケジュールすると、その時点ではまだAttack/Decayのカーブが実際には始まっていないため
+    // .valueは実際のサステイン値ではなくノード生成直後の初期値を返してしまい、音量カーブが崩れて
+    // ほぼ無音になっていた。noteOn時に計算しておいたサステインレベルを使うことで回避する。
     voice.ampGain.gain.cancelScheduledValues(now);
-    voice.ampGain.gain.setValueAtTime(voice.ampGain.gain.value, now);
+    voice.ampGain.gain.setValueAtTime(voice.sustainGain, now);
     voice.ampGain.gain.linearRampToValueAtTime(0, now + releaseSeconds);
 
     const filterRelease = immediate ? 0.01 : this.params.filterEnv.release;
     voice.filter.frequency.cancelScheduledValues(now);
-    voice.filter.frequency.setValueAtTime(voice.filter.frequency.value, now);
+    voice.filter.frequency.setValueAtTime(voice.sustainCutoff, now);
     voice.filter.frequency.linearRampToValueAtTime(
       clampFrequency(this.params.filter.cutoff),
       now + filterRelease,
