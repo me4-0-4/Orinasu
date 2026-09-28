@@ -38,15 +38,11 @@ async function ensureAudio(): Promise<void> {
     await engine.resume();
   } catch (err) {
     console.error("AudioContextの再開に失敗しました", err);
-    started = false; // 失敗した場合は次のタップでもう一度試せるようにする
+    started = false; // 失敗した場合は次の操作でもう一度試せるようにする
     return;
   }
-  document.documentElement.style.overflow = "";
-  document.body.style.overflow = "";
-  startOverlay.remove();
-  // タップで音が鳴ることを確認できるよう、短い確認音を鳴らす
-  synth.noteOn(72, 0.5);
-  window.setTimeout(() => synth.noteOff(72), 150);
+  audioStartButton.textContent = "音声オン";
+  audioStartButton.disabled = true;
 }
 
 // --- フレーズの状態 ---------------------------------------------------------
@@ -135,9 +131,16 @@ header.className = "app-header";
 const title = document.createElement("div");
 title.className = "app-title";
 title.textContent = "Orinasu";
+
+const audioStartButton = document.createElement("button");
+audioStartButton.type = "button";
+audioStartButton.className = "audio-start-button";
+audioStartButton.textContent = "音声を出す";
+audioStartButton.addEventListener("click", () => void ensureAudio());
+
 const latency = document.createElement("div");
 latency.className = "latency-readout";
-header.append(title, latency);
+header.append(title, audioStartButton, latency);
 
 const main = document.createElement("main");
 main.className = "app-main";
@@ -338,19 +341,12 @@ octaveLabel.className = "octave-label";
 const keyboard = new PianoKeyboard(48, 3);
 footer.append(octaveLabel, keyboard.el);
 
-const startOverlay = document.createElement("div");
-startOverlay.className = "start-overlay";
-startOverlay.textContent = "タップして音を出す";
-// iOSのSafariなど環境によってポインターイベントの扱いが異なるため、複数のイベントで拾う
-startOverlay.addEventListener("pointerdown", () => void ensureAudio());
-startOverlay.addEventListener("touchend", () => void ensureAudio());
-startOverlay.addEventListener("click", () => void ensureAudio());
-// オーバーレイを消すまでは背後をスクロールさせない（スマホのSafariで固定要素の位置がずれて
-// 見つけにくくなる問題を避けるため、そもそもスクロールできない状態にする）
-document.documentElement.style.overflow = "hidden";
-document.body.style.overflow = "hidden";
+app.append(header, main, footer);
 
-app.append(header, main, footer, startOverlay);
+// ブラウザの自動再生制限により、最初の操作（鍵盤・ツマミ・ボタンなど何でも）で
+// AudioContextを解放する。専用の開始画面は置かず、最初から普通に触れる状態にする。
+window.addEventListener("pointerdown", () => void ensureAudio());
+window.addEventListener("keydown", () => void ensureAudio());
 
 // --- 鍵盤の演奏 -----------------------------------------------------------
 
