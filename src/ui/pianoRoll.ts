@@ -5,6 +5,14 @@ const PITCH_MIN = 33; // A1
 const PITCH_MAX = 96; // C7
 const ROW_HEIGHT = 14;
 const HEADER_HEIGHT = 20;
+const KEY_STRIP_WIDTH = 30;
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+function pitchName(pitch: number): string {
+  const octave = Math.floor(pitch / 12) - 1; // MIDI 60 = C4
+  return `${NOTE_NAMES[pitch % 12]}${octave}`;
+}
 
 type DragMode = "move" | "resize";
 
@@ -22,6 +30,7 @@ export class PianoRoll {
   readonly el: HTMLElement;
   private readonly scrollWrap: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
+  private readonly deleteButton: HTMLButtonElement;
   private phrase: Phrase | null = null;
   private activeLayerId: string | null = null;
   private selectedNoteId: string | null = null;
@@ -35,6 +44,16 @@ export class PianoRoll {
     this.el = document.createElement("div");
     this.el.className = "piano-roll";
 
+    const toolbar = document.createElement("div");
+    toolbar.className = "piano-roll-toolbar";
+    this.deleteButton = document.createElement("button");
+    this.deleteButton.type = "button";
+    this.deleteButton.className = "piano-roll-delete-button";
+    this.deleteButton.textContent = "選択ノートを削除";
+    this.deleteButton.disabled = true;
+    this.deleteButton.addEventListener("click", () => this.deleteSelected());
+    toolbar.appendChild(this.deleteButton);
+
     this.scrollWrap = document.createElement("div");
     this.scrollWrap.className = "piano-roll-scroll";
 
@@ -43,7 +62,7 @@ export class PianoRoll {
     this.canvas.tabIndex = 0;
 
     this.scrollWrap.appendChild(this.canvas);
-    this.el.appendChild(this.scrollWrap);
+    this.el.append(toolbar, this.scrollWrap);
 
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("keydown", this.onKeyDown);
@@ -86,9 +105,14 @@ export class PianoRoll {
     const layer = this.activeLayer();
     if (!layer) return;
     layer.notes = layer.notes.filter((n) => n.id !== this.selectedNoteId);
-    this.selectedNoteId = null;
+    this.setSelected(null);
     this.draw();
     this.onChange();
+  }
+
+  private setSelected(noteId: string | null): void {
+    this.selectedNoteId = noteId;
+    this.deleteButton.disabled = noteId === null;
   }
 
   private activeLayer(): Layer | null {
@@ -103,7 +127,7 @@ export class PianoRoll {
 
   private layoutWidth(): number {
     const rect = this.scrollWrap.getBoundingClientRect();
-    return Math.max(rect.width, this.totalBeats() * this.pxPerBeat);
+    return Math.max(rect.width, KEY_STRIP_WIDTH + this.totalBeats() * this.pxPerBeat);
   }
 
   private pitchToY(pitch: number): number {
@@ -114,8 +138,14 @@ export class PianoRoll {
     return PITCH_MAX - Math.floor((y - HEADER_HEIGHT) / ROW_HEIGHT);
   }
 
+  /** 拍位置(0起点)を、鍵盤の目印分オフセットした絶対x座標にする。 */
   private beatToX(beat: number): number {
-    return beat * this.pxPerBeat;
+    return KEY_STRIP_WIDTH + beat * this.pxPerBeat;
+  }
+
+  /** 拍の「長さ」をピクセル幅に変える（オフセットは含めない）。 */
+  private beatsToPx(beats: number): number {
+    return beats * this.pxPerBeat;
   }
 
   private draw(): void {
@@ -135,6 +165,15 @@ export class PianoRoll {
     const total = this.totalBeats();
     const layer = this.activeLayer();
     const grid = layer?.quantizeGrid;
+
+    // 白鍵/黒鍵の背景（鍵盤の目印の帯も含めて塗る）
+    for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
+      const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
+      if (isBlack) {
+        ctx.fillStyle = "#101014";
+        ctx.fillRect(0, this.pitchToY(p), width, ROW_HEIGHT);
+      }
+    }
 
     // 拍・小節のグリッド線
     for (let b = 0; b <= total; b += 1) {
@@ -159,14 +198,29 @@ export class PianoRoll {
       }
     }
 
-    // 白鍵/黒鍵の背景
+    // 左端：鍵盤の目印（Cの位置にだけ音名を出す）
+    ctx.fillStyle = "#0c0d12";
+    ctx.fillRect(0, 0, KEY_STRIP_WIDTH, realHeight);
+    ctx.strokeStyle = "#3a3c48";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(KEY_STRIP_WIDTH, 0);
+    ctx.lineTo(KEY_STRIP_WIDTH, realHeight);
+    ctx.stroke();
+    ctx.fillStyle = "#9a9ba6";
+    ctx.font = "9px sans-serif";
+    ctx.textAlign = "right";
     for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
-      const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
-      if (isBlack) {
-        ctx.fillStyle = "#101014";
-        ctx.fillRect(0, this.pitchToY(p), width, ROW_HEIGHT);
-      }
+      if (p % 12 !== 0) continue; // Cの行だけラベルを出す
+      const y = this.pitchToY(p);
+      ctx.strokeStyle = "#3a3c48";
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(KEY_STRIP_WIDTH, y);
+      ctx.stroke();
+      ctx.fillText(pitchName(p), KEY_STRIP_WIDTH - 3, y + ROW_HEIGHT - 4);
     }
+    ctx.textAlign = "left";
 
     // 他レイヤー（参考表示・編集不可）
     if (this.phrase) {
@@ -210,6 +264,37 @@ export class PianoRoll {
     }
   }
 
+  /** ノートの区間（開始・長さ）を1つ描く。小節の終わりをまたぐ場合は呼び出し側で2回に分けて呼ぶ。 */
+  private drawNoteSegment(
+    ctx: CanvasRenderingContext2D,
+    startBeat: number,
+    durationBeats: number,
+    pitch: number,
+    fill: string,
+    stroke: string,
+  ): { x: number; endX: number } {
+    const x = this.beatToX(startBeat);
+    const w = Math.max(4, this.beatsToPx(durationBeats));
+    const y = this.pitchToY(pitch);
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y + 1, w, ROW_HEIGHT - 2);
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 1.5, w - 1, ROW_HEIGHT - 3);
+    return { x, endX: x + w };
+  }
+
+  /** ノートの実効開始位置・長さを求める（クオンタイズ適用・小節長にクランプ済み）。 */
+  private effectiveNoteSpan(layer: Layer, note: Note): { wrapped: number; duration: number } {
+    const total = this.totalBeats();
+    const effectiveStart = layer.quantizeGrid
+      ? quantizeBeat(note.startBeats, layer.quantizeGrid)
+      : note.startBeats;
+    const wrapped = ((effectiveStart % total) + total) % total;
+    const duration = Math.min(note.durationBeats, total);
+    return { wrapped, duration };
+  }
+
   private drawNote(
     ctx: CanvasRenderingContext2D,
     layer: Layer,
@@ -218,18 +303,16 @@ export class PianoRoll {
     stroke: string,
   ): void {
     const total = this.totalBeats();
-    const effectiveStart = layer.quantizeGrid
-      ? quantizeBeat(note.startBeats, layer.quantizeGrid)
-      : note.startBeats;
-    const wrapped = ((effectiveStart % total) + total) % total;
-    const x = this.beatToX(wrapped);
-    const w = Math.max(4, this.beatToX(note.durationBeats));
-    const y = this.pitchToY(note.pitch);
-    ctx.fillStyle = fill;
-    ctx.fillRect(x, y + 1, w, ROW_HEIGHT - 2);
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, y + 1.5, w - 1, ROW_HEIGHT - 3);
+    const { wrapped, duration } = this.effectiveNoteSpan(layer, note);
+
+    if (wrapped + duration <= total) {
+      this.drawNoteSegment(ctx, wrapped, duration, note.pitch, fill, stroke);
+    } else {
+      // 小節の終わりをまたぐ場合、はみ出さないよう2つに分けて描く（続きは先頭に戻る）
+      const firstPart = total - wrapped;
+      this.drawNoteSegment(ctx, wrapped, firstPart, note.pitch, fill, stroke);
+      this.drawNoteSegment(ctx, 0, duration - firstPart, note.pitch, fill, stroke);
+    }
   }
 
   private noteAt(x: number, y: number): { note: Note; nearRightEdge: boolean } | null {
@@ -240,14 +323,23 @@ export class PianoRoll {
     for (let i = layer.notes.length - 1; i >= 0; i--) {
       const note = layer.notes[i];
       if (note.pitch !== pitch) continue;
-      const effectiveStart = layer.quantizeGrid
-        ? quantizeBeat(note.startBeats, layer.quantizeGrid)
-        : note.startBeats;
-      const wrapped = ((effectiveStart % total) + total) % total;
-      const startX = this.beatToX(wrapped);
-      const endX = startX + Math.max(4, this.beatToX(note.durationBeats));
-      if (x >= startX && x <= endX) {
-        return { note, nearRightEdge: endX - x < 6 };
+      const { wrapped, duration } = this.effectiveNoteSpan(layer, note);
+
+      const seg1Start = wrapped;
+      const seg1Duration = Math.min(duration, total - wrapped);
+      const seg1X = this.beatToX(seg1Start);
+      const seg1EndX = seg1X + Math.max(4, this.beatsToPx(seg1Duration));
+      if (x >= seg1X && x <= seg1EndX) {
+        return { note, nearRightEdge: seg1EndX - x < 6 && seg1Duration >= duration };
+      }
+
+      if (duration > seg1Duration) {
+        const seg2Duration = duration - seg1Duration;
+        const seg2X = this.beatToX(0);
+        const seg2EndX = seg2X + Math.max(4, this.beatsToPx(seg2Duration));
+        if (x >= seg2X && x <= seg2EndX) {
+          return { note, nearRightEdge: seg2EndX - x < 6 };
+        }
       }
     }
     return null;
@@ -262,11 +354,11 @@ export class PianoRoll {
     const y = e.clientY - rect.top;
     const hit = this.noteAt(x, y);
     if (!hit) {
-      this.selectedNoteId = null;
+      this.setSelected(null);
       this.draw();
       return;
     }
-    this.selectedNoteId = hit.note.id;
+    this.setSelected(hit.note.id);
     this.drag = {
       mode: hit.nearRightEdge ? "resize" : "move",
       note: hit.note,
@@ -290,7 +382,10 @@ export class PianoRoll {
     const total = this.totalBeats();
 
     if (this.drag.mode === "resize") {
-      this.drag.note.durationBeats = Math.max(0.05, this.drag.origDuration + deltaBeats);
+      this.drag.note.durationBeats = Math.min(
+        total,
+        Math.max(0.05, this.drag.origDuration + deltaBeats),
+      );
     } else {
       let newStart = this.drag.origStartBeats + deltaBeats;
       newStart = ((newStart % total) + total) % total;
