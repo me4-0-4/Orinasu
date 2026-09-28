@@ -5,7 +5,7 @@ const PITCH_MIN = 33; // A1
 const PITCH_MAX = 96; // C7
 const ROW_HEIGHT = 14;
 const HEADER_HEIGHT = 20;
-const KEY_STRIP_WIDTH = 30;
+const KEY_STRIP_WIDTH = 34;
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -198,36 +198,46 @@ export class PianoRoll {
       }
     }
 
-    // 左端：鍵盤の目印（Cの位置にだけ音名を出す）
+    // 左端：実際の鍵盤のように白鍵/黒鍵の帯を描き、どのCかが一目で分かるようにする
     ctx.fillStyle = "#0c0d12";
     ctx.fillRect(0, 0, KEY_STRIP_WIDTH, realHeight);
+    const blackKeyWidth = KEY_STRIP_WIDTH * 0.62;
+    for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
+      const y = this.pitchToY(p);
+      const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
+      ctx.fillStyle = isBlack ? "#1c1d24" : "#d8d9de";
+      ctx.fillRect(0, y, isBlack ? blackKeyWidth : KEY_STRIP_WIDTH, ROW_HEIGHT);
+      if (!isBlack) {
+        ctx.strokeStyle = "#0c0d1288";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y + ROW_HEIGHT + 0.5);
+        ctx.lineTo(KEY_STRIP_WIDTH, y + ROW_HEIGHT + 0.5);
+        ctx.stroke();
+      }
+    }
     ctx.strokeStyle = "#3a3c48";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(KEY_STRIP_WIDTH, 0);
     ctx.lineTo(KEY_STRIP_WIDTH, realHeight);
     ctx.stroke();
-    ctx.fillStyle = "#9a9ba6";
+    // Cの鍵にだけオクターブ番号込みの音名を出す（「C」だけだと何番目のCか分からないため）
+    ctx.fillStyle = "#0c0d12";
     ctx.font = "9px sans-serif";
-    ctx.textAlign = "right";
-    for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
-      if (p % 12 !== 0) continue; // Cの行だけラベルを出す
-      const y = this.pitchToY(p);
-      ctx.strokeStyle = "#3a3c48";
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(KEY_STRIP_WIDTH, y);
-      ctx.stroke();
-      ctx.fillText(pitchName(p), KEY_STRIP_WIDTH - 3, y + ROW_HEIGHT - 4);
-    }
     ctx.textAlign = "left";
+    for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
+      if (p % 12 !== 0) continue;
+      const y = this.pitchToY(p);
+      ctx.fillText(pitchName(p), 2, y + ROW_HEIGHT - 4);
+    }
 
     // 他レイヤー（参考表示・編集不可）
     if (this.phrase) {
       for (const l of this.phrase.layers) {
         if (l.id === this.activeLayerId) continue;
         for (const note of l.notes) {
-          this.drawNote(ctx, l, note, "#5eb4ff33", "#5eb4ff55");
+          this.drawNote(ctx, l, note, "#5eb4ff66", "#5eb4ff99");
         }
       }
     }

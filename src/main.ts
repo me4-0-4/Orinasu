@@ -100,12 +100,12 @@ const transport = new Transport(engine.ctx, engine.drumOut, {
       const id = noteNumberToDrum[note.pitch];
       if (id) drums.trigger(id, note.velocity, time);
     } else {
-      synth.noteOn(note.pitch, note.velocity, time);
+      synth.noteOn(`sched:${note.id}`, note.pitch, note.velocity, time);
     }
   },
   stopNote: (layer, note, time) => {
     if (layer.role !== "drums") {
-      synth.noteOff(note.pitch, false, time);
+      synth.noteOff(`sched:${note.id}`, false, time);
     }
   },
   onStateChange: (state: TransportState) => {
@@ -420,14 +420,14 @@ function noteOn(note: number): void {
   void ensureAudio();
   if (activeNotes.has(note)) return;
   activeNotes.add(note);
-  synth.noteOn(note);
+  synth.noteOn(`live:${note}`, note);
   recorder.noteOn(note);
   keyboard.setActiveNotes(activeNotes);
 }
 function noteOff(note: number): void {
   if (!activeNotes.has(note)) return;
   activeNotes.delete(note);
-  synth.noteOff(note);
+  synth.noteOff(`live:${note}`);
   recorder.noteOff(note);
   keyboard.setActiveNotes(activeNotes);
 }
