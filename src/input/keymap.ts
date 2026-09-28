@@ -26,3 +26,12 @@ export const octaveDownKey = "z";
 export const octaveUpKey = "x";
 
 export const baseMidiNote = 60; // C4
+
+/** ドラムパッドのキーボード割り当て（数字キー1〜5）。 */
+export const drumKeyMap: Record<string, "kick" | "snare" | "hat" | "clap" | "tom"> = {
+  "1": "kick",
+  "2": "snare",
+  "3": "hat",
+  "4": "clap",
+  "5": "tom",
+};

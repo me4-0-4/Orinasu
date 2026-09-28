@@ -1,13 +1,13 @@
 import "./style.css";
 import { AudioEngine } from "./audio/context";
 import { SynthEngine } from "./audio/synth";
-import { DrumMachine, drumNoteNumbers, noteNumberToDrum } from "./audio/drums";
+import { DrumMachine, drumNoteNumbers, noteNumberToDrum, type DrumId } from "./audio/drums";
 import { defaultSynthParams, synthPresets } from "./audio/synthParams";
 import { PianoKeyboard } from "./ui/pianoKeyboard";
 import { buildSynthPanel } from "./ui/synthPanel";
 import { buildDrumPads } from "./ui/drumPads";
 import { Visualizer } from "./ui/visualizer";
-import { baseMidiNote, noteKeyMap, octaveDownKey, octaveUpKey } from "./input/keymap";
+import { baseMidiNote, drumKeyMap, noteKeyMap, octaveDownKey, octaveUpKey } from "./input/keymap";
 import { Transport, type TransportState } from "./audio/transport";
 import { Recorder } from "./phrase/recorder";
 import { buildTransportPanel } from "./ui/transportPanel";
@@ -203,12 +203,13 @@ drumColumn.className = "panel-column panel-column-narrow";
 const drumHeading = document.createElement("div");
 drumHeading.className = "panel-heading";
 drumHeading.textContent = "ドラム";
-const pads = buildDrumPads((id) => {
+function hitDrum(id: DrumId): void {
   void ensureAudio();
   drums.trigger(id);
   recorder.hit(drumNoteNumbers[id]);
-});
-drumColumn.append(drumHeading, pads);
+}
+const pads = buildDrumPads(hitDrum);
+drumColumn.append(drumHeading, pads.el);
 
 const performTab = document.createElement("div");
 performTab.className = "tab-panel";
@@ -457,6 +458,14 @@ window.addEventListener("keydown", (e) => {
     octaveShift = Math.min(3, octaveShift + 1);
     updateOctaveLabel();
     updateKeyLabels();
+    return;
+  }
+  const drumId = drumKeyMap[key];
+  if (drumId) {
+    if (!e.repeat) {
+      hitDrum(drumId);
+      pads.flash(drumId);
+    }
     return;
   }
   const offset = noteKeyMap[key];
