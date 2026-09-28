@@ -503,6 +503,27 @@ body {
   gap: 6px;
 }
 
+.piano-roll-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  flex: none;
+}
+
+.piano-roll-delete-button {
+  background: var(--panel-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.piano-roll-delete-button:disabled {
+  color: var(--text-dim);
+  cursor: default;
+  opacity: 0.6;
+}
+
 .piano-roll-scroll {
   flex: 1;
   min-height: 0;
