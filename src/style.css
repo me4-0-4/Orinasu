@@ -348,6 +348,24 @@ body {
   flex: none;
 }
 
+.footer-drum-pads {
+  grid-template-columns: repeat(5, 1fr);
+  height: 100px;
+}
+
+.footer-drum-pads[hidden] {
+  display: none;
+}
+
+.footer-drum-pads .drum-pad {
+  font-size: 0.95rem;
+  padding-top: 14px;
+}
+
+.footer-drum-pads .drum-pad-key {
+  font-size: 0.75rem;
+}
+
 .octave-label {
   font-size: 0.75rem;
   color: var(--text-dim);

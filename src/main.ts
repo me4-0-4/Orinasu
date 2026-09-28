@@ -88,6 +88,7 @@ function refreshPhraseUI(): void {
       lengthBars: currentPhrase.lengthBars,
     });
   }
+  updateFooterMode();
 }
 
 // --- トランスポート（メトロノーム・録音・再生のクロック） -------------------------
@@ -388,9 +389,24 @@ footer.className = "app-footer";
 const octaveLabel = document.createElement("div");
 octaveLabel.className = "octave-label";
 const keyboard = new PianoKeyboard(48, 3);
-footer.append(octaveLabel, keyboard.el);
+
+const keyboardWrap = document.createElement("div");
+keyboardWrap.append(octaveLabel, keyboard.el);
+
+const footerDrumPads = buildDrumPads(hitDrum);
+footerDrumPads.el.classList.add("footer-drum-pads");
+footerDrumPads.el.hidden = true;
+
+footer.append(keyboardWrap, footerDrumPads.el);
 
 app.append(header, tabBar, main, footer);
+
+/** 録音対象のレイヤーがドラムの時は、足元の操作面を鍵盤からドラムパッドに切り替える。 */
+function updateFooterMode(): void {
+  const isDrumLayer = activeLayer()?.role === "drums";
+  keyboardWrap.hidden = isDrumLayer;
+  footerDrumPads.el.hidden = !isDrumLayer;
+}
 
 // ブラウザの自動再生制限により、最初の操作（鍵盤・ツマミ・ボタンなど何でも）で
 // AudioContextを解放する。専用の開始画面は置かず、最初から普通に触れる状態にする。
