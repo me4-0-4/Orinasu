@@ -33,7 +33,9 @@ export class PianoKeyboard {
     this.el.addEventListener("pointercancel", this.onPointerUp);
     this.el.addEventListener("pointerleave", this.onPointerUp);
 
-    window.addEventListener("resize", () => this.layout());
+    // コンストラクタの時点ではまだDOMに追加されておらずサイズが取れないため、
+    // 実際に表示サイズが確定した瞬間（DOM追加時・リサイズ時）に再計算する。
+    new ResizeObserver(() => this.layout()).observe(this.el);
     this.layout();
   }
 
