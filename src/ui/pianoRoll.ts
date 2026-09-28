@@ -227,7 +227,7 @@ export class PianoRoll {
       for (const l of this.phrase.layers) {
         if (l.id === this.activeLayerId) continue;
         for (const note of l.notes) {
-          this.drawNote(ctx, l, note, "#5eb4ff33", "#5eb4ff55");
+          this.drawNote(ctx, l, note, "#5eb4ff66", "#5eb4ff99");
         }
       }
     }

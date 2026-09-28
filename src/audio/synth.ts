@@ -21,7 +21,11 @@ export class SynthEngine {
   private readonly reverbSend: GainNode;
   private readonly delaySend: GainNode;
 
-  private readonly voices = new Map<number, Voice>();
+  // ライブ演奏と、録音フレーズの自動再生（さらに層ごと）が同時に同じ音程を
+  // 鳴らすことがあるため、キーは音程ではなく呼び出し元が渡す一意なvoiceIdにする。
+  // 音程だけをキーにすると、片方のnoteOffがもう片方のボイスを誤って奪ってしまい、
+  // 「音が鳴らない」「消えないまま鳴り続ける」不具合の原因になっていた。
+  private readonly voices = new Map<string, Voice>();
   private lastFrequency: number | null = null;
 
   private lfoOsc: OscillatorNode | null = null;
@@ -125,8 +129,8 @@ export class SynthEngine {
     voice.filter.Q.setTargetAtTime(filter.resonance, now, 0.05);
   }
 
-  noteOn(note: number, velocity = 1, time?: number): void {
-    this.noteOff(note, true, time);
+  noteOn(voiceId: string, note: number, velocity = 1, time?: number): void {
+    this.noteOff(voiceId, true, time);
 
     const { osc, filter, ampEnv, filterEnv, portamentoSeconds } = this.params;
     const now = time ?? this.ctx.currentTime;
@@ -202,13 +206,13 @@ export class SynthEngine {
       sustainCutoff,
     };
     this.connectLfoTo(voice);
-    this.voices.set(note, voice);
+    this.voices.set(voiceId, voice);
   }
 
-  noteOff(note: number, immediate = false, time?: number): void {
-    const voice = this.voices.get(note);
+  noteOff(voiceId: string, immediate = false, time?: number): void {
+    const voice = this.voices.get(voiceId);
     if (!voice) return;
-    this.voices.delete(note);
+    this.voices.delete(voiceId);
 
     const releaseSeconds = immediate ? 0.01 : this.params.ampEnv.release;
     const now = time ?? this.ctx.currentTime;
@@ -248,13 +252,13 @@ export class SynthEngine {
   }
 
   allNotesOff(): void {
-    for (const note of Array.from(this.voices.keys())) {
-      this.noteOff(note, true);
+    for (const voiceId of Array.from(this.voices.keys())) {
+      this.noteOff(voiceId, true);
     }
   }
 
   get activeNotes(): number[] {
-    return Array.from(this.voices.keys());
+    return Array.from(this.voices.values()).map((v) => v.note);
   }
 }
 
