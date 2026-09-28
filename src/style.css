@@ -75,7 +75,6 @@ body {
   background: var(--accent-green);
   color: #06110c;
   border: none;
-  border-radius: 6px;
   padding: 6px 14px;
   font-size: 0.85rem;
   font-weight: 700;
@@ -102,7 +101,6 @@ body {
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
   padding: 6px 16px;
   font-size: 0.82rem;
   cursor: pointer;
@@ -137,7 +135,6 @@ body {
   min-height: 0;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
   padding: 6px 10px;
   display: flex;
   flex-direction: column;
@@ -168,7 +165,6 @@ body {
   background: var(--panel-raised);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 4px 10px;
   font-size: 0.78rem;
   cursor: pointer;
@@ -186,18 +182,23 @@ body {
 }
 
 .knob-group {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px 6px 6px;
+  border: none;
+  border-left: 1px solid var(--border);
+  padding: 0 6px 6px 8px;
   margin: 0;
   min-width: 0;
+}
+
+.knob-group:first-child {
+  border-left: none;
+  padding-left: 0;
 }
 
 .knob-group legend {
   font-size: 0.66rem;
   letter-spacing: 0.08em;
   color: var(--text-dim);
-  padding: 0 4px;
+  padding: 0;
 }
 
 .knob-row {
@@ -223,7 +224,6 @@ body {
   background: var(--panel-raised);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 4px 6px;
   font-size: 0.8rem;
 }
@@ -285,7 +285,6 @@ body {
 .viz-cell {
   background: #0c0d12;
   border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -318,7 +317,6 @@ body {
 .drum-pad {
   background: var(--panel-raised);
   border: 1px solid var(--border);
-  border-radius: 8px;
   color: var(--text);
   padding: 10px 4px 6px;
   font-size: 0.76rem;
@@ -375,7 +373,6 @@ body {
 .piano-keyboard {
   width: 100%;
   display: block;
-  border-radius: 6px;
   touch-action: none;
 }
 
@@ -387,7 +384,6 @@ body {
   background: var(--panel-raised);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 4px 6px;
   font-size: 0.85rem;
   width: 70px;
@@ -404,7 +400,6 @@ body {
   background: var(--panel-raised);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 8px 16px;
   font-size: 0.9rem;
   cursor: pointer;
@@ -450,14 +445,14 @@ body {
   align-items: center;
   gap: 8px;
   background: var(--panel-raised);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--border);
   padding: 6px 10px;
   font-size: 0.82rem;
 }
 
 .layer-row.active {
-  border-color: var(--accent-green);
+  border-left-color: var(--accent-green);
 }
 
 .layer-role-label {
@@ -468,7 +463,6 @@ body {
   background: var(--panel);
   color: var(--text-dim);
   border: 1px solid var(--border);
-  border-radius: 4px;
   padding: 3px 8px;
   font-size: 0.72rem;
   cursor: pointer;
@@ -484,7 +478,6 @@ body {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 4px;
   font-size: 0.72rem;
   padding: 3px 4px;
 }
@@ -515,7 +508,6 @@ body {
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
 }
 
 .piano-roll-canvas {
@@ -551,7 +543,6 @@ body {
   background: var(--panel-raised);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 6px 10px;
   font-size: 0.8rem;
   cursor: pointer;
