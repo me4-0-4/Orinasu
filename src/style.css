@@ -56,6 +56,23 @@ body {
   color: var(--text-dim);
 }
 
+.audio-start-button {
+  background: var(--accent-green);
+  color: #06110c;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.audio-start-button:disabled {
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  cursor: default;
+}
+
 .app-main {
   flex: 1;
   display: flex;

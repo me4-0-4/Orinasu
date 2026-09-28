@@ -39,7 +39,10 @@ async function ensureAudio(): Promise<void> {
   } catch (err) {
     console.error("AudioContextの再開に失敗しました", err);
     started = false; // 失敗した場合は次の操作でもう一度試せるようにする
+    return;
   }
+  audioStartButton.textContent = "音声オン";
+  audioStartButton.disabled = true;
 }
 
 // --- フレーズの状態 ---------------------------------------------------------
@@ -128,9 +131,16 @@ header.className = "app-header";
 const title = document.createElement("div");
 title.className = "app-title";
 title.textContent = "Orinasu";
+
+const audioStartButton = document.createElement("button");
+audioStartButton.type = "button";
+audioStartButton.className = "audio-start-button";
+audioStartButton.textContent = "音声を出す";
+audioStartButton.addEventListener("click", () => void ensureAudio());
+
 const latency = document.createElement("div");
 latency.className = "latency-readout";
-header.append(title, latency);
+header.append(title, audioStartButton, latency);
 
 const main = document.createElement("main");
 main.className = "app-main";
