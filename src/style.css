@@ -35,13 +35,28 @@ body {
   position: relative;
 }
 
+/* PC幅ではページ自体はスクロールさせず、タブの中身だけがその領域に収まるようにする。
+   スマホ幅（720px以下）は縦積み表示に戻り、ページ全体のスクロールを許可する。 */
+@media (min-width: 721px) {
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+  #app {
+    height: 100vh;
+    min-height: 0;
+  }
+}
+
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  padding: 6px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  flex: none;
 }
 
 .app-title {
@@ -73,24 +88,61 @@ body {
   cursor: default;
 }
 
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 16px 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.tab-button {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 6px 16px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.tab-button.active {
+  background: var(--bg);
+  color: var(--accent-green);
+}
+
 .app-main {
   flex: 1;
-  display: flex;
-  flex-wrap: wrap;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.tab-panel {
+  display: none;
+  height: 100%;
+  min-height: 0;
   gap: 12px;
-  padding: 12px;
-  align-items: flex-start;
+}
+
+.tab-panel.active {
+  display: flex;
 }
 
 .panel-column {
   flex: 3 1 480px;
+  height: 100%;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 12px;
+  padding: 6px 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
+  overflow-y: auto; /* 想定より狭い画面での保険。通常サイズでは中身が収まりスクロールは出ない */
 }
 
 .panel-column-narrow {
@@ -98,16 +150,18 @@ body {
 }
 
 .panel-heading {
-  font-size: 0.8rem;
+  font-size: 0.68rem;
   letter-spacing: 0.12em;
   color: var(--text-dim);
   text-transform: uppercase;
+  flex: none;
 }
 
 .preset-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+  flex: none;
 }
 
 .preset-button {
@@ -115,8 +169,8 @@ body {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 0.85rem;
+  padding: 4px 10px;
+  font-size: 0.78rem;
   cursor: pointer;
 }
 
@@ -125,20 +179,22 @@ body {
 }
 
 .synth-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  flex: none;
 }
 
 .knob-group {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 10px 10px;
+  padding: 4px 6px 6px;
   margin: 0;
+  min-width: 0;
 }
 
 .knob-group legend {
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   letter-spacing: 0.08em;
   color: var(--text-dim);
   padding: 0 4px;
@@ -147,7 +203,7 @@ body {
 .knob-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 6px 8px;
   align-items: flex-start;
 }
 
@@ -155,7 +211,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 84px;
+  min-width: 72px;
 }
 
 .select-field label {
@@ -177,12 +233,12 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  width: 64px;
+  width: 54px;
   user-select: none;
 }
 
 .knob-dial {
-  --size: 48px;
+  --size: 40px;
   width: var(--size);
   height: var(--size);
   border-radius: 50%;
@@ -220,7 +276,10 @@ body {
 .visualizer-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
 }
 
 .viz-cell {
@@ -231,24 +290,31 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 42px;
 }
 
 .viz-label {
   font-size: 0.65rem;
   color: var(--text-dim);
   letter-spacing: 0.06em;
+  flex: none;
 }
 
 .viz-canvas {
   width: 100%;
-  height: 90px;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
   display: block;
 }
 
 .drum-pads {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
+  grid-auto-rows: 1fr;
   gap: 10px;
+  flex: 1;
+  min-height: 0;
 }
 
 .drum-pad {
@@ -270,7 +336,8 @@ body {
 .app-footer {
   border-top: 1px solid var(--border);
   background: var(--panel);
-  padding: 8px 16px 14px;
+  padding: 6px 16px 8px;
+  flex: none;
 }
 
 .octave-label {
@@ -410,10 +477,16 @@ body {
 .piano-roll {
   border-top: 1px solid var(--border);
   padding-top: 10px;
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .piano-roll-scroll {
-  max-height: 260px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -459,10 +532,36 @@ body {
 }
 
 @media (max-width: 720px) {
+  /* スマホ幅は1画面に収めることを狙わず、素直に縦積み＋ページスクロールに戻す */
   .app-main {
     flex-direction: column;
+    overflow: visible;
+    flex: none;
+  }
+  .tab-panel.active {
+    flex-direction: column;
+    height: auto;
+  }
+  .panel-column {
+    flex: none;
+    height: auto;
+    overflow-y: visible;
+  }
+  .synth-panel {
+    grid-template-columns: 1fr;
   }
   .visualizer-grid {
     grid-template-columns: 1fr;
+  }
+  .viz-canvas {
+    height: 90px;
+  }
+  .piano-roll {
+    flex: none;
+    min-height: 0;
+  }
+  .piano-roll-scroll {
+    flex: none;
+    max-height: 300px;
   }
 }

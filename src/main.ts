@@ -124,6 +124,30 @@ const transport = new Transport(engine.ctx, engine.drumOut, {
 
 const recorder = new Recorder(transport, activeLayer);
 
+function toggleRecord(): void {
+  void ensureAudio();
+  if (transport.state !== "stopped") {
+    transport.stop();
+    synth.allNotesOff();
+    return;
+  }
+  const phrase = ensurePhrase();
+  if (!activeLayerId && phrase.layers.length > 0) activeLayerId = phrase.layers[0].id;
+  refreshPhraseUI();
+  transport.start(true);
+}
+
+function togglePlay(): void {
+  void ensureAudio();
+  if (transport.state !== "stopped") {
+    transport.stop();
+    synth.allNotesOff();
+    return;
+  }
+  if (!currentPhrase) return;
+  transport.start(false);
+}
+
 // --- 画面構築 -----------------------------------------------------------
 
 const header = document.createElement("header");
@@ -186,7 +210,10 @@ const pads = buildDrumPads((id) => {
 });
 drumColumn.append(drumHeading, pads);
 
-main.append(synthColumn, drumColumn);
+const performTab = document.createElement("div");
+performTab.className = "tab-panel";
+performTab.append(synthColumn, drumColumn);
+main.append(performTab);
 
 // --- フレーズ列 -----------------------------------------------------------
 
@@ -210,18 +237,8 @@ const transportPanel = buildTransportPanel(
       ensurePhrase().lengthBars = bars;
       refreshPhraseUI();
     },
-    onRecord: () => {
-      void ensureAudio();
-      const phrase = ensurePhrase();
-      if (!activeLayerId && phrase.layers.length > 0) activeLayerId = phrase.layers[0].id;
-      refreshPhraseUI();
-      transport.start(true);
-    },
-    onPlay: () => {
-      void ensureAudio();
-      if (!currentPhrase) return;
-      transport.start(false);
-    },
+    onRecord: toggleRecord,
+    onPlay: togglePlay,
     onStop: () => {
       transport.stop();
       synth.allNotesOff();
@@ -332,7 +349,38 @@ phraseColumn.append(
   pianoRoll.el,
   phraseBrowser.el,
 );
-main.append(phraseColumn);
+const phraseTab = document.createElement("div");
+phraseTab.className = "tab-panel";
+phraseTab.append(phraseColumn);
+main.append(phraseTab);
+
+// --- タブ切り替え ---------------------------------------------------------
+
+const tabBar = document.createElement("nav");
+tabBar.className = "tab-bar";
+const tabs: { id: string; label: string; panel: HTMLElement }[] = [
+  { id: "perform", label: "演奏", panel: performTab },
+  { id: "phrase", label: "フレーズ", panel: phraseTab },
+];
+function selectTab(id: string): void {
+  for (const tab of tabs) {
+    const active = tab.id === id;
+    tab.panel.classList.toggle("active", active);
+  }
+  for (const btn of tabBar.querySelectorAll<HTMLButtonElement>("button")) {
+    btn.classList.toggle("active", btn.dataset.tabId === id);
+  }
+}
+for (const tab of tabs) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tab-button";
+  btn.textContent = tab.label;
+  btn.dataset.tabId = tab.id;
+  btn.addEventListener("click", () => selectTab(tab.id));
+  tabBar.appendChild(btn);
+}
+selectTab("perform");
 
 const footer = document.createElement("footer");
 footer.className = "app-footer";
@@ -341,7 +389,7 @@ octaveLabel.className = "octave-label";
 const keyboard = new PianoKeyboard(48, 3);
 footer.append(octaveLabel, keyboard.el);
 
-app.append(header, main, footer);
+app.append(header, tabBar, main, footer);
 
 // ブラウザの自動再生制限により、最初の操作（鍵盤・ツマミ・ボタンなど何でも）で
 // AudioContextを解放する。専用の開始画面は置かず、最初から普通に触れる状態にする。
@@ -374,7 +422,16 @@ let octaveShift = 0;
 function updateOctaveLabel(): void {
   octaveLabel.textContent = `オクターブ ${octaveShift >= 0 ? "+" : ""}${octaveShift}（Z/X）`;
 }
+function updateKeyLabels(): void {
+  const labels = new Map<number, string>();
+  for (const [key, offset] of Object.entries(noteKeyMap)) {
+    const note = baseMidiNote + offset + octaveShift * 12;
+    labels.set(note, key.toUpperCase());
+  }
+  keyboard.setKeyLabels(labels);
+}
 updateOctaveLabel();
+updateKeyLabels();
 
 const heldKeys = new Map<string, number>();
 
@@ -382,15 +439,24 @@ window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   const target = e.target as HTMLElement | null;
   if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) return;
+  if (e.code === "Space") {
+    // スペースキーはページスクロールやフォーカス中ボタンのクリックを引き起こすため、
+    // それを止めた上で「再生⇔停止」専用のキーにする（録音の開始はしない）。
+    e.preventDefault();
+    togglePlay();
+    return;
+  }
   const key = e.key.toLowerCase();
   if (key === octaveDownKey) {
     octaveShift = Math.max(-3, octaveShift - 1);
     updateOctaveLabel();
+    updateKeyLabels();
     return;
   }
   if (key === octaveUpKey) {
     octaveShift = Math.min(3, octaveShift + 1);
     updateOctaveLabel();
+    updateKeyLabels();
     return;
   }
   const offset = noteKeyMap[key];
