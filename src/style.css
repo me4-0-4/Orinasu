@@ -870,3 +870,37 @@ body {
   flex: none;
   accent-color: var(--accent-green);
 }
+
+.user-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: none;
+}
+
+.user-preset-save {
+  display: flex;
+  gap: 6px;
+}
+
+.user-preset-name {
+  background: var(--panel-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  width: 150px;
+}
+
+.user-preset-list:empty {
+  display: none;
+}
+
+.user-preset-chip {
+  display: flex;
+  align-items: stretch;
+}
+
+.user-preset-chip .layer-toggle {
+  border-left: none;
+}

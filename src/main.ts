@@ -18,6 +18,7 @@ import { PianoRoll } from "./ui/pianoRoll";
 import {
   createEmptyLayer,
   createEmptyPhrase,
+  makeId,
   totalBeats as phraseTotalBeats,
   roleLabels,
   type Layer,
@@ -48,7 +49,16 @@ import {
 import { drumParts, generateDrumPart, partPitches, type DrumGenre, type DrumPart } from "./theory/drumPattern";
 import { nextRecommendation } from "./theory/recommend";
 import { randomSeed } from "./theory/rng";
-import { loadAllPhrases, savePhrase, deletePhrase } from "./storage/db";
+import {
+  loadAllPhrases,
+  savePhrase,
+  deletePhrase,
+  loadUserPresets,
+  saveUserPreset,
+  deleteUserPreset,
+  type UserPreset,
+} from "./storage/db";
+import { buildUserPresets } from "./ui/userPresets";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = "";
@@ -312,7 +322,38 @@ function syncSoundPanel(): void {
     target === scratchLayer ? "シンセ" : `シンセ（編集中：${roleLabels[target.role]}の層）`;
 }
 
-synthColumn.append(synthHeading, presetRow, panel.el, visualizer.el);
+// 自分の音色：いま編集中の層の音色を名前を付けて保存し、あとで別の層にも使える
+let userPresets: UserPreset[] = [];
+const userPresetUi = buildUserPresets({
+  onApply: (preset) => {
+    void ensureAudio();
+    panel.applyPreset(preset.params);
+  },
+  onSave: (name) => {
+    const params = soundLayer().synth;
+    if (!params) return;
+    // 同じ名前があれば上書きする
+    const existing = userPresets.find((p) => p.name === name);
+    const preset: UserPreset = {
+      id: existing?.id ?? makeId("preset"),
+      name,
+      params: clone(params),
+      updatedAt: Date.now(),
+    };
+    void saveUserPreset(preset).then(reloadUserPresets);
+  },
+  onDelete: (preset) => {
+    if (!window.confirm(`音色「${preset.name}」を削除する？`)) return;
+    void deleteUserPreset(preset.id).then(reloadUserPresets);
+  },
+});
+async function reloadUserPresets(): Promise<void> {
+  userPresets = await loadUserPresets();
+  userPresetUi.render(userPresets);
+}
+void reloadUserPresets();
+
+synthColumn.append(synthHeading, presetRow, userPresetUi.el, panel.el, visualizer.el);
 
 const drumColumn = document.createElement("section");
 drumColumn.className = "panel-column panel-column-narrow";
