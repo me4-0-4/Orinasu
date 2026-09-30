@@ -533,7 +533,8 @@ body {
 
 .piano-roll-canvas {
   display: block;
-  touch-action: none;
+  /* スクロールは許可し、ノートに触れたときだけJS側で止めてドラッグ編集にする */
+  touch-action: pan-x pan-y;
 }
 
 .phrase-browser {
