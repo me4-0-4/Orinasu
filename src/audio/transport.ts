@@ -33,6 +33,13 @@ export class Transport {
   private iterationCounter = 0;
   private schedulerTimer: number | null = null;
   private stateTimer: number | null = null;
+  // 1小節分の全イベント（ノートon/off・メトロノーム）を境界の少し前にまとめて計算はするが、
+  // Web Audio側への実際のスケジュール呼び出し（noteOn等）は、ここに一旦積んでおき、
+  // 実際の発音時刻がSCHEDULE_AHEAD_SECONDS以内に近づいたtickでのみ順次発火させる。
+  // 小節が長い（1周が数秒に及ぶ）場合に、境界1回分の全ノートを数秒先まで一気に
+  // Web Audio APIへ積んでしまうと、ブラウザによっては後半のノートが再生されない
+  // 不具合が起きうるため（特にSafari実機で「最初の一音しか鳴らない」報告あり）。
+  private eventQueue: { time: number; fire: () => void }[] = [];
 
   private readonly ctx: AudioContext;
   private readonly callbacks: TransportCallbacks;
@@ -65,6 +72,7 @@ export class Transport {
     this.loopStartTime = startAt + countInSeconds;
     this.nextBoundary = this.loopStartTime;
     this.iterationCounter = 0;
+    this.eventQueue = [];
 
     for (let b = 0; b < this.beatsPerBar; b++) {
       this.metronome.click(startAt + b * this.secondsPerBeat, b === 0);
@@ -94,6 +102,7 @@ export class Transport {
       this.stateTimer = null;
     }
     this.recording = false;
+    this.eventQueue = [];
     if (this.state !== "stopped") {
       this.state = "stopped";
       this.callbacks.onStateChange?.(this.state);
@@ -116,17 +125,31 @@ export class Transport {
   }
 
   private tick(): void {
-    while (this.nextBoundary < this.ctx.currentTime + SCHEDULE_AHEAD_SECONDS) {
-      this.scheduleIteration(this.nextBoundary);
+    // イベントの「計算」自体は小節の少し前にまとめて行ってよい（Web Audioへの発火はまだしない）。
+    while (this.nextBoundary < this.ctx.currentTime + this.loopDurationSeconds) {
+      this.enqueueIteration(this.nextBoundary);
       this.callbacks.onIteration?.(this.iterationCounter);
       this.nextBoundary += this.loopDurationSeconds;
       this.iterationCounter++;
     }
+
+    // 実際にWeb Audioへスケジュール（oscillator.start等）するのは、発音時刻が
+    // 目前（SCHEDULE_AHEAD_SECONDS以内）に近づいたものだけに限る。
+    const horizon = this.ctx.currentTime + SCHEDULE_AHEAD_SECONDS;
+    const due: (() => void)[] = [];
+    this.eventQueue = this.eventQueue.filter((ev) => {
+      if (ev.time > horizon) return true;
+      due.push(ev.fire);
+      return false;
+    });
+    for (const fire of due) fire();
   }
 
-  private scheduleIteration(boundaryTime: number): void {
+  private enqueueIteration(boundaryTime: number): void {
     for (let b = 0; b < this.totalBeatsCache; b++) {
-      this.metronome.click(boundaryTime + b * this.secondsPerBeat, b % this.beatsPerBar === 0);
+      const time = boundaryTime + b * this.secondsPerBeat;
+      const isDownbeat = b % this.beatsPerBar === 0;
+      this.eventQueue.push({ time, fire: () => this.metronome.click(time, isDownbeat) });
     }
 
     const phrase = this.callbacks.getPhrase();
@@ -145,8 +168,8 @@ export class Transport {
           ((rawStart % this.totalBeatsCache) + this.totalBeatsCache) % this.totalBeatsCache;
         const onTime = boundaryTime + wrapped * this.secondsPerBeat;
         const offTime = onTime + note.durationBeats * this.secondsPerBeat;
-        this.callbacks.playNote(layer, note, onTime);
-        this.callbacks.stopNote(layer, note, offTime);
+        this.eventQueue.push({ time: onTime, fire: () => this.callbacks.playNote(layer, note, onTime) });
+        this.eventQueue.push({ time: offTime, fire: () => this.callbacks.stopNote(layer, note, offTime) });
       }
     }
   }
