@@ -814,3 +814,45 @@ body {
     height: auto;
   }
 }
+
+/* フレーズタブ：箱と箱の隙間をなくし、境界は線1本にする */
+.phrase-tab {
+  gap: 0;
+}
+
+.phrase-split {
+  gap: 0;
+}
+
+.phrase-split > .panel-column + .panel-column {
+  border-left: none;
+}
+
+.phrase-tab .roll-dock {
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+}
+
+.phrase-tab .phrase-split > .panel-column {
+  border-top: none;
+  border-bottom: none;
+}
+
+.phrase-tab .phrase-split > .panel-column:first-child {
+  border-left: none;
+}
+
+.phrase-tab .phrase-split > .panel-column:last-child {
+  border-right: none;
+}
+
+.app-main:has(.phrase-tab.active) {
+  padding: 0;
+}
+
+@media (max-width: 720px) {
+  .phrase-split > .panel-column + .panel-column {
+    border-top: 1px solid var(--border);
+  }
+}
