@@ -711,6 +711,7 @@ const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "phrase", label: "フレーズ", panel: phraseTab },
 ];
 function selectTab(id: string): void {
+  pianoRoll.deleteButton.hidden = id !== "phrase"; // ノート削除はピアノロールのあるタブだけ
   for (const tab of tabs) {
     const active = tab.id === id;
     tab.panel.classList.toggle("active", active);
@@ -752,16 +753,16 @@ arpButton.addEventListener("click", () => changeArp({ enabled: !arp.enabled }));
 
 const footerTools = document.createElement("div");
 footerTools.className = "footer-tools";
-footerTools.append(octaveLabel, guideReadout, scaleLockButton, arpButton);
+footerTools.append(octaveLabel, guideReadout, scaleLockButton, arpButton, pianoRoll.deleteButton);
 
 const keyboardWrap = document.createElement("div");
-keyboardWrap.append(footerTools, keyboard.el);
+keyboardWrap.append(keyboard.el);
 
 const footerDrumPads = buildDrumPads(hitDrum);
 footerDrumPads.el.classList.add("footer-drum-pads");
 footerDrumPads.el.hidden = true;
 
-footer.append(keyboardWrap, footerDrumPads.el);
+footer.append(footerTools, keyboardWrap, footerDrumPads.el);
 
 app.append(header, tabBar, main, footer);
 
@@ -771,6 +772,7 @@ function updateFooterMode(): void {
   const role = activeLayer()?.role ?? null;
   const isDrumLayer = role === "drums";
   keyboardWrap.hidden = isDrumLayer;
+  octaveLabel.style.visibility = isDrumLayer ? "hidden" : "visible";
   footerDrumPads.el.hidden = !isDrumLayer;
 
   // ベース層に切り替えたときだけ、鍵盤を低い音域に寄せる（その後のZ/X操作は邪魔しない）
