@@ -458,6 +458,7 @@ function altChord(index: number): void {
   const next = ranked[(at + 1) % ranked.length];
   phrase.chords[index] = { ...slot, root: next.root, quality: next.quality };
   selectedChordIndex = index;
+  stickyGuideIndex = index;
   commitChords(phrase.chords);
 }
 
@@ -545,14 +546,22 @@ function placeDrums(genre: DrumGenre, locked: Set<DrumPart>): void {
   void persistCurrentPhrase();
 }
 
-/** いま鍵盤に案内を出すべきコード区間の番号。再生中＞試聴中＞選択中の順。 */
+/** 最後に案内を出したコード区間。再生や試聴が止まっても、鍵盤の光は消さずにここへ戻す。 */
+let stickyGuideIndex: number | null = null;
+
+/** いま鍵盤に案内を出すべきコード区間の番号。再生中＞試聴中＞（停止中は）最後に見ていた区間。 */
 function computeGuideIndex(): number | null {
   const chords = currentPhrase?.chords;
-  if (!chords) return null;
-  if (previewing) return previewIndex;
-  const pos = transport.currentPositionBeats();
-  if (pos !== null) return chordAt(chords, pos)?.index ?? null;
-  return selectedChordIndex;
+  if (!chords || chords.length === 0) return null;
+  let idx: number | null = null;
+  if (previewing) idx = previewIndex;
+  else {
+    const pos = transport.currentPositionBeats();
+    if (pos !== null) idx = chordAt(chords, pos)?.index ?? null;
+  }
+  if (idx !== null) stickyGuideIndex = idx;
+  if (stickyGuideIndex === null || stickyGuideIndex >= chords.length) stickyGuideIndex = 0;
+  return idx ?? stickyGuideIndex;
 }
 
 function updateGuide(force = false): void {
@@ -645,11 +654,13 @@ const assistPanel = buildAssistPanel({
   },
   onSelectChord: (index) => {
     selectedChordIndex = index;
+  stickyGuideIndex = index;
     refreshAssist();
   },
   onClearChords: () => {
     stopPreview();
     selectedChordIndex = null;
+    stickyGuideIndex = null;
     commitChords(undefined);
   },
   onPreview: togglePreview,
@@ -748,6 +759,7 @@ const phraseBrowser = buildPhraseBrowser({
     transport.stop();
     stopPreview();
     selectedChordIndex = null;
+    stickyGuideIndex = null;
     currentPhrase = createEmptyPhrase(1, 120, 4);
     const layer = createEmptyLayer("melody");
     currentPhrase.layers.push(layer);
@@ -759,6 +771,7 @@ const phraseBrowser = buildPhraseBrowser({
     transport.stop();
     stopPreview();
     selectedChordIndex = null;
+    stickyGuideIndex = null;
     const found = savedPhrases.find((p) => p.id === id);
     if (!found) return;
     currentPhrase = structuredClone(found);
