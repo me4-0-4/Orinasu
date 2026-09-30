@@ -68,7 +68,7 @@ export function buildLayerPanel(handlers: LayerPanelHandlers): LayerPanel {
 
     const label = document.createElement("span");
     label.className = "layer-role-label";
-    label.textContent = `${roleLabels[layer.role]}（${layer.notes.length}音）`;
+    label.textContent = `${roleLabels[layer.role]}${layer.generated ? "・候補" : ""}（${layer.notes.length}音）`;
 
     const muteBtn = document.createElement("button");
     muteBtn.type = "button";

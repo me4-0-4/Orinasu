@@ -1,3 +1,6 @@
+import type { Key } from "../theory/key";
+import type { ChordSlot } from "../theory/chords";
+
 export type LayerRole = "melody" | "bass" | "drums" | "chords" | "other";
 
 export interface Note {
@@ -16,6 +19,8 @@ export interface Layer {
   solo: boolean;
   /** 「合わせる」の適用先グリッド（拍単位）。undefinedなら未適用（生のまま）。非破壊。 */
   quantizeGrid?: number;
+  /** アプリが自動で置いた候補（ドラム候補）の層。振り直しの対象はこの層だけで、自分で録音した層は触らない。 */
+  generated?: boolean;
 }
 
 export interface Phrase {
@@ -25,6 +30,12 @@ export interface Phrase {
   bpm: number;
   beatsPerBar: number;
   layers: Layer[];
+  /** 手動で選んだ調。未設定なら、メロディから自動判定した調を使う。 */
+  keyOverride?: Key;
+  /** スケールロック（選んだ調の音しか鳴らさない）。 */
+  scaleLock?: boolean;
+  /** 提示されたコード進行（音は置かない。名前と、鍵盤の光り方の元になるだけ）。 */
+  chords?: ChordSlot[];
   createdAt: number;
   updatedAt: number;
 }

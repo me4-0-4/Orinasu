@@ -603,3 +603,166 @@ body {
     max-height: 300px;
   }
 }
+
+/* --- 段階3：手助けタブ --- */
+.assist-column {
+  gap: 10px;
+}
+
+.assist-column-side {
+  flex: 0 0 320px;
+}
+
+.assist-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.assist-section:last-child {
+  border-bottom: none;
+}
+
+.assist-hint {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.assist-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.assist-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.assist-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.assist-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.assist-status {
+  font-size: 0.85rem;
+  color: var(--accent-green);
+}
+
+.recommend-strip {
+  flex: none;
+  font-size: 0.82rem;
+  color: var(--accent-yellow);
+  border-left: 2px solid var(--accent-yellow);
+  padding: 4px 10px;
+  background: var(--panel-raised);
+}
+
+.key-candidate.selected,
+.preset-button.on {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+.arp-toggle {
+  padding: 6px 18px;
+  font-size: 0.85rem;
+}
+
+.chord-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.chord-card {
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--border);
+  padding: 6px 8px 8px;
+  min-width: 110px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chord-card.selected {
+  border-top-color: var(--accent-blue);
+}
+
+.chord-card.locked {
+  border-color: var(--accent-yellow);
+}
+
+.chord-card.playing {
+  border-top-color: var(--accent-yellow);
+  background: #262418;
+}
+
+.chord-name {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.chord-bass {
+  font-size: 0.68rem;
+  color: var(--accent-blue);
+}
+
+.chord-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.footer-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.footer-tools .octave-label {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.guide-readout {
+  font-size: 0.75rem;
+  color: var(--accent-yellow);
+  min-height: 1.1em;
+}
+
+.recommend-inline {
+  flex: none;
+  margin: 6px 0;
+}
+
+@media (max-width: 720px) {
+  .assist-column-side {
+    flex: none;
+  }
+}

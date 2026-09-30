@@ -39,6 +39,8 @@ export class PianoRoll {
   private pxPerBeat = 40;
 
   onChange: () => void = () => {};
+  /** ノートを上下に動かしたときの音高の補正（スケールロック用）。 */
+  pitchFilter: (pitch: number) => number = (p) => p;
 
   constructor() {
     this.el = document.createElement("div");
@@ -404,7 +406,7 @@ export class PianoRoll {
       if (layer.role !== "drums") {
         const deltaRows = Math.round((e.clientY - this.drag.startClientY) / ROW_HEIGHT);
         const newPitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, this.drag.origPitch - deltaRows));
-        this.drag.note.pitch = newPitch;
+        this.drag.note.pitch = this.pitchFilter(newPitch);
       }
     }
     this.draw();

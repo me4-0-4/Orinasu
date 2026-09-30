@@ -5,6 +5,14 @@ interface KeyGeometry {
   width: number;
 }
 
+/** 鍵盤上の案内表示（コードの構成音・ベースのルートなど）。ピッチクラス（0-11）で指定する。 */
+export interface KeyboardGuide {
+  chordTones: Set<number>;
+  root: number | null;
+  /** ベースで弾く候補（ルートと5度）。 */
+  bassTones: Set<number>;
+}
+
 const WHITE_PATTERN = [0, 2, 4, 5, 7, 9, 11]; // オクターブ内の白鍵オフセット
 const BLACK_PATTERN = [1, 3, 6, 8, 10]; // オクターブ内の黒鍵オフセット
 
@@ -16,6 +24,8 @@ export class PianoKeyboard {
   private activeNotes = new Set<number>();
   private pointerNotes = new Map<number, number>();
   private keyLabels = new Map<number, string>();
+  private scalePcs: Set<number> | null = null;
+  private guide: KeyboardGuide | null = null;
   private height = 100;
 
   onNoteOn: (note: number) => void = () => {};
@@ -55,6 +65,27 @@ export class PianoKeyboard {
   setKeyLabels(labels: Map<number, string>): void {
     this.keyLabels = labels;
     this.draw();
+  }
+
+  /** スケールロック中などに、スケール外の鍵盤を暗く表示する。null で解除。 */
+  setScale(pcs: Set<number> | null): void {
+    this.scalePcs = pcs;
+    this.draw();
+  }
+
+  /** コードの構成音・ルートを光らせる。null で解除。 */
+  setGuide(guide: KeyboardGuide | null): void {
+    this.guide = guide;
+    this.draw();
+  }
+
+  private guideColor(note: number, isBlack: boolean): string | null {
+    const g = this.guide;
+    if (!g) return null;
+    const pc = ((note % 12) + 12) % 12;
+    if (g.root === pc) return isBlack ? "#3c8fd9" : "#5eb4ff";
+    if (g.chordTones.has(pc)) return isBlack ? "#c9a13f" : "#ffd166";
+    return null;
   }
 
   private layout(): void {
@@ -123,11 +154,19 @@ export class PianoKeyboard {
     for (const key of this.keys) {
       if (key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
-      ctx.fillStyle = active ? "#3ee6b0" : "#e9e9ee";
+      ctx.fillStyle = active ? "#3ee6b0" : (this.guideColor(key.note, false) ?? "#e9e9ee");
       ctx.strokeStyle = "#15161c";
       ctx.lineWidth = 1;
       ctx.fillRect(key.x, 0, key.width, this.height);
       ctx.strokeRect(key.x, 0, key.width, this.height);
+      if (!active && this.isOutOfScale(key.note)) {
+        ctx.fillStyle = "rgba(20, 22, 30, 0.42)";
+        ctx.fillRect(key.x, 0, key.width, this.height);
+      }
+      if (this.guide?.bassTones.has(((key.note % 12) + 12) % 12)) {
+        ctx.fillStyle = "#3c8fd9";
+        ctx.fillRect(key.x + key.width / 2 - 3, this.height - 24, 6, 6);
+      }
 
       const label = this.keyLabels.get(key.note);
       if (label) {
@@ -138,9 +177,17 @@ export class PianoKeyboard {
     for (const key of this.keys) {
       if (!key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
-      ctx.fillStyle = active ? "#2bbd8f" : "#101014";
+      ctx.fillStyle = active ? "#2bbd8f" : (this.guideColor(key.note, true) ?? "#101014");
       const blackHeight = this.height * 0.62;
       ctx.fillRect(key.x, 0, key.width, blackHeight);
+      if (!active && this.isOutOfScale(key.note)) {
+        ctx.fillStyle = "rgba(233, 233, 238, 0.18)";
+        ctx.fillRect(key.x, 0, key.width, blackHeight);
+      }
+      if (this.guide?.bassTones.has(((key.note % 12) + 12) % 12)) {
+        ctx.fillStyle = "#5eb4ff";
+        ctx.fillRect(key.x + key.width / 2 - 3, blackHeight - 22, 6, 6);
+      }
 
       const label = this.keyLabels.get(key.note);
       if (label) {
@@ -148,6 +195,10 @@ export class PianoKeyboard {
         ctx.fillText(label, key.x + key.width / 2, blackHeight - 8);
       }
     }
+  }
+
+  private isOutOfScale(note: number): boolean {
+    return this.scalePcs !== null && !this.scalePcs.has(((note % 12) + 12) % 12);
   }
 
   private noteAt(x: number, y: number): number | null {
