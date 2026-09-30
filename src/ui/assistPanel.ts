@@ -39,8 +39,8 @@ export interface AssistHandlers {
 }
 
 export interface AssistPanel {
-  /** 左の列（おすすめ・調・コード）と右の列（ドラム・アルペジエーター） */
-  columns: [HTMLElement, HTMLElement];
+  /** 手助けの列（調・コード・ドラム・アルペジエーター）。フレーズタブの右半分に置く。 */
+  el: HTMLElement;
   render: (view: AssistView) => void;
   setPlayingIndex: (index: number | null) => void;
   /** 「次のおすすめ」の一言（フレーズタブ側の帯にも同じ文を出す） */
@@ -253,16 +253,13 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
   arpSec.body.append(arpToggle, arpMode.el, arpRate.el, arpOct.el, gateWrap);
 
   // --- 列にまとめる ---
-  const left = document.createElement("section");
-  left.className = "panel-column assist-column";
-  const leftHeading = document.createElement("div");
-  leftHeading.className = "panel-heading";
-  leftHeading.textContent = "手助け";
-  left.append(leftHeading, recommendationEl, keySec.el, chordSec.el);
-
-  const right = document.createElement("section");
-  right.className = "panel-column assist-column assist-column-side";
-  right.append(drumSec.el, arpSec.el);
+  const column = document.createElement("section");
+  column.className = "panel-column assist-column";
+  const heading = document.createElement("div");
+  heading.className = "panel-heading";
+  heading.textContent = "手助け";
+  // 「次のおすすめ」は左のフレーズ列に出すので、ここには置かない
+  column.append(heading, keySec.el, chordSec.el, drumSec.el, arpSec.el);
 
   function render(view: AssistView): void {
     recommendationEl.textContent = view.recommendation;
@@ -352,5 +349,5 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
     }
   }
 
-  return { columns: [left, right], render, setPlayingIndex, recommendationEl };
+  return { el: column, render, setPlayingIndex, recommendationEl };
 }

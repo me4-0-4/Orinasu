@@ -688,18 +688,19 @@ phraseColumn.append(
   transportPanel.el,
   recommendInline,
   layerPanel.el,
-  pianoRoll.el,
   phraseBrowser.el,
 );
+// フレーズタブ：上は左右2分割（左＝フレーズ、右＝手助け）、下は鍵盤のすぐ上にピアノロールを固定
+const phraseSplit = document.createElement("div");
+phraseSplit.className = "phrase-split";
+phraseSplit.append(phraseColumn, assistPanel.el);
+const rollDock = document.createElement("div");
+rollDock.className = "roll-dock";
+rollDock.append(pianoRoll.el);
 const phraseTab = document.createElement("div");
-phraseTab.className = "tab-panel";
-phraseTab.append(phraseColumn);
+phraseTab.className = "tab-panel phrase-tab";
+phraseTab.append(phraseSplit, rollDock);
 main.append(phraseTab);
-
-const assistTab = document.createElement("div");
-assistTab.className = "tab-panel";
-assistTab.append(...assistPanel.columns);
-main.append(assistTab);
 
 // --- タブ切り替え ---------------------------------------------------------
 
@@ -708,7 +709,6 @@ tabBar.className = "tab-bar";
 const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "perform", label: "演奏", panel: performTab },
   { id: "phrase", label: "フレーズ", panel: phraseTab },
-  { id: "assist", label: "手助け", panel: assistTab },
 ];
 function selectTab(id: string): void {
   for (const tab of tabs) {

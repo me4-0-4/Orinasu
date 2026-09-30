@@ -767,3 +767,50 @@ body {
     flex: none;
   }
 }
+
+/* --- フレーズタブ：左右2分割（フレーズ｜手助け）＋鍵盤の上にピアノロール固定 --- */
+.phrase-tab.active {
+  flex-direction: column;
+}
+
+.phrase-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+}
+
+.phrase-split > .panel-column {
+  flex: 1 1 50%;
+  min-width: 0;
+}
+
+.roll-dock {
+  flex: none;
+  height: 260px; /* 20px(見出し)＋約15段 = 1オクターブ強＋α が見える高さ */
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 6px 10px 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.roll-dock .piano-roll {
+  flex: 1;
+  min-height: 0;
+  border-top: none;
+  padding-top: 0;
+}
+
+@media (max-width: 720px) {
+  .phrase-split {
+    flex: none;
+    flex-direction: column;
+  }
+  .phrase-split > .panel-column {
+    flex: none;
+  }
+  .roll-dock {
+    height: auto;
+  }
+}
