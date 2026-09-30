@@ -251,6 +251,22 @@ export class SynthEngine {
     );
   }
 
+  /** この層の音量（0〜1.5）。ドライ・リバーブ送り・ディレイ送りすべてに効く。 */
+  setVolume(volume: number): void {
+    this.output.gain.setTargetAtTime(0.9 * volume, this.ctx.currentTime, 0.015);
+  }
+
+  /** 層を消すとき：鳴っている音を止めて、内部のノードをつなぎ外す。 */
+  dispose(): void {
+    this.allNotesOff();
+    try {
+      this.lfoOsc?.stop();
+    } catch {
+      // すでに止まっている場合は無視
+    }
+    this.output.disconnect();
+  }
+
   allNotesOff(): void {
     for (const voiceId of Array.from(this.voices.keys())) {
       this.noteOff(voiceId, true);

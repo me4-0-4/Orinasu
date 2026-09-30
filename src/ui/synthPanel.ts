@@ -42,6 +42,8 @@ function group(title: string, children: HTMLElement[]): HTMLElement {
 export interface SynthPanel {
   el: HTMLElement;
   applyPreset: (params: SynthParams) => void;
+  /** 表示だけを別の音色に切り替える（onChangeは呼ばない）。編集対象の層が変わったとき用。 */
+  setParams: (params: SynthParams) => void;
 }
 
 export function buildSynthPanel(
@@ -405,12 +407,15 @@ export function buildSynthPanel(
     { el: lfoShape.querySelector("select")!, get: (p) => p.lfo.shape },
   ];
 
-  const applyPreset = (preset: SynthParams): void => {
-    Object.assign(params, clone(preset));
+  const setParams = (next: SynthParams): void => {
+    Object.assign(params, clone(next));
     for (const { knob, get } of allKnobs) knob.setValue(get(params));
     for (const { el, get } of selects) el.value = get(params);
+  };
+  const applyPreset = (preset: SynthParams): void => {
+    setParams(preset);
     emit();
   };
 
-  return { el: root, applyPreset };
+  return { el: root, applyPreset, setParams };
 }
