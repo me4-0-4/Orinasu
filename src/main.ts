@@ -1,8 +1,9 @@
 import "./style.css";
 import { AudioEngine } from "./audio/context";
-import { SynthEngine } from "./audio/synth";
+import type { SynthEngine } from "./audio/synth";
+import { LayerSynths, DEFAULT_VOLUME } from "./audio/layerSynths";
 import { DrumMachine, drumNoteNumbers, noteNumberToDrum, type DrumId } from "./audio/drums";
-import { defaultSynthParams, synthPresets } from "./audio/synthParams";
+import { clone, defaultSynthParams, synthPresets, type SynthParams } from "./audio/synthParams";
 import { PianoKeyboard } from "./ui/pianoKeyboard";
 import { buildSynthPanel } from "./ui/synthPanel";
 import { buildDrumPads } from "./ui/drumPads";
@@ -18,6 +19,7 @@ import {
   createEmptyLayer,
   createEmptyPhrase,
   totalBeats as phraseTotalBeats,
+  roleLabels,
   type Layer,
   type LayerRole,
   type Note,
@@ -52,24 +54,55 @@ const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = "";
 
 const engine = new AudioEngine();
-const synth = new SynthEngine(
-  engine.ctx,
-  engine.synthDry,
-  engine.synthReverbSend,
-  engine.synthDelaySend,
-  structuredClone(defaultSynthParams),
-);
+// 音色と音量は層ごと。層のないとき（まだ何も録音していない状態）の試し弾き用に、仮の層を1つ持つ。
+const synths = new LayerSynths(engine);
+const scratchLayer: Layer = {
+  ...createEmptyLayer("melody"),
+  id: "scratch",
+  synth: clone(defaultSynthParams),
+};
+
+/** 音色ツマミの編集対象・ライブ演奏の音源にする層。ドラム層を選んでいる間は直前のシンセ層のまま。 */
+let lastSoundLayerId: string | null = null;
+function soundLayer(): Layer {
+  const active = activeLayer();
+  if (active && active.role !== "drums") {
+    lastSoundLayerId = active.id;
+    return active;
+  }
+  const last = currentPhrase?.layers.find((l) => l.id === lastSoundLayerId && l.role !== "drums");
+  return last ?? scratchLayer;
+}
+
+/** 鳴らし始めた音を、どのシンセで鳴らしたか覚えておく（途中で編集対象の層が変わっても正しく止める）。 */
+const liveEngines = new Map<string, SynthEngine>();
+function liveOn(voiceId: string, pitch: number, velocity = 1): void {
+  const eng = synths.forLayer(soundLayer());
+  liveEngines.set(voiceId, eng);
+  eng.noteOn(voiceId, pitch, velocity);
+}
+function liveOff(voiceId: string): void {
+  const eng = liveEngines.get(voiceId);
+  if (!eng) return;
+  liveEngines.delete(voiceId);
+  eng.noteOff(voiceId);
+}
+function allSoundsOff(): void {
+  synths.allNotesOff();
+  liveEngines.clear();
+}
+
 const drums = new DrumMachine(engine.ctx, engine.noiseBuffer, engine.drumOut);
 
 // アルペジエーターは楽器に依存しない独立部品。ここでシンセ（と録音）につないでいる。
 const arp = new Arpeggiator(engine.ctx, {
   getBpm: () => currentPhrase?.bpm ?? 120,
   noteOn: (pitch) => {
-    synth.noteOn(`arp:${pitch}`, pitch);
+    liveOn(`arp:${pitch}`, pitch);
     recorder.noteOn(pitch);
   },
   noteOff: (pitch) => {
-    synth.noteOff(`arp:${pitch}`);
+    liveOff(`arp:${pitch}`);
     recorder.noteOff(pitch);
   },
 });
@@ -104,6 +137,7 @@ function ensurePhrase(): Phrase {
   if (!currentPhrase) {
     currentPhrase = createEmptyPhrase(1, 120, 4);
     const layer = createEmptyLayer("melody");
+    layer.synth = clone(scratchLayer.synth ?? defaultSynthParams); // 試し弾きで作った音を引き継ぐ
     currentPhrase.layers.push(layer);
     activeLayerId = layer.id;
   }
@@ -115,6 +149,16 @@ async function persistCurrentPhrase(): Promise<void> {
   currentPhrase.updatedAt = Date.now();
   await savePhrase(currentPhrase);
   await reloadPhraseList();
+}
+
+let persistTimer: number | null = null;
+/** ツマミやスライダーを動かしている間に何度も保存しないよう、少し待ってからまとめて保存する。 */
+function persistSoon(): void {
+  if (persistTimer !== null) window.clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null;
+    void persistCurrentPhrase();
+  }, 600);
 }
 
 async function reloadPhraseList(): Promise<void> {
@@ -132,7 +176,9 @@ function refreshPhraseUI(): void {
       lengthBars: currentPhrase.lengthBars,
     });
   }
+  synths.prune(new Set(currentPhrase?.layers.map((l) => l.id) ?? []));
   updateFooterMode();
+  syncSoundPanel();
   refreshAssist();
 }
 
@@ -143,14 +189,14 @@ const transport = new Transport(engine.ctx, engine.drumOut, {
   playNote: (layer, note, time) => {
     if (layer.role === "drums") {
       const id = noteNumberToDrum[note.pitch];
-      if (id) drums.trigger(id, note.velocity, time);
+      if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), time);
     } else {
-      synth.noteOn(`sched:${note.id}`, note.pitch, note.velocity, time);
+      synths.forLayer(layer).noteOn(`sched:${note.id}`, note.pitch, note.velocity, time);
     }
   },
   stopNote: (layer, note, time) => {
     if (layer.role !== "drums") {
-      synth.noteOff(`sched:${note.id}`, false, time);
+      synths.forLayer(layer).noteOff(`sched:${note.id}`, false, time);
     }
   },
   onStateChange: (state: TransportState) => {
@@ -175,7 +221,7 @@ function toggleRecord(): void {
   stopPreview();
   if (transport.state !== "stopped") {
     transport.stop();
-    synth.allNotesOff();
+    allSoundsOff();
     return;
   }
   const phrase = ensurePhrase();
@@ -189,7 +235,7 @@ function togglePlay(): void {
   stopPreview();
   if (transport.state !== "stopped") {
     transport.stop();
-    synth.allNotesOff();
+    allSoundsOff();
     return;
   }
   if (!currentPhrase) return;
@@ -237,12 +283,34 @@ for (const preset of synthPresets) {
   presetRow.appendChild(btn);
 }
 
+let panelBoundParams: SynthParams | null = null;
 const panel = buildSynthPanel(defaultSynthParams, (params) => {
-  synth.updateParams(params);
+  // パネルは同じオブジェクトを書き換え続けるので、必ずコピーを層に渡す
+  const target = soundLayer();
+  synths.setParams(target, clone(params));
+  panelBoundParams = target.synth ?? null;
   visualizer.drawStatic();
+  if (target !== scratchLayer) persistSoon();
 });
 
-const visualizer = new Visualizer(engine.ctx, engine.analyser, () => synth.params);
+const visualizer = new Visualizer(
+  engine.ctx,
+  engine.analyser,
+  () => soundLayer().synth ?? defaultSynthParams,
+);
+
+/** 音色ツマミの表示を、編集対象の層の音色に合わせる。 */
+function syncSoundPanel(): void {
+  const target = soundLayer();
+  synths.forLayer(target); // 音色が未設定なら役割ごとの初期音色が入る
+  if (target.synth && target.synth !== panelBoundParams) {
+    panelBoundParams = target.synth;
+    panel.setParams(target.synth);
+    visualizer.drawStatic();
+  }
+  synthHeading.textContent =
+    target === scratchLayer ? "シンセ" : `シンセ（編集中：${roleLabels[target.role]}の層）`;
+}
 
 synthColumn.append(synthHeading, presetRow, panel.el, visualizer.el);
 
@@ -362,7 +430,7 @@ function chordVoicing(slot: ChordSlot): number[] {
 function stopPreview(): void {
   for (const t of previewTimers) window.clearTimeout(t);
   previewTimers = [];
-  for (const id of previewVoices) synth.noteOff(id);
+  for (const id of previewVoices) liveOff(id);
   previewVoices = [];
   if (previewing) {
     previewing = false;
@@ -380,7 +448,7 @@ function togglePreview(): void {
   if (!phrase?.chords) return;
   void ensureAudio();
   transport.stop();
-  synth.allNotesOff();
+  allSoundsOff();
   previewing = true;
   const spb = 60 / phrase.bpm;
   phrase.chords.forEach((slot, i) => {
@@ -391,14 +459,14 @@ function togglePreview(): void {
         chordVoicing(slot).forEach((pitch, k) => {
           const id = `preview:${i}:${k}`;
           previewVoices.push(id);
-          synth.noteOn(id, pitch, 0.7);
+          liveOn(id, pitch, 0.7);
         });
       }, slot.startBeats * spb * 1000),
     );
     previewTimers.push(
       window.setTimeout(
         () => {
-          chordVoicing(slot).forEach((_, k) => synth.noteOff(`preview:${i}:${k}`));
+          chordVoicing(slot).forEach((_, k) => liveOff(`preview:${i}:${k}`));
         },
         (slot.startBeats + slot.lengthBeats) * spb * 1000 - 40,
       ),
@@ -574,7 +642,7 @@ const transportPanel = buildTransportPanel(
     onPlay: togglePlay,
     onStop: () => {
       transport.stop();
-      synth.allNotesOff();
+      allSoundsOff();
     },
     onMetronomeToggle: (enabled) => {
       transport.metronome.enabled = enabled;
@@ -612,6 +680,12 @@ const layerPanel = buildLayerPanel({
     }
     refreshPhraseUI();
     void persistCurrentPhrase();
+  },
+  onVolumeChange: (id, volume) => {
+    const layer = currentPhrase?.layers.find((l) => l.id === id);
+    if (!layer) return;
+    synths.setVolume(layer, volume);
+    persistSoon();
   },
   onQuantizeChange: (id, grid) => {
     const layer = currentPhrase?.layers.find((l) => l.id === id);
@@ -822,7 +896,7 @@ function noteOn(raw: number): void {
     arpVoices.add(note);
     arp.press(note);
   } else {
-    synth.noteOn(`live:${note}`, note);
+    liveOn(`live:${note}`, note);
     recorder.noteOn(note);
   }
   keyboard.setActiveNotes(activeNotes);
@@ -836,7 +910,7 @@ function noteOff(raw: number): void {
   if (arpVoices.delete(note)) {
     arp.unpress(note);
   } else {
-    synth.noteOff(`live:${note}`);
+    liveOff(`live:${note}`);
     recorder.noteOff(note);
   }
   keyboard.setActiveNotes(activeNotes);

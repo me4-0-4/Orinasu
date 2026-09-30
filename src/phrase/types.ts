@@ -1,3 +1,4 @@
+import type { SynthParams } from "../audio/synthParams";
 import type { Key } from "../theory/key";
 import type { ChordSlot } from "../theory/chords";
 
@@ -21,6 +22,10 @@ export interface Layer {
   quantizeGrid?: number;
   /** アプリが自動で置いた候補（ドラム候補）の層。振り直しの対象はこの層だけで、自分で録音した層は触らない。 */
   generated?: boolean;
+  /** この層の音量（0〜1.5、未設定は1）。 */
+  volume?: number;
+  /** この層の音色（シンセのツマミの値）。ドラム層は使わない。未設定なら役割ごとの初期音色。 */
+  synth?: SynthParams;
 }
 
 export interface Phrase {

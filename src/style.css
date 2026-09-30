@@ -864,3 +864,9 @@ body {
 .footer-tools .piano-roll-delete-button {
   padding: 3px 8px;
 }
+
+.layer-volume {
+  width: 72px;
+  flex: none;
+  accent-color: var(--accent-green);
+}

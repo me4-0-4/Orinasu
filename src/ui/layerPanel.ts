@@ -1,3 +1,4 @@
+import { DEFAULT_VOLUME, MAX_VOLUME } from "../audio/layerSynths";
 import { quantizeGrids } from "../phrase/quantize";
 import { roleLabels, type Layer, type LayerRole, type Phrase } from "../phrase/types";
 
@@ -7,6 +8,7 @@ export interface LayerPanelHandlers {
   onToggleMute: (layerId: string) => void;
   onToggleSolo: (layerId: string) => void;
   onDeleteLayer: (layerId: string) => void;
+  onVolumeChange: (layerId: string, volume: number) => void;
   onQuantizeChange: (layerId: string, gridBeats: number | undefined) => void;
 }
 
@@ -103,13 +105,28 @@ export function buildLayerPanel(handlers: LayerPanelHandlers): LayerPanel {
       handlers.onQuantizeChange(layer.id, v === "" ? undefined : Number(v));
     });
 
+    const volume = document.createElement("input");
+    volume.type = "range";
+    volume.className = "layer-volume";
+    volume.min = "0";
+    volume.max = String(MAX_VOLUME);
+    volume.step = "0.05";
+    volume.value = String(layer.volume ?? DEFAULT_VOLUME);
+    volume.title = `音量 ${Math.round((layer.volume ?? DEFAULT_VOLUME) * 100)}%`;
+    volume.addEventListener("input", () => {
+      volume.title = `音量 ${Math.round(Number(volume.value) * 100)}%`;
+      handlers.onVolumeChange(layer.id, Number(volume.value));
+    });
+    // スライダーの上で指を動かしても、行の選択やスクロールに取られないようにする
+    volume.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "layer-toggle";
     deleteBtn.textContent = "削除";
     deleteBtn.addEventListener("click", () => handlers.onDeleteLayer(layer.id));
 
-    row.append(activeRadio, label, muteBtn, soloBtn, quantizeSelect, deleteBtn);
+    row.append(activeRadio, label, volume, muteBtn, soloBtn, quantizeSelect, deleteBtn);
     return row;
   }
 
