@@ -30,7 +30,8 @@ export class PianoRoll {
   readonly el: HTMLElement;
   private readonly scrollWrap: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
-  private readonly deleteButton: HTMLButtonElement;
+  /** 選択ノートの削除ボタン。置き場所は呼び出し側（足元のツール行）で決める。 */
+  readonly deleteButton: HTMLButtonElement;
   private phrase: Phrase | null = null;
   private activeLayerId: string | null = null;
   private selectedNoteId: string | null = null;
@@ -49,15 +50,12 @@ export class PianoRoll {
     this.el = document.createElement("div");
     this.el.className = "piano-roll";
 
-    const toolbar = document.createElement("div");
-    toolbar.className = "piano-roll-toolbar";
     this.deleteButton = document.createElement("button");
     this.deleteButton.type = "button";
     this.deleteButton.className = "piano-roll-delete-button";
     this.deleteButton.textContent = "選択ノートを削除";
     this.deleteButton.disabled = true;
     this.deleteButton.addEventListener("click", () => this.deleteSelected());
-    toolbar.appendChild(this.deleteButton);
 
     this.scrollWrap = document.createElement("div");
     this.scrollWrap.className = "piano-roll-scroll";
@@ -67,7 +65,7 @@ export class PianoRoll {
     this.canvas.tabIndex = 0;
 
     this.scrollWrap.appendChild(this.canvas);
-    this.el.append(toolbar, this.scrollWrap);
+    this.el.append(this.scrollWrap);
 
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("keydown", this.onKeyDown);

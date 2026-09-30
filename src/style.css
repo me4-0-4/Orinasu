@@ -856,3 +856,11 @@ body {
     border-top: 1px solid var(--border);
   }
 }
+
+.footer-tools .piano-roll-delete-button[hidden] {
+  display: none;
+}
+
+.footer-tools .piano-roll-delete-button {
+  padding: 3px 8px;
+}
