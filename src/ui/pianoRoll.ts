@@ -68,6 +68,18 @@ export class PianoRoll {
 
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("keydown", this.onKeyDown);
+    // タッチでは、ノートに触れたときだけドラッグ編集にして、それ以外（鍵盤の帯や空白）は
+    // 普通のスクロールとして扱う。touch-action: none だと指でスクロールできなくなるため。
+    this.canvas.addEventListener(
+      "touchstart",
+      (e) => {
+        const t = e.touches[0];
+        if (!t || e.touches.length > 1) return;
+        const rect = this.canvas.getBoundingClientRect();
+        if (this.noteAt(t.clientX - rect.left, t.clientY - rect.top)) e.preventDefault();
+      },
+      { passive: false },
+    );
     window.addEventListener("resize", () => this.draw());
   }
 
