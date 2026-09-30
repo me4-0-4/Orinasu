@@ -3,7 +3,11 @@ import type { Layer, Note, Phrase } from "../phrase/types";
 
 const PITCH_MIN = 33; // A1
 const PITCH_MAX = 96; // C7
-const ROW_HEIGHT = 14;
+const DEFAULT_ROW_HEIGHT = 14;
+const MIN_ROW_HEIGHT = 8;
+const MAX_ROW_HEIGHT = 40;
+const MIN_PX_PER_BEAT = 12;
+const MAX_PX_PER_BEAT = 400;
 const HEADER_HEIGHT = 20;
 const KEY_STRIP_WIDTH = 34;
 
@@ -41,6 +45,9 @@ export class PianoRoll {
   /** タブが隠れている間は高さが0でスクロール位置を決められないので、表示された時にやり直す。 */
   private pendingScroll = true;
   private pxPerBeat = 40;
+  private rowHeight = DEFAULT_ROW_HEIGHT;
+  /** 横幅に合わせて自動で拡大する（自分で横に拡大縮小したら止める）。 */
+  private autoFit = true;
 
   onChange: () => void = () => {};
   /** ノートを上下に動かしたときの音高の補正（スケールロック用）。 */
@@ -82,12 +89,110 @@ export class PianoRoll {
       { passive: false },
     );
     window.addEventListener("resize", () => this.draw());
+    this.setupZoom();
     new ResizeObserver(() => {
+      if (this.autoFit) this.draw();
       if (this.pendingScroll && this.scrollWrap.clientHeight > 0) {
         this.pendingScroll = false;
         this.scrollToNotesIfHidden();
       }
     }).observe(this.scrollWrap);
+  }
+
+  /** 縦横の拡大縮小：Ctrl+スクロール（横）、Ctrl+Shift+スクロール（縦）、2本指ピンチ（向きで縦/横/両方）。 */
+  private setupZoom(): void {
+    this.scrollWrap.title =
+      "拡大縮小：Ctrl+スクロール＝横 / Ctrl+Shift+スクロール＝縦 / 2本指ピンチ（横に広げる＝横、縦に広げる＝縦）";
+
+    this.scrollWrap.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey && !e.metaKey) return; // 普通のスクロールはそのまま
+        e.preventDefault();
+        const factor = Math.exp(-e.deltaY * 0.01);
+        if (e.shiftKey) this.zoomBy(1, factor, e.clientX, e.clientY);
+        else this.zoomBy(factor, 1, e.clientX, e.clientY);
+      },
+      { passive: false },
+    );
+
+    let pinch: { dx: number; dy: number; px: number; row: number } | null = null;
+    const spread = (t: TouchList) => ({
+      dx: Math.abs(t[0].clientX - t[1].clientX),
+      dy: Math.abs(t[0].clientY - t[1].clientY),
+      cx: (t[0].clientX + t[1].clientX) / 2,
+      cy: (t[0].clientY + t[1].clientY) / 2,
+    });
+    this.scrollWrap.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length !== 2) return;
+        // 1本目でノートのドラッグが始まっていたら、元に戻してピンチを優先する
+        this.cancelDrag();
+        const { dx, dy } = spread(e.touches);
+        pinch = { dx: Math.max(dx, 1), dy: Math.max(dy, 1), px: this.pxPerBeat, row: this.rowHeight };
+      },
+      { passive: true },
+    );
+    this.scrollWrap.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!pinch || e.touches.length !== 2) return;
+        e.preventDefault();
+        const { dx, dy, cx, cy } = spread(e.touches);
+        const rx = dx / pinch.dx;
+        const ry = dy / pinch.dy;
+        const rBoth = Math.hypot(dx, dy) / Math.hypot(pinch.dx, pinch.dy);
+        // 指の並びが横向きなら横だけ、縦向きなら縦だけ、斜めなら両方
+        let fx = rBoth;
+        let fy = rBoth;
+        if (dx > dy * 2) {
+          fx = rx;
+          fy = 1;
+        } else if (dy > dx * 2) {
+          fx = 1;
+          fy = ry;
+        }
+        this.zoomTo(pinch.px * fx, pinch.row * fy, cx, cy);
+      },
+      { passive: false },
+    );
+    const end = () => {
+      pinch = null;
+    };
+    this.scrollWrap.addEventListener("touchend", end);
+    this.scrollWrap.addEventListener("touchcancel", end);
+  }
+
+  private cancelDrag(): void {
+    if (!this.drag) return;
+    this.drag.note.startBeats = this.drag.origStartBeats;
+    this.drag.note.durationBeats = this.drag.origDuration;
+    this.drag.note.pitch = this.drag.origPitch;
+    this.drag = null;
+    this.draw();
+  }
+
+  private zoomBy(fx: number, fy: number, clientX: number, clientY: number): void {
+    this.zoomTo(this.pxPerBeat * fx, this.rowHeight * fy, clientX, clientY);
+  }
+
+  /** 指定した見た目の大きさにする。カーソル/指の下の位置が動かないようにスクロールも合わせる。 */
+  private zoomTo(px: number, row: number, clientX: number, clientY: number): void {
+    const newPx = Math.min(MAX_PX_PER_BEAT, Math.max(MIN_PX_PER_BEAT, px));
+    const newRow = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, row));
+    if (newPx === this.pxPerBeat && newRow === this.rowHeight) return;
+    const rect = this.scrollWrap.getBoundingClientRect();
+    const ax = clientX - rect.left;
+    const ay = clientY - rect.top;
+    const beatAt = (this.scrollWrap.scrollLeft + ax - KEY_STRIP_WIDTH) / this.pxPerBeat;
+    const rowsAt = (this.scrollWrap.scrollTop + ay - HEADER_HEIGHT) / this.rowHeight;
+    if (newPx !== this.pxPerBeat) this.autoFit = false;
+    this.pxPerBeat = newPx;
+    this.rowHeight = newRow;
+    this.draw();
+    this.scrollWrap.scrollLeft = KEY_STRIP_WIDTH + beatAt * newPx - ax;
+    this.scrollWrap.scrollTop = HEADER_HEIGHT + rowsAt * newRow - ay;
   }
 
   setPhrase(phrase: Phrase | null, activeLayerId: string | null): void {
@@ -114,7 +219,7 @@ export class PianoRoll {
     this.lastEmptyScroll = false;
     const pitches = layer.notes.map((n) => n.pitch);
     const minY = this.pitchToY(Math.max(...pitches));
-    const maxY = this.pitchToY(Math.min(...pitches)) + ROW_HEIGHT;
+    const maxY = this.pitchToY(Math.min(...pitches)) + this.rowHeight;
     const wrapHeight = this.scrollWrap.getBoundingClientRect().height || 260;
     const viewTop = this.scrollWrap.scrollTop;
     const viewBottom = viewTop + wrapHeight;
@@ -163,11 +268,11 @@ export class PianoRoll {
   }
 
   private pitchToY(pitch: number): number {
-    return HEADER_HEIGHT + (PITCH_MAX - pitch) * ROW_HEIGHT;
+    return HEADER_HEIGHT + (PITCH_MAX - pitch) * this.rowHeight;
   }
 
   private yToPitch(y: number): number {
-    return PITCH_MAX - Math.floor((y - HEADER_HEIGHT) / ROW_HEIGHT);
+    return PITCH_MAX - Math.floor((y - HEADER_HEIGHT) / this.rowHeight);
   }
 
   /** 拍位置(0起点)を、鍵盤の目印分オフセットした絶対x座標にする。 */
@@ -181,8 +286,12 @@ export class PianoRoll {
   }
 
   private draw(): void {
+    if (this.autoFit) {
+      const fit = (this.scrollWrap.clientWidth - KEY_STRIP_WIDTH - 2) / this.totalBeats();
+      this.pxPerBeat = Math.min(MAX_PX_PER_BEAT, Math.max(40, fit));
+    }
     const width = this.layoutWidth();
-    const realHeight = (PITCH_MAX - PITCH_MIN + 1) * ROW_HEIGHT + HEADER_HEIGHT;
+    const realHeight = (PITCH_MAX - PITCH_MIN + 1) * this.rowHeight + HEADER_HEIGHT;
     const dpr = window.devicePixelRatio || 1;
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${realHeight}px`;
@@ -203,7 +312,7 @@ export class PianoRoll {
       const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
       if (isBlack) {
         ctx.fillStyle = "#101014";
-        ctx.fillRect(0, this.pitchToY(p), width, ROW_HEIGHT);
+        ctx.fillRect(0, this.pitchToY(p), width, this.rowHeight);
       }
     }
 
@@ -238,13 +347,13 @@ export class PianoRoll {
       const y = this.pitchToY(p);
       const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
       ctx.fillStyle = isBlack ? "#1c1d24" : "#d8d9de";
-      ctx.fillRect(0, y, isBlack ? blackKeyWidth : KEY_STRIP_WIDTH, ROW_HEIGHT);
+      ctx.fillRect(0, y, isBlack ? blackKeyWidth : KEY_STRIP_WIDTH, this.rowHeight);
       if (!isBlack) {
         ctx.strokeStyle = "#0c0d1288";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(0, y + ROW_HEIGHT + 0.5);
-        ctx.lineTo(KEY_STRIP_WIDTH, y + ROW_HEIGHT + 0.5);
+        ctx.moveTo(0, y + this.rowHeight + 0.5);
+        ctx.lineTo(KEY_STRIP_WIDTH, y + this.rowHeight + 0.5);
         ctx.stroke();
       }
     }
@@ -261,7 +370,7 @@ export class PianoRoll {
     for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
       if (p % 12 !== 0) continue;
       const y = this.pitchToY(p);
-      ctx.fillText(pitchName(p), 2, y + ROW_HEIGHT - 4);
+      ctx.fillText(pitchName(p), 2, y + this.rowHeight - 4);
     }
 
     // 他レイヤー（参考表示・編集不可）
@@ -319,10 +428,10 @@ export class PianoRoll {
     const w = Math.max(4, this.beatsToPx(durationBeats));
     const y = this.pitchToY(pitch);
     ctx.fillStyle = fill;
-    ctx.fillRect(x, y + 1, w, ROW_HEIGHT - 2);
+    ctx.fillRect(x, y + 1, w, this.rowHeight - 2);
     ctx.strokeStyle = stroke;
     ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, y + 1.5, w - 1, ROW_HEIGHT - 3);
+    ctx.strokeRect(x + 0.5, y + 1.5, w - 1, this.rowHeight - 3);
     return { x, endX: x + w };
   }
 
@@ -434,7 +543,7 @@ export class PianoRoll {
       this.drag.note.startBeats = newStart;
 
       if (layer.role !== "drums") {
-        const deltaRows = Math.round((e.clientY - this.drag.startClientY) / ROW_HEIGHT);
+        const deltaRows = Math.round((e.clientY - this.drag.startClientY) / this.rowHeight);
         const newPitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, this.drag.origPitch - deltaRows));
         this.drag.note.pitch = this.pitchFilter(newPitch);
       }
