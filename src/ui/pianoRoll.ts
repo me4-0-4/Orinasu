@@ -36,6 +36,9 @@ export class PianoRoll {
   private selectedNoteId: string | null = null;
   private playheadBeats: number | null = null;
   private drag: DragState | null = null;
+  private lastEmptyScroll = false;
+  /** タブが隠れている間は高さが0でスクロール位置を決められないので、表示された時にやり直す。 */
+  private pendingScroll = true;
   private pxPerBeat = 40;
 
   onChange: () => void = () => {};
@@ -81,19 +84,36 @@ export class PianoRoll {
       { passive: false },
     );
     window.addEventListener("resize", () => this.draw());
+    new ResizeObserver(() => {
+      if (this.pendingScroll && this.scrollWrap.clientHeight > 0) {
+        this.pendingScroll = false;
+        this.scrollToNotesIfHidden();
+      }
+    }).observe(this.scrollWrap);
   }
 
   setPhrase(phrase: Phrase | null, activeLayerId: string | null): void {
     this.phrase = phrase;
     this.activeLayerId = activeLayerId;
     this.draw();
+    if (this.scrollWrap.clientHeight === 0) this.pendingScroll = true;
     this.scrollToNotesIfHidden();
   }
 
   /** アクティブレイヤーの音が今のスクロール位置から見えていない場合だけ、見える位置まで合わせる。 */
   private scrollToNotesIfHidden(): void {
     const layer = this.activeLayer();
-    if (!layer || layer.notes.length === 0) return;
+    if (!layer || layer.notes.length === 0) {
+      // 音がないときは、鍵盤で普段弾く中音域（C4付近）が中央に来るようにする
+      const wrapH = this.scrollWrap.getBoundingClientRect().height || 260;
+      const role = layer?.role;
+      const target = role === "bass" ? 40 : role === "drums" ? 42 : 66;
+      const y = this.pitchToY(target) - wrapH / 2;
+      if (this.scrollWrap.scrollTop === 0 || this.lastEmptyScroll) this.scrollWrap.scrollTop = Math.max(0, y);
+      this.lastEmptyScroll = true;
+      return;
+    }
+    this.lastEmptyScroll = false;
     const pitches = layer.notes.map((n) => n.pitch);
     const minY = this.pitchToY(Math.max(...pitches));
     const maxY = this.pitchToY(Math.min(...pitches)) + ROW_HEIGHT;
