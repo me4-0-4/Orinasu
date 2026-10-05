@@ -904,3 +904,48 @@ body {
 .user-preset-chip .layer-toggle {
   border-left: none;
 }
+
+.cloud-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+.cloud-status {
+  color: var(--text-dim);
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloud-panel[data-status="error"] .cloud-status {
+  color: #ff8a8a;
+}
+
+.cloud-button {
+  background: var(--panel-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.app-header {
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.audio-start-button,
+.cloud-button {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .latency-readout {
+    order: 3;
+    flex-basis: 100%;
+  }
+}

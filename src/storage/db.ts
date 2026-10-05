@@ -8,6 +8,19 @@ export interface UserPreset {
   updatedAt: number;
 }
 
+/** 端末内に保存・削除したときの通知口。クラウド同期が使う。 */
+export const storageHooks: {
+  phraseSaved?: (phrase: Phrase) => void;
+  phraseDeleted?: (id: string) => void;
+  presetSaved?: (preset: UserPreset) => void;
+  presetDeleted?: (id: string) => void;
+} = {};
+
+/** silent: true にすると通知しない（クラウドから取り込んだデータを書くときに使う）。 */
+export interface WriteOptions {
+  silent?: boolean;
+}
+
 const DB_NAME = "orinasu";
 const DB_VERSION = 2;
 const STORE = "phrases";
@@ -30,7 +43,7 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function savePhrase(phrase: Phrase): Promise<void> {
+export async function savePhrase(phrase: Phrase, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
@@ -39,9 +52,10 @@ export async function savePhrase(phrase: Phrase): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  if (!opts.silent) storageHooks.phraseSaved?.(phrase);
 }
 
-export async function deletePhrase(id: string): Promise<void> {
+export async function deletePhrase(id: string, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
@@ -50,6 +64,7 @@ export async function deletePhrase(id: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  if (!opts.silent) storageHooks.phraseDeleted?.(id);
 }
 
 export async function loadAllPhrases(): Promise<Phrase[]> {
@@ -64,7 +79,7 @@ export async function loadAllPhrases(): Promise<Phrase[]> {
   return result.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export async function saveUserPreset(preset: UserPreset): Promise<void> {
+export async function saveUserPreset(preset: UserPreset, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(PRESET_STORE, "readwrite");
@@ -73,9 +88,10 @@ export async function saveUserPreset(preset: UserPreset): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  if (!opts.silent) storageHooks.presetSaved?.(preset);
 }
 
-export async function deleteUserPreset(id: string): Promise<void> {
+export async function deleteUserPreset(id: string, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(PRESET_STORE, "readwrite");
@@ -84,6 +100,7 @@ export async function deleteUserPreset(id: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  if (!opts.silent) storageHooks.presetDeleted?.(id);
 }
 
 export async function loadUserPresets(): Promise<UserPreset[]> {
@@ -96,4 +113,17 @@ export async function loadUserPresets(): Promise<UserPreset[]> {
   });
   db.close();
   return result.sort((a, b) => a.updatedAt - b.updatedAt);
+}
+
+/** 端末内のフレーズと自分の音色を全部消す。別のアカウントでログインしたときに前の人のデータを残さないために使う。 */
+export async function clearLocalData(): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([STORE, PRESET_STORE], "readwrite");
+    tx.objectStore(STORE).clear();
+    tx.objectStore(PRESET_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
 }

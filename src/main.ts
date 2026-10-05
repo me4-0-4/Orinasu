@@ -58,6 +58,8 @@ import {
   deleteUserPreset,
   type UserPreset,
 } from "./storage/db";
+import { initCloud } from "./cloud/sync";
+import { createCloudPanel } from "./ui/cloudPanel";
 import { buildUserPresets } from "./ui/userPresets";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -268,7 +270,7 @@ audioStartButton.addEventListener("click", () => void ensureAudio());
 
 const latency = document.createElement("div");
 latency.className = "latency-readout";
-header.append(title, audioStartButton, latency);
+header.append(title, audioStartButton, latency, createCloudPanel());
 
 const main = document.createElement("main");
 main.className = "app-main";
@@ -1067,3 +1069,11 @@ playheadLoop();
 
 void reloadPhraseList();
 refreshPhraseUI();
+
+// クラウドから新しいデータを取り込んだら、一覧を読み直す（編集中のフレーズは触らない）。
+initCloud({
+  onSynced: () => {
+    void reloadPhraseList();
+    void reloadUserPresets();
+  },
+});
