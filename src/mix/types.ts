@@ -1,5 +1,6 @@
 import type { Layer, Phrase } from "../phrase/types.ts";
 import { makeId } from "../phrase/types.ts";
+import { defaultCurve, defaultMacros, type EnergyCurve, type Macro } from "./energy.ts";
 
 /** セクション内の層。組み替えで作った音符データを持つ（元のフレーズは触らない）。 */
 export interface MixLayer extends Layer {
@@ -30,13 +31,25 @@ export interface Song {
   materialIds: string[];
   /** 並べた順。 */
   sections: Section[];
+  /** 盛り上がりの山（曲全体を0〜1に正規化した線）。古いデータには無い。 */
+  energy?: EnergyCurve;
+  /** 山が動かすもの（マクロ）の設定。古いデータには無い。 */
+  macros?: Macro[];
   updatedAt: number;
 }
 
 export const SONG_ID = "song";
 
 export function createEmptySong(): Song {
-  return { id: SONG_ID, name: "無題の曲", materialIds: [], sections: [], updatedAt: Date.now() };
+  return {
+    id: SONG_ID,
+    name: "無題の曲",
+    materialIds: [],
+    sections: [],
+    energy: defaultCurve(),
+    macros: defaultMacros(),
+    updatedAt: Date.now(),
+  };
 }
 
 export function sectionBeats(section: Pick<Section, "lengthBars" | "beatsPerBar">): number {

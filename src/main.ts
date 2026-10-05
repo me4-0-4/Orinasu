@@ -249,6 +249,7 @@ const songPlayer = new SongPlayer(engine.ctx, {
     if (layer.role !== "drums") synths.forLayer(layer).noteOff(`mix:${voiceKey}`, false, time);
   },
   onSection: (index) => mixPanel.setPlaying(index),
+  onFilterOffset: (cents) => synths.setFilterOffsetAll(cents),
   onEnd: () => {
     allSoundsOff();
     mixPanel.setPlaying(null);
@@ -273,12 +274,14 @@ function persistSongSoon(song: Song): void {
 const mixPanel = buildMixPanel({
   getPhrases: () => savedPhrases,
   onSongChange: persistSongSoon,
-  onPlay: (sections, mode) => {
+  onPlay: (sections, mode, song) => {
     void ensureAudio();
     stopPreview();
     if (transport.state !== "stopped") transport.stop();
     allSoundsOff();
-    songPlayer.start(sections, mode);
+    // 山とマクロは、曲を通して鳴らすときだけ効かせる（セクションの試聴は素のまま）
+    const shaping = song.energy && song.macros ? { curve: song.energy, macros: song.macros } : undefined;
+    songPlayer.start(sections, mode, shaping);
   },
   onStop: stopSongPlayer,
 });
@@ -1120,6 +1123,7 @@ window.setInterval(updateLatency, 500);
 let lastPlayheadBeats: number | null = -1;
 function playheadLoop(): void {
   const beats = transport.currentPositionBeats();
+  mixPanel.setProgress(songPlayer.progress());
   if (beats !== lastPlayheadBeats) {
     pianoRoll.setPlayheadBeats(beats);
     lastPlayheadBeats = beats;

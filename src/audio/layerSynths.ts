@@ -27,6 +27,7 @@ export function defaultSynthFor(role: LayerRole): SynthParams {
 export class LayerSynths {
   private readonly engines = new Map<string, SynthEngine>();
   private readonly audio: AudioEngine;
+  private filterOffset = 0;
 
   constructor(audio: AudioEngine) {
     this.audio = audio;
@@ -44,6 +45,7 @@ export class LayerSynths {
         this.audio.synthDelaySend,
         layer.synth,
       );
+      engine.setFilterOffset(this.filterOffset);
       this.engines.set(layer.id, engine);
     } else if (engine.params !== layer.synth) {
       // フレーズの読み込みなどで層のデータが差し替わったときに追従する
@@ -61,6 +63,13 @@ export class LayerSynths {
   setVolume(layer: Layer, volume: number): void {
     layer.volume = volume;
     this.engines.get(layer.id)?.setVolume(volume);
+  }
+
+  /** 盛り上がりマクロ：全部の層のフィルターを同じ量だけずらす。 */
+  setFilterOffsetAll(cents: number): void {
+    if (cents !== 0 && Math.abs(cents - this.filterOffset) < 15) return; // 細かい変化は無視して負荷を抑える
+    this.filterOffset = cents;
+    for (const engine of this.engines.values()) engine.setFilterOffset(cents);
   }
 
   allNotesOff(): void {

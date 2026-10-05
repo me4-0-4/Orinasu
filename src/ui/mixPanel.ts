@@ -4,6 +4,8 @@ import { createEmptySong, duplicateSection, type Section, type Song } from "../m
 import { roleLabels, type Phrase } from "../phrase/types";
 import { randomSeed, createRng } from "../theory/rng";
 import { keyShortName } from "../theory/key";
+import { buildEnergyEditor } from "./energyEditor";
+import { defaultCurve, defaultMacros } from "../mix/energy";
 
 export interface MixPanelDeps {
   /** 保存されているフレーズ（材料の候補）。 */
@@ -11,7 +13,7 @@ export interface MixPanelDeps {
   /** 曲が変わったので保存してほしい。 */
   onSongChange: (song: Song) => void;
   /** 鳴らす。sections の並びで、loop ならひとつをループ。 */
-  onPlay: (sections: Section[], mode: { kind: "loop"; index: number } | { kind: "song" }) => void;
+  onPlay: (sections: Section[], mode: { kind: "loop"; index: number } | { kind: "song" }, song: Song) => void;
   onStop: () => void;
 }
 
@@ -24,6 +26,8 @@ export interface MixPanel {
   setPlaying: (index: number | null) => void;
   /** いま画面にあるセクション（ドラフト＋並べたもの）の層id。シンセの掃除用。 */
   layerIds: () => string[];
+  /** 山の上の再生位置（0〜1）。 */
+  setProgress: (t: number | null) => void;
 }
 
 const LENGTHS = [1, 2, 4, 8];
@@ -58,6 +62,24 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   const root = document.createElement("div");
   root.className = "tab-panel mix-tab";
+  const columns = document.createElement("div");
+  columns.className = "mix-columns";
+
+  const energyEditor = buildEnergyEditor({
+    onCurveChange: (curve) => {
+      song.energy = curve;
+      touch();
+    },
+    onMacrosChange: (macros) => {
+      song.macros = macros;
+      touch();
+    },
+  });
+  function syncEnergy(): void {
+    if (!song.energy) song.energy = defaultCurve();
+    if (!song.macros) song.macros = defaultMacros();
+    energyEditor.setData(song.energy, song.macros, song.sections);
+  }
 
   // --- 材料 ---
   const materialList = document.createElement("div");
@@ -136,16 +158,17 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     }
     if (song.sections.length === 0) return;
     previewing = null;
-    deps.onPlay(song.sections, { kind: "song" });
+    deps.onPlay(song.sections, { kind: "song" }, song);
     updateButtons(true);
   });
   songActions.append(playSong);
 
-  root.append(
+  columns.append(
     column("材料", materialEmpty, materialList, makeRow),
     column("いまのセクション", draftEmpty, draftBox),
     column("曲の流れ", sectionList, songActions),
   );
+  root.append(columns, energyEditor.el);
   draftBox.append(draftName, draftInfo, draftLayers, draftTools, draftActions);
   draftBox.hidden = true;
 
@@ -180,7 +203,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     }
     renderDraft();
     // 試聴中なら、振り直した結果をすぐ聴けるように鳴らし直す
-    if (previewing === "draft" && draft) deps.onPlay([draft], { kind: "loop", index: 0 });
+    if (previewing === "draft" && draft) deps.onPlay([draft], { kind: "loop", index: 0 }, song);
   }
 
   function stopAll(): void {
@@ -197,11 +220,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (target === "draft") {
       if (!draft) return;
       previewing = "draft";
-      deps.onPlay([draft], { kind: "loop", index: 0 });
+      deps.onPlay([draft], { kind: "loop", index: 0 }, song);
     } else {
       if (!song.sections[target]) return;
       previewing = target;
-      deps.onPlay(song.sections, { kind: "loop", index: target });
+      deps.onPlay(song.sections, { kind: "loop", index: target }, song);
     }
     updateButtons(true);
   }
@@ -283,6 +306,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   function renderSections(): void {
+    syncEnergy();
     sectionList.innerHTML = "";
     if (song.sections.length === 0) {
       const empty = document.createElement("div");
@@ -357,6 +381,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       playingIndex = index;
       if (index === null && previewing === null) updateButtons(false);
       else renderSections();
+    },
+    setProgress(t) {
+      energyEditor.setProgress(t);
     },
     layerIds() {
       return [...song.sections.flatMap((s) => s.layers.map((l) => l.id)), ...(draft?.layers.map((l) => l.id) ?? [])];
