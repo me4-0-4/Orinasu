@@ -949,3 +949,47 @@ body {
     flex-basis: 100%;
   }
 }
+
+/* --- MIX --- */
+.mix-tab.active {
+  display: flex;
+}
+
+.mix-tab > .panel-column {
+  flex: 1 1 0;
+}
+
+.mix-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mix-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mix-name {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.mix-info {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .mix-tab.active {
+    flex-direction: column;
+    height: auto;
+  }
+}

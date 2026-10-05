@@ -54,6 +54,8 @@ import {
   savePhrase,
   deletePhrase,
   loadUserPresets,
+  loadSong,
+  saveSong,
   saveUserPreset,
   deleteUserPreset,
   type UserPreset,
@@ -61,6 +63,9 @@ import {
 import { initCloud } from "./cloud/sync";
 import { createCloudPanel } from "./ui/cloudPanel";
 import { buildUserPresets } from "./ui/userPresets";
+import { buildMixPanel } from "./ui/mixPanel";
+import { SongPlayer } from "./mix/player";
+import { SONG_ID, createEmptySong, type Song } from "./mix/types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = "";
@@ -176,6 +181,7 @@ function persistSoon(): void {
 async function reloadPhraseList(): Promise<void> {
   savedPhrases = await loadAllPhrases();
   phraseBrowser.render(savedPhrases, currentPhrase?.id ?? null);
+  mixPanel.refreshMaterials();
 }
 
 function refreshPhraseUI(): void {
@@ -188,7 +194,7 @@ function refreshPhraseUI(): void {
       lengthBars: currentPhrase.lengthBars,
     });
   }
-  synths.prune(new Set(currentPhrase?.layers.map((l) => l.id) ?? []));
+  synths.prune(new Set([...(currentPhrase?.layers.map((l) => l.id) ?? []), ...mixPanel.layerIds()]));
   updateFooterMode();
   syncSoundPanel();
   refreshAssist();
@@ -228,9 +234,59 @@ const transport = new Transport(engine.ctx, engine.drumOut, {
 
 const recorder = new Recorder(transport, activeLayer);
 
+// --- MIX（セクションを並べて鳴らす） -----------------------------------------
+
+const songPlayer = new SongPlayer(engine.ctx, {
+  playNote: (layer, note, time, voiceKey) => {
+    if (layer.role === "drums") {
+      const id = noteNumberToDrum[note.pitch];
+      if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), time);
+    } else {
+      synths.forLayer(layer).noteOn(`mix:${voiceKey}`, note.pitch, note.velocity, time);
+    }
+  },
+  stopNote: (layer, _note, time, voiceKey) => {
+    if (layer.role !== "drums") synths.forLayer(layer).noteOff(`mix:${voiceKey}`, false, time);
+  },
+  onSection: (index) => mixPanel.setPlaying(index),
+  onEnd: () => {
+    allSoundsOff();
+    mixPanel.setPlaying(null);
+  },
+});
+
+function stopSongPlayer(): void {
+  if (!songPlayer.playing) return;
+  songPlayer.stop();
+  allSoundsOff();
+}
+
+let persistSongTimer: number | null = null;
+function persistSongSoon(song: Song): void {
+  if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
+  persistSongTimer = window.setTimeout(() => {
+    persistSongTimer = null;
+    void saveSong(song);
+  }, 400);
+}
+
+const mixPanel = buildMixPanel({
+  getPhrases: () => savedPhrases,
+  onSongChange: persistSongSoon,
+  onPlay: (sections, mode) => {
+    void ensureAudio();
+    stopPreview();
+    if (transport.state !== "stopped") transport.stop();
+    allSoundsOff();
+    songPlayer.start(sections, mode);
+  },
+  onStop: stopSongPlayer,
+});
+
 function toggleRecord(): void {
   void ensureAudio();
   stopPreview();
+  stopSongPlayer();
   if (transport.state !== "stopped") {
     transport.stop();
     allSoundsOff();
@@ -245,6 +301,7 @@ function toggleRecord(): void {
 function togglePlay(): void {
   void ensureAudio();
   stopPreview();
+  stopSongPlayer();
   if (transport.state !== "stopped") {
     transport.stop();
     allSoundsOff();
@@ -830,7 +887,7 @@ rollDock.append(pianoRoll.el);
 const phraseTab = document.createElement("div");
 phraseTab.className = "tab-panel phrase-tab";
 phraseTab.append(phraseSplit, rollDock);
-main.append(phraseTab);
+main.append(phraseTab, mixPanel.el);
 
 // --- タブ切り替え ---------------------------------------------------------
 
@@ -839,8 +896,13 @@ tabBar.className = "tab-bar";
 const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "perform", label: "演奏", panel: performTab },
   { id: "phrase", label: "フレーズ", panel: phraseTab },
+  { id: "mix", label: "MIX", panel: mixPanel.el },
 ];
 function selectTab(id: string): void {
+  if (id !== "mix") {
+    stopSongPlayer();
+    mixPanel.setPlaying(null);
+  }
   pianoRoll.deleteButton.hidden = id !== "phrase"; // ノート削除はピアノロールのあるタブだけ
   for (const tab of tabs) {
     const active = tab.id === id;
@@ -1068,6 +1130,11 @@ function playheadLoop(): void {
 playheadLoop();
 
 void reloadPhraseList();
+mixPanel.setSong(createEmptySong());
+void loadSong(SONG_ID).then((song) => {
+  if (song) mixPanel.setSong(song);
+  mixPanel.refreshMaterials();
+});
 refreshPhraseUI();
 
 // クラウドから新しいデータを取り込んだら、一覧を読み直す（編集中のフレーズは触らない）。
