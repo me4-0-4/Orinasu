@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>プライバシーポリシー | Orinasu</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        padding: 32px 20px 64px;
+        background: #0c0d12;
+        color: #e6e7ee;
+        font-family: "Hiragino Sans", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+        line-height: 1.85;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.5rem;
+        color: #3ee6b0;
+        letter-spacing: 0.04em;
+      }
+      h2 {
+        font-size: 1.05rem;
+        margin-top: 2.2em;
+        padding-bottom: 0.3em;
+        border-bottom: 1px solid #2a2c36;
+      }
+      a {
+        color: #3ee6b0;
+      }
+      .date {
+        color: #9a9ba6;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Orinasu プライバシーポリシー</h1>
+      <p class="date">制定日：2026年10月5日</p>
+
+      <p>
+        Orinasu（以下「本アプリ」）は、ブラウザで音楽のフレーズを作って遊ぶための個人開発のアプリです。本アプリが扱う情報と、その使いみちを以下に示します。
+      </p>
+
+      <h2>1. 取得する情報</h2>
+      <ul>
+        <li>
+          <strong>Googleアカウントの情報</strong>：Googleでログインしたときに、メールアドレスとアカウントを区別するための識別子（ID）を受け取ります。パスワードは受け取りません。
+        </li>
+        <li>
+          <strong>作成した曲のデータ</strong>：フレーズ（音符、コード、設定など）と、保存した音色の設定です。
+        </li>
+      </ul>
+
+      <h2>2. 情報の使いみち</h2>
+      <ul>
+        <li>ログインした本人を確認し、その人のデータだけを表示するため</li>
+        <li>作った曲のデータを保存し、別の端末から開けるようにするため</li>
+      </ul>
+      <p>上記以外の目的には使いません。広告の表示、アクセス解析、プロフィールの作成には使いません。</p>
+
+      <h2>3. データの保存場所</h2>
+      <ul>
+        <li>お使いの端末のブラウザ内（IndexedDB）に、作った曲のデータを保存します。</li>
+        <li>ログインした場合は、あわせてクラウドサービス「Supabase」にも保存します。</li>
+        <li>ログインの状態を保つため、ブラウザの保存領域にログイン情報（トークン）を保存します。</li>
+      </ul>
+      <p>ログインしない場合、データは端末の外に送られません。</p>
+
+      <h2>4. 第三者への提供</h2>
+      <p>
+        取得した情報を、法令に基づく場合を除いて、第三者に販売・提供・共有することはありません。他のログイン利用者があなたの曲データを見ることもできません。
+      </p>
+      <p>
+        ただし、本アプリは次のサービスを使って動いており、これらのサービスが情報を処理します。
+      </p>
+      <ul>
+        <li>Google（ログインの認証）</li>
+        <li>Supabase（ログインの管理とデータの保存）</li>
+        <li>GitHub Pages（本アプリの配信）</li>
+      </ul>
+
+      <h2>5. データの削除</h2>
+      <p>
+        保存したデータの削除を希望する場合は、下のお問い合わせ先に連絡してください。ログインに使ったアカウントの情報と、保存した曲のデータを削除します。端末内のデータは、ブラウザのサイトデータを消去することでいつでも削除できます。
+      </p>
+
+      <h2>6. お問い合わせ</h2>
+      <p>
+        本アプリに関するお問い合わせは、GitHubのリポジトリ
+        <a href="https://github.com/me4-0-4/Orinasu">me4-0-4/Orinasu</a>
+        のIssueから受け付けます。
+      </p>
+
+      <h2>7. 変更</h2>
+      <p>この内容は、必要に応じて変更することがあります。変更した場合は、このページで案内します。</p>
+
+      <p><a href="./">Orinasu にもどる</a></p>
+    </main>
+  </body>
+</html>

@@ -83,9 +83,15 @@
 - 保存した音色の名前変更・並び替え
 - 端末（タブレット・Safari）実機での確認
 
-## 次にやること：段階4（クラウド保存）
+## 段階4：クラウド保存（実装済み・Supabase側の設定待ち）
 
-SPEC.mdの内容：Supabaseの設定手順を画面操作レベルで説明 → Googleログイン（オーナーのみ）、RLS、曲データの同期。
+- **方針の変更**：SPECの「オーナーだけ通す」をやめ、「誰でもGoogleログインできて、データは各自のものだけ見える」にした（曲の共有機能はなしのまま）。メアドでの絞り込みは不要
+- **保存の流れ**：端末内（IndexedDB）に先に保存 → ログイン中ならクラウドにも送る。起動時・ログイン時・オンライン復帰時・タブに戻ったときに全体を突き合わせ、新しい方（`updatedAt`）が勝つ
+- **対象**：フレーズ（`phrases`）と自分の音色（`presets`）。テーブルは `user_id, id, data(jsonb), updated_at, deleted`。削除は `deleted=true` の印を付けて他の端末に伝える
+- **ファイル**：`supabase/schema.sql`（テーブルとRLS）、`src/cloud/client.ts`（接続。URLとanon keyは公開前提の値なのでコードに直書き）、`src/cloud/sync.ts`（同期とログイン）、`src/ui/cloudPanel.ts`（ヘッダーのログイン表示）、`src/storage/db.ts`（保存時の通知口 `storageHooks`、`silent` オプション、`clearLocalData`）
+- **別アカウントでログインしたとき**：同じ端末で前と違う人がログインしたら、端末内のデータを消してから取り込む（前の人の曲が混ざらないように）。この端末で最初にログインする人は、今ある端末内データをそのまま引き継ぐ
+- **Supabase側でやること（オーナー作業）**：①`supabase/schema.sql` をSQL Editorで実行 ②Google Cloudの OAuth クライアントを作り、SupabaseのGoogleプロバイダに設定 ③SupabaseのURL設定（Site URL と Redirect URLs）
+- **まだ確認できていないこと**：実際のGoogleログイン〜同期は、上の設定が終わってから動作確認する。ログアウト中に削除したデータは、他の端末に削除として伝わらない（削除の印は、ログイン中の削除だけ送る）
 
 ## 気になっていること・要確認事項
 
