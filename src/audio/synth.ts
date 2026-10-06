@@ -27,6 +27,8 @@ export class SynthEngine {
   // 「音が鳴らない」「消えないまま鳴り続ける」不具合の原因になっていた。
   private readonly voices = new Map<string, Voice>();
   private lastFrequency: number | null = null;
+  /** 盛り上がりマクロ用：フィルターを全体にずらす量（セント）。0なら素の音色。 */
+  private filterOffsetCents = 0;
 
   private lfoOsc: OscillatorNode | null = null;
   private lfoGain: GainNode | null = null;
@@ -142,6 +144,7 @@ export class SynthEngine {
     const voiceFilter = this.ctx.createBiquadFilter();
     voiceFilter.type = filter.type;
     voiceFilter.Q.value = filter.resonance;
+    voiceFilter.detune.value = this.filterOffsetCents;
 
     const baseCutoff = filter.cutoff;
     const peakCutoff = clampFrequency(baseCutoff * Math.pow(2, filter.envAmount * 4));
@@ -254,6 +257,15 @@ export class SynthEngine {
   /** この層の音量（0〜1.5）。ドライ・リバーブ送り・ディレイ送りすべてに効く。 */
   setVolume(volume: number): void {
     this.output.gain.setTargetAtTime(0.9 * volume, this.ctx.currentTime, 0.015);
+  }
+
+  /** フィルターの開き具合をセント単位でずらす（負で閉じる）。鳴っている音にも滑らかに効く。 */
+  setFilterOffset(cents: number, time?: number): void {
+    this.filterOffsetCents = cents;
+    const now = time ?? this.ctx.currentTime;
+    for (const voice of this.voices.values()) {
+      voice.filter.detune.setTargetAtTime(cents, now, 0.05);
+    }
   }
 
   /** 層を消すとき：鳴っている音を止めて、内部のノードをつなぎ外す。 */

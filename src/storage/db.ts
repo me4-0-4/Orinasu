@@ -1,5 +1,6 @@
 import type { SynthParams } from "../audio/synthParams";
 import type { Phrase } from "../phrase/types";
+import type { Song } from "../mix/types";
 
 export interface UserPreset {
   id: string;
@@ -22,9 +23,10 @@ export interface WriteOptions {
 }
 
 const DB_NAME = "orinasu";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = "phrases";
 const PRESET_STORE = "presets";
+const SONG_STORE = "songs";
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -36,6 +38,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(PRESET_STORE)) {
         db.createObjectStore(PRESET_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(SONG_STORE)) {
+        db.createObjectStore(SONG_STORE, { keyPath: "id" });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -115,13 +120,37 @@ export async function loadUserPresets(): Promise<UserPreset[]> {
   return result.sort((a, b) => a.updatedAt - b.updatedAt);
 }
 
+/** MIXの曲（材料の選択・セクション）。いまは端末内だけに保存する（クラウド同期は未対応）。 */
+export async function saveSong(song: Song): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(SONG_STORE, "readwrite");
+    tx.objectStore(SONG_STORE).put(song);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+export async function loadSong(id: string): Promise<Song | null> {
+  const db = await openDb();
+  const result = await new Promise<Song | null>((resolve, reject) => {
+    const req = db.transaction(SONG_STORE, "readonly").objectStore(SONG_STORE).get(id);
+    req.onsuccess = () => resolve((req.result as Song | undefined) ?? null);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return result;
+}
+
 /** 端末内のフレーズと自分の音色を全部消す。別のアカウントでログインしたときに前の人のデータを残さないために使う。 */
 export async function clearLocalData(): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([STORE, PRESET_STORE], "readwrite");
+    const tx = db.transaction([STORE, PRESET_STORE, SONG_STORE], "readwrite");
     tx.objectStore(STORE).clear();
     tx.objectStore(PRESET_STORE).clear();
+    tx.objectStore(SONG_STORE).clear();
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
