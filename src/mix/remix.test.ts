@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase, type Note } from "../phrase/types.ts";
-import { collectMaterials, remix, remixNew, transposeSemitones, adaptPitch, fit, reorderSlices } from "./remix.ts";
+import { collectMaterials, remix, remixNew, transposeSemitones, adaptPitch } from "./remix.ts";
 import { duplicateSection } from "./types.ts";
 
 function note(pitch: number, start: number, dur = 0.5): Note {
@@ -35,13 +35,6 @@ test("調の移調：C→Dなら+2、C→Gなら-5", () => {
   assert.equal(adaptPitch(60, null, { tonic: 2, mode: "major" }), 60);
 });
 
-test("fit：短い材料は繰り返され、長い材料は切り出される", () => {
-  const tiled = fit([note(60, 0)], 4, 8, 0);
-  assert.deepEqual(tiled.map((n) => n.startBeats), [0, 4]);
-  const cut = fit([note(60, 0), note(62, 4)], 8, 4, 4);
-  assert.deepEqual(cut.map((n) => [n.pitch, n.startBeats]), [[62, 0]]);
-});
-
 test("新しい組み合わせ：長さに収まり、材料のある役割が入る", () => {
   const mats = collectMaterials([phraseA, phraseB]);
   const s = remixNew(mats, { lengthBars: 2 }, createRng(1))!;
@@ -66,26 +59,46 @@ test("固定した層は振り直しても変わらず、ほかは変わりう�
   let s = remixNew(mats, { lengthBars: 2 }, createRng(3))!;
   s.layers[0].locked = true;
   const lockedNotes = JSON.stringify(s.layers[0].notes);
-  for (const mode of ["new", "recut", "rhythm", "order"] as const) {
+  for (const mode of ["new", "replan", "source"] as const) {
     s = remix(s, mode, mats, createRng(10 + mode.length));
     assert.equal(JSON.stringify(s.layers.find((l) => l.locked)!.notes), lockedNotes, mode);
   }
 });
 
-test("順番だけ：音の集まりは同じで、位置だけ入れ替わる", () => {
-  const notes = [note(60, 0), note(62, 4), note(64, 8), note(65, 12)];
-  const out = reorderSlices(notes, 16, 4, createRng(5));
-  assert.deepEqual(out.map((n) => n.pitch).sort(), [60, 62, 64, 65]);
-  assert.deepEqual(out.map((n) => n.startBeats), [0, 4, 8, 12]);
+test("固定した層があるあいだ、まるごと振っても刻み方は残る（層同士がずれない）", () => {
+  const mats = collectMaterials([phraseA, phraseB]);
+  const s0 = remixNew(mats, { lengthBars: 4, chop: { busy: 1, breaks: 0.3, size: 0.5 } }, createRng(21))!;
+  s0.layers[0].locked = true;
+  const s1 = remix(s0, "new", mats, createRng(22));
+  assert.deepEqual(s1.plan, s0.plan);
+  const s2 = remix(s1, "replan", mats, createRng(23), { busy: 1, breaks: 0.3, size: 0.5 });
+  assert.notDeepEqual(s2.plan, s0.plan);
 });
 
-test("リズムだけ：音の高さの並びは残る", () => {
+test("刻み直す：同じ素材のまま、刻み方だけ変わる", () => {
   const mats = collectMaterials([phraseA, phraseB]);
-  let s = remixNew(mats, { lengthBars: 1 }, createRng(2))!;
+  const s0 = remixNew(mats, { lengthBars: 4, chop: { busy: 1, breaks: 0, size: 0.5 } }, createRng(5))!;
+  const labels = (s: typeof s0) => s.layers.map((l) => `${l.srcPhraseId}/${l.srcLayerId}`);
+  const s1 = remix(s0, "replan", mats, createRng(6), { busy: 1, breaks: 0, size: 0.5 });
+  assert.deepEqual(labels(s1), labels(s0));
+  assert.notDeepEqual(s1.plan, s0.plan);
+});
+
+test("素材だけ替える：刻み方は同じ", () => {
+  const phraseC = phraseWith("C", 1, { melody: [note(62, 0), note(65, 1), note(69, 2)] });
+  const mats = collectMaterials([phraseA, phraseB, phraseC]);
+  const s0 = remixNew(mats, { lengthBars: 2, chop: { busy: 1, breaks: 0, size: 0.5 } }, createRng(8))!;
+  const s1 = remix(s0, "source", mats, createRng(9));
+  assert.deepEqual(s1.plan, s0.plan);
+  const melody = (s: typeof s0) => s.layers.find((l) => l.role === "melody")!.srcPhraseId;
+  assert.notEqual(melody(s1), melody(s0)); // メロディの材料が2つあるので、別のほうに替わる
+});
+
+test("刻まない設定（刻み0）なら、材料がそのまま通る", () => {
+  const mats = collectMaterials([phraseA]);
+  const s = remixNew(mats, { lengthBars: 1, chop: { busy: 0, breaks: 0, size: 0.5 } }, createRng(2))!;
   const mel = s.layers.find((l) => l.role === "melody")!;
-  const pitches = new Set(mel.notes.map((n) => n.pitch));
-  s = remix(s, "rhythm", mats, createRng(9));
-  for (const n of s.layers.find((l) => l.role === "melody")!.notes) assert.ok(pitches.has(n.pitch));
+  assert.deepEqual(mel.notes.map((n) => n.startBeats), [0, 1, 2, 3]);
 });
 
 test("複製：層と音符のidが新しくなる", () => {
