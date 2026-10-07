@@ -960,48 +960,90 @@ body {
   overflow-y: auto;
 }
 
-.mix-steps {
+.mix-split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
 }
 
-.mix-draft-col {
+.mix-stage-pane {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
+  position: sticky;
+  top: 0;
+}
+
+.mix-side-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
   min-width: 0;
 }
 
-.mix-step {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  padding: 8px 12px 12px;
+.mix-rule {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
 }
 
-.mix-step-wide {
-  grid-column: 1 / -1;
-}
-
-.mix-step-head {
+.mix-rule-head {
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 4px 8px;
+  align-items: center;
+  gap: 10px;
 }
 
-.mix-step-num {
-  color: var(--accent-green);
-  font-weight: 700;
-  font-size: 0.95rem;
+.mix-rule-line {
+  flex: 1;
+  border-top: 1px solid var(--border);
 }
 
-.mix-step-head .mix-info {
+.mix-rule-hint {
+  white-space: normal;
+  margin-top: -4px;
+}
+
+.mix-arrange {
+  margin-top: 18px;
+}
+
+.mix-status {
+  white-space: normal;
+  letter-spacing: 0.04em;
+}
+
+.chop-stage {
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.chop-canvas {
+  display: block;
+  width: 100%;
+}
+
+.mix-slider-row {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr) 3em;
+  align-items: center;
+  gap: 2px 10px;
+  font-size: 0.8rem;
+}
+
+.mix-slider-name {
+  color: var(--text);
+}
+
+.mix-slider-value {
+  text-align: right;
+  color: var(--text);
+}
+
+.mix-slider-hint {
+  grid-column: 1 / -1;
   white-space: normal;
 }
 
@@ -1009,8 +1051,8 @@ body {
   background: var(--accent-green);
   color: #06110c;
   border: none;
-  padding: 10px 32px;
-  font-size: 1rem;
+  padding: 6px 22px;
+  font-size: 0.9rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -1200,8 +1242,13 @@ body {
     overflow: visible;
   }
 
-  .mix-steps {
+  .mix-split {
     grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  .mix-stage-pane {
+    position: static;
   }
 
   .macro-list {

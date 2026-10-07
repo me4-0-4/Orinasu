@@ -17,6 +17,8 @@ import { roleLabels, type Phrase } from "../phrase/types";
 import { randomSeed, createRng } from "../theory/rng";
 import { keyShortName } from "../theory/key";
 import { buildEnergyEditor } from "./energyEditor";
+import { buildChopStage } from "./chopStage";
+import { DEFAULT_CHOP, type ChopParams } from "../mix/chop";
 import { defaultCurve, defaultMacros } from "../mix/energy";
 
 export interface MixPanelDeps {
@@ -56,23 +58,26 @@ function button(label: string, onClick: () => void, cls = "preset-button", title
   return b;
 }
 
-/** 作業の1ステップ（番号つきの見出し＋中身）。 */
-function step(num: number, heading: string, hint: string, ...children: HTMLElement[]): HTMLElement {
+/** 細い線つきの見出し（見出し＋ひとこと説明）。中身はその下に並べる。 */
+function rule(heading: string, hint: string, ...children: HTMLElement[]): HTMLElement {
   const box = document.createElement("section");
-  box.className = "mix-step";
+  box.className = "mix-rule";
   const h = document.createElement("div");
-  h.className = "mix-step-head";
-  const n = document.createElement("span");
-  n.className = "mix-step-num";
-  n.textContent = String(num);
+  h.className = "mix-rule-head";
   const t = document.createElement("span");
   t.className = "panel-heading";
   t.textContent = heading;
-  const hi = document.createElement("span");
-  hi.className = "mix-info";
-  hi.textContent = hint;
-  h.append(n, t, hi);
-  box.append(h, ...children);
+  const line = document.createElement("span");
+  line.className = "mix-rule-line";
+  h.append(t, line);
+  box.appendChild(h);
+  if (hint) {
+    const hi = document.createElement("div");
+    hi.className = "mix-info mix-rule-hint";
+    hi.textContent = hint;
+    box.appendChild(hi);
+  }
+  box.append(...children);
   return box;
 }
 
@@ -92,10 +97,16 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   /** タイムラインで選んでいるセクションの番号。 */
   let selected: number | null = null;
 
+  /** 刻みのスライダー。次に「振る」ときから効く。 */
+  const chop: ChopParams = { ...DEFAULT_CHOP };
+  /** 振る前のドラフト（「ひとつ戻す」用）。新しいものが後ろ。 */
+  const history: Section[] = [];
+
   const root = document.createElement("div");
   root.className = "tab-panel mix-tab";
-  const steps = document.createElement("div");
-  steps.className = "mix-steps";
+  const split = document.createElement("div");
+  split.className = "mix-split";
+  const chopStage = buildChopStage();
 
   const energyEditor = buildEnergyEditor({
     onEnabledChange: (on) => {
@@ -117,14 +128,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     energyEditor.setData(song.energy, song.macros, effectiveSections(song), !!song.energyOn);
   }
 
-  // --- 1 材料 ---
+  // --- 材料 ---
   const materialList = document.createElement("div");
   materialList.className = "mix-list";
   const materialEmpty = document.createElement("div");
   materialEmpty.className = "layer-empty";
   materialEmpty.textContent = "フレーズタブで保存したフレーズが、ここに並びます";
 
-  // --- 2 振る ---
+  // --- 刻み（スライダー。偶然の強さ） ---
   const lengthSelect = document.createElement("select");
   lengthSelect.className = "quantize-select";
   for (const n of LENGTHS) {
@@ -137,37 +148,91 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   lengthSelect.addEventListener("change", () => {
     draftLength = Number(lengthSelect.value);
   });
-  const rollButton = button("振る", () => generate("new"), "roll-button", "材料から新しいセクションを作る。固定した層は残す");
-  const previewDraft = button("試聴", () => togglePreview("draft"), "preset-button");
-  previewDraft.hidden = true;
-  const rollRow = document.createElement("div");
-  rollRow.className = "preset-row mix-roll-row";
-  rollRow.append(rollButton, lengthSelect, previewDraft);
-  const draftTools = document.createElement("div");
-  draftTools.className = "preset-row";
-  for (const mode of ["recut", "rhythm", "order"] as const) {
-    draftTools.appendChild(
-      button(remixLabels[mode], () => generate(mode), "preset-button", "固定していない層だけ振り直す"),
-    );
-  }
-  draftTools.append(button("まるごと振り直す", () => generate("new", true), "preset-button", "固定も外して、まるごと作り直す"));
-  draftTools.hidden = true;
+  const lengthRow = document.createElement("label");
+  lengthRow.className = "mix-slider-row";
+  const lengthName = document.createElement("span");
+  lengthName.className = "mix-slider-name";
+  lengthName.textContent = "長さ";
+  lengthRow.append(lengthName, lengthSelect);
 
-  // --- 3 固定 ---
+  const sizeWords = ["2拍", "1拍", "半拍", "1/4拍"];
+  function chopSlider(key: keyof ChopParams, label: string, hint: () => string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "mix-slider-row";
+    const name = document.createElement("span");
+    name.className = "mix-slider-name";
+    name.textContent = label;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.className = "layer-volume";
+    input.min = "0";
+    input.max = "1";
+    input.step = "0.05";
+    input.value = String(chop[key]);
+    const value = document.createElement("span");
+    value.className = "mix-slider-value";
+    const note = document.createElement("div");
+    note.className = "mix-info mix-slider-hint";
+    const show = (): void => {
+      value.textContent = `${Math.round(chop[key] * 100)}%`;
+      note.textContent = hint();
+    };
+    show();
+    input.addEventListener("input", () => {
+      chop[key] = Number(input.value);
+      show();
+    });
+    input.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+    row.append(name, input, value, note);
+    return row;
+  }
+  const busyRow = chopSlider("busy", "刻み", () => `刻み – 小節の約${Math.round(chop.busy * 80)}%にいじりが入る（頭は控えめ、終わりは強め）`);
+  const breaksRow = chopSlider("breaks", "抜き", () => {
+    const b6 = chop.breaks * 6;
+    return `抜き – いじりの約${Math.round((b6 / (9 + b6)) * 100)}%が、ドラムだけ・ドラム抜き・無音になる`;
+  });
+  const sizeRow = chopSlider("size", "細かさ", () => `細かさ – 断片は${sizeWords[Math.round(chop.size * 3)]}くらいから`);
+
+  // --- ステージ（左）：刻み方と、層ごとの音符 ---
+  const draftInfo = document.createElement("div");
+  draftInfo.className = "mix-info mix-status";
   const draftEmpty = document.createElement("div");
   draftEmpty.className = "layer-empty";
-  draftEmpty.textContent = "材料を選んで「振る」と、ここに層が出る";
-  const draftInfo = document.createElement("div");
-  draftInfo.className = "mix-info";
+  draftEmpty.hidden = true;
+  const rollButton = button("振る", () => generate("new"), "roll-button", "材料から新しく切り貼りする。固定した層は残す");
+  const previewDraft = button("試聴", () => togglePreview("draft"), "preset-button");
+  previewDraft.hidden = true;
+  const undoButton = button("ひとつ戻す", () => undoDraft(), "preset-button", "振る前に戻す（何回でも）");
+  undoButton.disabled = true;
+  const rollRow = document.createElement("div");
+  rollRow.className = "preset-row mix-roll-row";
+  rollRow.append(rollButton, previewDraft, undoButton);
+  const draftTools = document.createElement("div");
+  draftTools.className = "preset-row";
+  draftTools.append(
+    button(remixLabels.replan, () => generate("replan"), "preset-button", "同じ素材のまま、刻み方だけ新しくする（固定した層は残す）"),
+    button(remixLabels.source, () => generate("source"), "preset-button", "同じ刻み方のまま、素材だけ替える（固定した層は残す）"),
+    button("固定を全部外す", () => {
+      if (!draft) return;
+      for (const l of draft.layers) l.locked = false;
+      renderDraft();
+    }, "preset-button"),
+  );
+  draftTools.hidden = true;
+
+  // --- 固定 ---
   const draftLayers = document.createElement("div");
   draftLayers.className = "layer-list";
+  const layersEmpty = document.createElement("div");
+  layersEmpty.className = "layer-empty";
+  layersEmpty.textContent = "「振る」と、ここに層が出る";
   const soundButton = button("音づくり", () => {
     soundOpen = !soundOpen;
     renderDraft();
   }, "preset-button", "層ごとの音量・ミュート・ソロ・パン・リバーブ・ディレイ・コンプ");
   const draftBox = document.createElement("div");
   draftBox.className = "mix-draft";
-  draftBox.append(draftInfo, draftLayers, soundButton);
+  draftBox.append(draftLayers, soundButton);
   draftBox.hidden = true;
 
   // --- 4 並べる ---
@@ -274,6 +339,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       draft = duplicateSection(section);
       draft.name = section.name;
       editingId = section.id;
+      history.length = 0;
+      undoButton.disabled = true;
       renderDraft();
       root.scrollTo?.({ top: 0, behavior: "smooth" });
     }, "layer-toggle", "複製を「振る」の側に戻して作り直す"),
@@ -296,16 +363,20 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     }, "layer-toggle"),
   );
 
-  root.append(steps);
-  const draftColumn = document.createElement("div");
-  draftColumn.className = "mix-draft-col";
-  draftColumn.append(
-    step(2, "振る", "偶然で組み替える", rollRow, draftTools),
-    step(3, "固定", "層をタップで固定。固定した層は、振っても変わらない", draftEmpty, draftBox),
+  const stagePane = document.createElement("div");
+  stagePane.className = "mix-stage-pane";
+  stagePane.append(chopStage.el, draftInfo, rollRow, draftTools, draftEmpty);
+  const sidePane = document.createElement("div");
+  sidePane.className = "mix-side-pane";
+  sidePane.append(
+    rule("材料", "使うフレーズを選ぶ", materialEmpty, materialList),
+    rule("刻み", "振るときの偶然の強さ", lengthRow, busyRow, breaksRow, sizeRow),
+    rule("固定", "層をタップで固定。固定した層は、振っても変わらない", layersEmpty, draftBox),
   );
-  const arrangeStep = step(4, "並べる", "セクションを曲にして、通して聴く", addRow, songMeta, timeline, selBar, energyEditor.el);
-  arrangeStep.classList.add("mix-step-wide");
-  steps.append(step(1, "材料", "使うフレーズを選ぶ", materialEmpty, materialList), draftColumn, arrangeStep);
+  split.append(stagePane, sidePane);
+  const arrange = rule("並べる", "セクションを曲にして、通して聴く", addRow, songMeta, timeline, selBar, energyEditor.el);
+  arrange.classList.add("mix-arrange");
+  root.append(split, arrange);
 
   // --- 動作 ---
 
@@ -332,7 +403,23 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     return deps.getPhrases().filter((p) => ids.has(p.id));
   }
 
-  function generate(mode: RemixMode, unlock = false): void {
+  function pushHistory(): void {
+    if (!draft) return;
+    history.push(structuredClone(draft));
+    if (history.length > 30) history.shift();
+    undoButton.disabled = false;
+  }
+
+  function undoDraft(): void {
+    const prev = history.pop();
+    undoButton.disabled = history.length === 0;
+    if (!prev) return;
+    draft = prev;
+    renderDraft();
+    if (previewing === "draft") deps.onPlay(draftForPlay(prev), { kind: "loop", index: 0 }, song);
+  }
+
+  function generate(mode: RemixMode): void {
     const materials = collectMaterials(materialPhrases());
     if (materials.length === 0) {
       draftEmpty.textContent =
@@ -343,14 +430,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       return;
     }
     const rng = createRng(randomSeed());
-    if (draft && unlock) for (const l of draft.layers) l.locked = false;
+    pushHistory();
     if (!draft) {
-      draft = remixNew(materials, { lengthBars: draftLength }, rng);
+      draft = remixNew(materials, { lengthBars: draftLength, chop }, rng);
     } else if (mode === "new" && draft.lengthBars !== draftLength) {
       // 長さを変えたときは、固定も含めて長さに合わせて作り直す
-      draft = remixNew(materials, { lengthBars: draftLength }, rng, draft);
+      draft = remixNew(materials, { lengthBars: draftLength, chop }, rng, draft);
     } else {
-      draft = remix(draft, mode, materials, rng);
+      draft = remix(draft, mode, materials, rng, chop);
     }
     renderDraft();
     // 試聴中なら、振り直した結果をすぐ聴けるように鳴らし直す
@@ -432,8 +519,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   function renderDraft(): void {
     const has = !!draft;
+    chopStage.setSection(draft);
     draftBox.hidden = !has;
-    draftEmpty.hidden = has;
+    layersEmpty.hidden = has;
+    if (has) draftEmpty.hidden = true;
     draftTools.hidden = !has;
     previewDraft.hidden = !has;
     addRow.hidden = !has;
@@ -442,7 +531,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (!draft) return;
     const d = draft;
     if (document.activeElement !== draftName) draftName.value = d.name;
-    draftInfo.textContent = `${d.lengthBars}小節 / ${d.bpm}BPM${d.key ? ` / ${keyShortName(d.key)}に合わせる` : ""}`;
+    draftInfo.textContent = `${d.layers.length}層 · ${d.lengthBars}小節 · ${d.bpm}BPM${d.key ? ` · ${keyShortName(d.key)}に合わせる` : ""}`;
     draftLayers.innerHTML = "";
     for (const layer of d.layers) {
       const row = document.createElement("div");
@@ -615,6 +704,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       song = next;
       editingId = null;
       selected = null;
+      history.length = 0;
+      undoButton.disabled = true;
       renderMaterials();
       renderDraft();
       renderSections();

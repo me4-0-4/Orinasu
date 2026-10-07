@@ -1,5 +1,6 @@
 import type { Layer, Phrase } from "../phrase/types.ts";
 import { makeId } from "../phrase/types.ts";
+import type { ChopSegment } from "./chop.ts";
 import { defaultCurve, defaultMacros, type EnergyCurve, type Macro } from "./energy.ts";
 
 /** セクション内の層。組み替えで作った音符データを持つ（元のフレーズは触らない）。 */
@@ -8,6 +9,9 @@ export interface MixLayer extends Layer {
   locked: boolean;
   /** 材料にした層（表示用）。 */
   sourceLabel?: string;
+  /** 材料にしたフレーズと層のid（「刻み直す」で、同じ材料から切り直すため）。古いデータには無い。 */
+  srcPhraseId?: string;
+  srcLayerId?: string;
 }
 
 export interface Section {
@@ -19,6 +23,8 @@ export interface Section {
   layers: MixLayer[];
   /** 調の自動合わせの基準にした調（なければ合わせない）。 */
   key?: { tonic: number; mode: "major" | "minor" };
+  /** 刻み方の計画（全部の層に同じものを当てた）。古いデータには無い。 */
+  plan?: ChopSegment[];
   createdAt: number;
   updatedAt: number;
 }
