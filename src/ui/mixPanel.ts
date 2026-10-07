@@ -11,7 +11,8 @@ import {
   type RerollPart,
   type SeedSnapshot,
 } from "../mix/collageSong";
-import type { Pcm } from "../mix/pcm";
+import { limitPeak, type Pcm } from "../mix/pcm";
+import { repeatPcm } from "../mix/loopFold";
 import { STEPS_PER_BEAT, holdFraction } from "../mix/sequencer";
 import { musicSlotSteps } from "../mix/musicChop";
 import { divisionsFor, sliceLimits, type CutMode } from "../mix/slicer";
@@ -45,6 +46,8 @@ export interface MixPanelDeps {
   audio: { ctx: AudioContext; out: AudioNode };
   /** フレーズを、指定のBPMで1周ぶんの波形に書き出す。 */
   render: (phrase: Phrase, bpm: number, opts: { dry: boolean }) => Promise<Pcm>;
+  /** 刻んだ曲の全体に、仕上げのリバーブを掛ける（amount 0〜1）。 */
+  reverb: (pcm: Pcm, amount: number) => Promise<Pcm>;
 }
 
 export interface MixPanel {
@@ -221,6 +224,36 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     touch();
     scheduleRebuild();
   });
+  // 仕上げの響き（全体のリバーブ）
+  const reverbRow = document.createElement("div");
+  reverbRow.className = "mix-slider-row";
+  const reverbName = document.createElement("span");
+  reverbName.className = "mix-slider-name";
+  reverbName.textContent = "仕上げの響き";
+  const reverbInput = document.createElement("input");
+  reverbInput.type = "range";
+  reverbInput.className = "layer-volume";
+  reverbInput.min = "0";
+  reverbInput.max = "1";
+  reverbInput.step = "0.05";
+  const reverbValue = document.createElement("span");
+  reverbValue.className = "mix-slider-value";
+  const reverbHint = document.createElement("div");
+  reverbHint.className = "mix-info mix-slider-hint";
+  const showReverb = (): void => {
+    reverbInput.value = String(song.params.reverb);
+    reverbValue.textContent = `${Math.round(song.params.reverb * 100)}%`;
+    reverbHint.textContent =
+      song.params.reverb < 0.05 ? "仕上げの響き – 掛けない" : "仕上げの響き – 刻んだあとの全体にだけリバーブを掛ける（断片はにじまず、全体がなじむ）";
+  };
+  reverbInput.addEventListener("input", () => {
+    song.params.reverb = Number(reverbInput.value);
+    showReverb();
+    touch();
+    scheduleRebuild();
+  });
+  reverbInput.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+  reverbRow.append(reverbName, reverbInput, reverbValue, reverbHint);
   const fieldRow = (label: string, ...children: HTMLElement[]): HTMLElement => {
     const row = document.createElement("label");
     row.className = "mix-slider-row mix-field-row";
@@ -465,7 +498,17 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     button("順番だけ", () => void chop("order"), "preset-button", "どの断片を打つか（と音程）だけ変える"),
   );
   const saveButton = button("WAVで保存", () => saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
-  partRow.append(saveButton);
+  // 保存するときのくり返し回数（phrz の loops 1/2/4/8 に当たる）
+  const loopSelect = document.createElement("select");
+  loopSelect.className = "quantize-select";
+  loopSelect.title = "WAVに、刻んだ曲を何回くり返して入れるか";
+  for (const n of [1, 2, 4, 8]) {
+    const opt = document.createElement("option");
+    opt.value = String(n);
+    opt.textContent = `×${n}`;
+    loopSelect.appendChild(opt);
+  }
+  partRow.append(saveButton, loopSelect);
 
   const stagePane = document.createElement("div");
   stagePane.className = "mix-stage-pane";
@@ -491,6 +534,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       fieldRow("モード", styleSelect),
       modeRow,
       fieldRow("余韻", drySelect),
+      reverbRow,
     ),
     rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, holdRow, motionRow),
   );
@@ -542,6 +586,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     try {
       const out = await buildCollage(song, deps.getPhrases(), render, sampleRate);
       if (token !== buildToken) return;
+      if (out && song.params.reverb > 0) {
+        // 仕上げの響き：刻んだあとの全体にだけ掛ける（断片同士はにじまず、全体はなじむ）
+        out.pcm = limitPeak(await deps.reverb(out.pcm, song.params.reverb));
+        if (token !== buildToken) return;
+      }
       result = out;
       setNotice(out ? "" : "刻む曲が見つからない。材料を選び直して");
       if (player.playing) {
@@ -617,7 +666,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   function saveWav(): void {
     if (!result) return;
-    const bytes = encodeWav(result.pcm, sampleRate);
+    const bytes = encodeWav(repeatPcm(result.pcm, Number(loopSelect.value)), sampleRate);
     const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
     const a = document.createElement("a");
     a.href = url;
@@ -683,6 +732,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     modeRow.hidden = song.params.style === "music";
     laneModeRow.hidden = song.params.style === "music";
     drySelect.value = song.params.dry ? "dry" : "wet";
+    showReverb();
     const hits = result ? result.lanes.reduce((a, l) => a + l.events.length, 0) : 0;
     status.textContent = [
       `層 ${result?.lanes.length ?? 0}`,

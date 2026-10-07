@@ -80,7 +80,8 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
     for (let s = 0; s <= data.totalSteps; s += data.stepsPerBar / 4) {
       const x = GUTTER + s * sx;
       const isBar = s % data.stepsPerBar === 0;
-      g.strokeStyle = isBar ? border : "rgba(255,255,255,0.04)";
+      const isUnit = s % (data.stepsPerBar * 4) === 0; // 4小節のまとまり（音楽モードのくり返しの単位）
+      g.strokeStyle = isUnit ? "rgba(255,255,255,0.32)" : isBar ? border : "rgba(255,255,255,0.04)";
       g.beginPath();
       g.moveTo(x, isBar ? 0 : HEAD_H);
       g.lineTo(x, height);

@@ -40,6 +40,8 @@ export interface SongParams extends ShapeParams {
   mode: CutMode;
   /** 余韻なし：刻む前の書き出しで、リバーブ・ディレイを外す（断片同士がにじまない）。 */
   dry: boolean;
+  /** 仕上げの響き（0〜1）：刻んだあとの曲全体に掛けるリバーブの量。 */
+  reverb: number;
   /** 断片の長さ（0〜1）。 */
   size: number;
 }
@@ -81,6 +83,7 @@ export const DEFAULT_PARAMS: SongParams = {
   motion: 0,
   hold: 0.6,
   dry: true,
+  reverb: 0.15,
 };
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -168,6 +171,7 @@ export function migrateSong(raw: unknown): Song {
     }
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
     if (typeof p.dry === "boolean") song.params.dry = p.dry;
+    if (isNum(p.reverb)) song.params.reverb = Math.min(1, Math.max(0, p.reverb));
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
   }
   return song;

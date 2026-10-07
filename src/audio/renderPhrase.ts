@@ -4,6 +4,7 @@ import { DEFAULT_VOLUME, LayerSynths } from "./layerSynths";
 import { quantizeBeat } from "../phrase/quantize";
 import { totalBeats, type Phrase } from "../phrase/types";
 import type { Pcm } from "../mix/pcm";
+import { foldTail } from "../mix/loopFold";
 
 /** リバーブ・ディレイの余韻を取っておく長さ（秒）。余韻は曲の頭に重ねて、繰り返してもつながるようにする。 */
 const TAIL_SECONDS = 2.5;
@@ -58,17 +59,6 @@ export async function renderPhrase(
   }
 
   const rendered = await ctx.startRendering();
-  const out: Pcm = { l: new Float32Array(loopFrames), r: new Float32Array(loopFrames) };
-  const left = rendered.getChannelData(0);
-  const right = rendered.getChannelData(1);
-  for (let i = 0; i < loopFrames; i++) {
-    out.l[i] = left[i];
-    out.r[i] = right[i];
-  }
-  // 余韻を曲の頭に重ねる（繰り返したとき、つなぎ目で余韻が途切れない）
-  for (let i = 0; i < totalFrames - loopFrames && i < loopFrames; i++) {
-    out.l[i] += left[loopFrames + i];
-    out.r[i] += right[loopFrames + i];
-  }
-  return out;
+  // 余韻を曲の頭に重ねる（繰り返したとき、つなぎ目で余韻が途切れない。1周より長い余韻も、何周ぶんでも重ねる）
+  return foldTail(rendered.getChannelData(0), rendered.getChannelData(1), loopFrames);
 }

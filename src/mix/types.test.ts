@@ -92,3 +92,9 @@ test("刻み方のモード：初期は音楽モード。保存データから�
   assert.equal(migrateSong({ params: { style: "material" } }).params.style, "material");
   assert.equal(migrateSong({ params: { style: "???" } }).params.style, "music");
 });
+
+test("仕上げの響き：初期15%。保存データから読める", () => {
+  assert.equal(createEmptySong().params.reverb, 0.15);
+  assert.equal(migrateSong({ params: { reverb: 0.4 } }).params.reverb, 0.4);
+  assert.equal(migrateSong({ params: { reverb: 7 } }).params.reverb, 1);
+});
