@@ -24,12 +24,8 @@ function createReverbImpulse(ctx: BaseAudioContext, seconds = 2.2, decay = 3.2):
   return buffer;
 }
 
-export class AudioEngine {
-  readonly ctx: AudioContext;
-  readonly masterGain: GainNode;
-  readonly analyser: AnalyserNode;
-  readonly noiseBuffer: AudioBuffer;
-
+/** シンセ・ドラム用のバス（ドライ／リバーブ送り／ディレイ送り）。ライブの音と、書き出し（オフライン）の両方で使う。 */
+export class AudioBuses {
   readonly synthDry: GainNode;
   readonly synthReverbSend: GainNode;
   readonly synthDelaySend: GainNode;
@@ -41,6 +37,66 @@ export class AudioEngine {
   private readonly convolver: ConvolverNode;
   private readonly reverbWet: GainNode;
 
+  readonly ctx: BaseAudioContext;
+
+  constructor(ctx: BaseAudioContext, out: AudioNode) {
+    this.ctx = ctx;
+    this.synthDry = ctx.createGain();
+    this.synthDry.connect(out);
+
+    this.synthReverbSend = ctx.createGain();
+    this.synthReverbSend.gain.value = 0;
+    this.synthDelaySend = ctx.createGain();
+    this.synthDelaySend.gain.value = 0;
+
+    this.delayNode = ctx.createDelay(2);
+    this.delayNode.delayTime.value = 0.3;
+    this.delayFeedback = ctx.createGain();
+    this.delayFeedback.gain.value = 0.35;
+    this.delayWet = ctx.createGain();
+    this.delayWet.gain.value = 1;
+
+    this.synthDelaySend.connect(this.delayNode);
+    this.delayNode.connect(this.delayFeedback);
+    this.delayFeedback.connect(this.delayNode);
+    this.delayNode.connect(this.delayWet);
+    this.delayWet.connect(out);
+
+    this.convolver = ctx.createConvolver();
+    this.convolver.buffer = createReverbImpulse(ctx);
+    this.reverbWet = ctx.createGain();
+    this.reverbWet.gain.value = 1;
+
+    this.synthReverbSend.connect(this.convolver);
+    this.convolver.connect(this.reverbWet);
+    this.reverbWet.connect(out);
+
+    // ドラム用バス
+    this.drumOut = ctx.createGain();
+    this.drumOut.connect(out);
+  }
+
+  setDelayTime(seconds: number): void {
+    this.delayNode.delayTime.setTargetAtTime(seconds, this.ctx.currentTime, 0.02);
+  }
+
+  setDelayFeedback(amount: number): void {
+    this.delayFeedback.gain.setTargetAtTime(amount, this.ctx.currentTime, 0.02);
+  }
+}
+
+export class AudioEngine {
+  readonly ctx: AudioContext;
+  readonly masterGain: GainNode;
+  readonly analyser: AnalyserNode;
+  readonly noiseBuffer: AudioBuffer;
+
+  readonly synthDry: GainNode;
+  readonly synthReverbSend: GainNode;
+  readonly synthDelaySend: GainNode;
+  readonly drumOut: GainNode;
+
+  private readonly buses: AudioBuses;
   private startedAt = 0;
 
   constructor() {
@@ -59,40 +115,11 @@ export class AudioEngine {
 
     this.noiseBuffer = createNoiseBuffer(this.ctx);
 
-    // シンセ用バス（ドライ／リバーブ送り／ディレイ送り）
-    this.synthDry = this.ctx.createGain();
-    this.synthDry.connect(this.masterGain);
-
-    this.synthReverbSend = this.ctx.createGain();
-    this.synthReverbSend.gain.value = 0;
-    this.synthDelaySend = this.ctx.createGain();
-    this.synthDelaySend.gain.value = 0;
-
-    this.delayNode = this.ctx.createDelay(2);
-    this.delayNode.delayTime.value = 0.3;
-    this.delayFeedback = this.ctx.createGain();
-    this.delayFeedback.gain.value = 0.35;
-    this.delayWet = this.ctx.createGain();
-    this.delayWet.gain.value = 1;
-
-    this.synthDelaySend.connect(this.delayNode);
-    this.delayNode.connect(this.delayFeedback);
-    this.delayFeedback.connect(this.delayNode);
-    this.delayNode.connect(this.delayWet);
-    this.delayWet.connect(this.masterGain);
-
-    this.convolver = this.ctx.createConvolver();
-    this.convolver.buffer = createReverbImpulse(this.ctx);
-    this.reverbWet = this.ctx.createGain();
-    this.reverbWet.gain.value = 1;
-
-    this.synthReverbSend.connect(this.convolver);
-    this.convolver.connect(this.reverbWet);
-    this.reverbWet.connect(this.masterGain);
-
-    // ドラム用バス
-    this.drumOut = this.ctx.createGain();
-    this.drumOut.connect(this.masterGain);
+    this.buses = new AudioBuses(this.ctx, this.masterGain);
+    this.synthDry = this.buses.synthDry;
+    this.synthReverbSend = this.buses.synthReverbSend;
+    this.synthDelaySend = this.buses.synthDelaySend;
+    this.drumOut = this.buses.drumOut;
   }
 
   /** ブラウザの自動再生制限を解除する（最初のユーザー操作で呼ぶ） */
@@ -103,11 +130,11 @@ export class AudioEngine {
   }
 
   setDelayTime(seconds: number): void {
-    this.delayNode.delayTime.setTargetAtTime(seconds, this.ctx.currentTime, 0.02);
+    this.buses.setDelayTime(seconds);
   }
 
   setDelayFeedback(amount: number): void {
-    this.delayFeedback.gain.setTargetAtTime(amount, this.ctx.currentTime, 0.02);
+    this.buses.setDelayFeedback(amount);
   }
 
   /** 出力遅延の目安（秒）。実際の入力〜発音の遅れの参考値。 */

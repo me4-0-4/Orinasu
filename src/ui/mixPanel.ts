@@ -1,36 +1,31 @@
-import { DEFAULT_VOLUME, MAX_VOLUME } from "../audio/layerSynths";
-import { collectMaterials, remix, remixLabels, remixNew, type RemixMode } from "../mix/remix";
+import { LoopPlayer } from "../audio/loopPlayer";
+import { encodeWav } from "../audio/wav";
+import { peaksOf, type Pcm } from "../mix/audioChop";
+import { DEFAULT_CHOP, type ChopParams, type ChopSegment } from "../mix/chop";
+import { buildSongPcm, collectSources, planBars, planForSong } from "../mix/chopSong";
 import {
+  LENGTH_OPTIONS,
   MAX_BPM,
   MIN_BPM,
   createEmptySong,
-  duplicateSection,
-  effectiveSections,
   formatDuration,
-  sectionSeconds,
   songSeconds,
-  type MixLayer,
-  type Section,
   type Song,
 } from "../mix/types";
-import { roleLabels, type Phrase } from "../phrase/types";
-import { randomSeed, createRng } from "../theory/rng";
-import { keyShortName } from "../theory/key";
-import { buildEnergyEditor } from "./energyEditor";
+import { type Phrase } from "../phrase/types";
+import { createRng, randomSeed } from "../theory/rng";
 import { buildChopStage } from "./chopStage";
-import { DEFAULT_CHOP, type ChopParams } from "../mix/chop";
-import { defaultCurve, defaultMacros } from "../mix/energy";
 
 export interface MixPanelDeps {
-  /** 保存されているフレーズ（材料の候補）。 */
+  /** 保存されているフレーズ（刻む曲の候補）。 */
   getPhrases: () => Phrase[];
   /** 曲が変わったので保存してほしい。 */
   onSongChange: (song: Song) => void;
-  /** 鳴らす。sections の並びで、loop ならひとつをループ。 */
-  onPlay: (sections: Section[], mode: { kind: "loop"; index: number } | { kind: "song" }, song: Song) => void;
-  onStop: () => void;
-  /** ミキサー・音量を動かした。鳴っている音にもすぐ反映してほしい。 */
-  onMixChange: (layer: MixLayer) => void;
+  /** 鳴らす前に呼ぶ：音を出す準備と、ほかの音（演奏・フレーズの再生）を止める。 */
+  prepareAudio: () => Promise<void>;
+  audio: { ctx: AudioContext; out: AudioNode };
+  /** フレーズを、指定のBPMで1周ぶんの波形に書き出す。 */
+  render: (phrase: Phrase, bpm: number) => Promise<Pcm>;
 }
 
 export interface MixPanel {
@@ -38,15 +33,11 @@ export interface MixPanel {
   setSong: (song: Song) => void;
   /** フレーズ一覧が変わったとき。 */
   refreshMaterials: () => void;
-  /** 再生位置の表示（セクション番号。ドラフトは -1）。 */
-  setPlaying: (index: number | null) => void;
-  /** いま画面にあるセクション（ドラフト＋並べたもの）の層id。シンセの掃除用。 */
-  layerIds: () => string[];
-  /** 山の上の再生位置（0〜1）。 */
-  setProgress: (t: number | null) => void;
+  /** 鳴らしているものを止める。 */
+  stop: () => void;
+  /** 毎フレーム呼ぶ。再生位置の線を動かす。 */
+  tick: () => void;
 }
-
-const LENGTHS = [1, 2, 4, 8];
 
 function button(label: string, onClick: () => void, cls = "preset-button", title?: string): HTMLButtonElement {
   const b = document.createElement("button");
@@ -81,87 +72,103 @@ function rule(heading: string, hint: string, ...children: HTMLElement[]): HTMLEl
   return box;
 }
 
+interface HistoryEntry {
+  plan: ChopSegment[];
+  baseId: string;
+  lengthBars: number;
+}
+
 export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let song: Song = createEmptySong();
-  let draft: Section | null = null;
-  let draftLength = 4;
-  let playingIndex: number | null = null;
-  /** 「編集」で曲の中のセクションから戻したときの元のid。「上書き」で差し替える先。 */
-  let editingId: string | null = null;
-  /** 「音づくり」（音量・M/S・ミキサー）を開いているか。 */
-  let soundOpen = false;
-  /** 試聴の対象：ドラフトか、並べたセクションの番号か。 */
-  let previewing: "draft" | number | null = null;
-  /** 「曲を再生」で並べた順に通して鳴らしている最中か。 */
-  let songPlaying = false;
-  /** タイムラインで選んでいるセクションの番号。 */
-  let selected: number | null = null;
-
-  /** 刻み方のスライダー。次に「刻む」ときから効く。 */
+  /** 刻んだ曲の波形。まだ刻んでいなければ null。 */
+  let pcm: Pcm | null = null;
+  let peaks: Float32Array = new Float32Array(0);
+  /** 作り直しの途中で、新しい作り直しが始まったら古いほうを捨てるための番号。 */
+  let buildToken = 0;
+  /** BPMを自分で触ったか。触っていなければ、最初に刻むときだけ、メインの曲のテンポから始める。 */
+  let bpmTouched = false;
+  const history: HistoryEntry[] = [];
+  /** 固定している小節（0から数える）。刻み直しても、その小節は変えない。 */
+  const lockedBars = new Set<number>();
   const chop: ChopParams = { ...DEFAULT_CHOP };
-  /** 刻む前のドラフト（「ひとつ戻す」用）。新しいものが後ろ。 */
-  const history: Section[] = [];
+  const renderCache = new Map<string, Promise<Pcm>>();
+  const player = new LoopPlayer(deps.audio.ctx, deps.audio.out);
 
   const root = document.createElement("div");
   root.className = "tab-panel mix-tab";
   const split = document.createElement("div");
   split.className = "mix-split";
-  /** 固定している小節（0から数える）。振っても、その小節の刻み方は変えない。 */
-  const lockedBars = new Set<number>();
-  const chopStage = buildChopStage((bar) => {
-    if (!draft) return;
+
+  const stage = buildChopStage((bar) => {
+    if (!song.plan) return;
     if (lockedBars.has(bar)) lockedBars.delete(bar);
     else lockedBars.add(bar);
-    renderDraft();
+    refresh();
   });
 
-  const energyEditor = buildEnergyEditor({
-    onEnabledChange: (on) => {
-      song.energyOn = on;
-      touch();
-    },
-    onCurveChange: (curve) => {
-      song.energy = curve;
-      touch();
-    },
-    onMacrosChange: (macros) => {
-      song.macros = macros;
-      touch();
-    },
-  });
-  function syncEnergy(): void {
-    if (!song.energy) song.energy = defaultCurve();
-    if (!song.macros) song.macros = defaultMacros();
-    energyEditor.setData(song.energy, song.macros, effectiveSections(song), !!song.energyOn);
-  }
-
-  // --- 材料 ---
+  // --- 材料（刻む曲） ---
   const materialList = document.createElement("div");
   materialList.className = "mix-list";
   const materialEmpty = document.createElement("div");
   materialEmpty.className = "layer-empty";
   materialEmpty.textContent = "フレーズタブで保存したフレーズが、ここに並びます";
 
-  // --- 刻み（スライダー。偶然の強さ） ---
+  // --- 曲（名前・BPM・長さ） ---
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "mix-name";
+  nameInput.placeholder = "曲の名前";
+  nameInput.addEventListener("input", () => {
+    song.name = nameInput.value;
+    touch();
+  });
+  const bpmInput = document.createElement("input");
+  bpmInput.type = "number";
+  bpmInput.className = "mix-bpm";
+  bpmInput.min = String(MIN_BPM);
+  bpmInput.max = String(MAX_BPM);
+  bpmInput.addEventListener("change", () => {
+    const v = Math.round(Number(bpmInput.value));
+    if (!Number.isFinite(v) || bpmInput.value === "") {
+      bpmInput.value = String(song.bpm);
+      return;
+    }
+    song.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, v));
+    bpmInput.value = String(song.bpm);
+    bpmTouched = true;
+    touch();
+    refresh();
+    if (song.plan) void rebuild(); // 新しいテンポで、曲を書き出し直す
+  });
   const lengthSelect = document.createElement("select");
   lengthSelect.className = "quantize-select";
-  for (const n of LENGTHS) {
+  for (const n of LENGTH_OPTIONS) {
     const opt = document.createElement("option");
     opt.value = String(n);
     opt.textContent = `${n}小節`;
-    if (n === draftLength) opt.selected = true;
     lengthSelect.appendChild(opt);
   }
   lengthSelect.addEventListener("change", () => {
-    draftLength = Number(lengthSelect.value);
+    song.lengthBars = Number(lengthSelect.value);
+    touch();
+    refresh();
+    if (song.plan) setNotice("長さは、次に「刻む」ときから変わる");
   });
-  const lengthRow = document.createElement("label");
-  lengthRow.className = "mix-slider-row";
-  const lengthName = document.createElement("span");
-  lengthName.className = "mix-slider-name";
-  lengthName.textContent = "長さ";
-  lengthRow.append(lengthName, lengthSelect);
+  const fieldRow = (label: string, ...children: (HTMLElement | string)[]): HTMLElement => {
+    const row = document.createElement("label");
+    row.className = "mix-slider-row mix-field-row";
+    const name = document.createElement("span");
+    name.className = "mix-slider-name";
+    name.textContent = label;
+    row.append(name, ...children);
+    return row;
+  };
+  const bpmHint = document.createElement("span");
+  bpmHint.className = "mix-info mix-slider-hint";
+  bpmHint.textContent = "刻んだ曲のテンポ（もとのフレーズのBPMとは別）";
+  const songFields = [fieldRow("名前", nameInput), fieldRow("BPM", bpmInput, bpmHint), fieldRow("長さ", lengthSelect)];
 
+  // --- 刻み方（スライダー。偶然の強さ） ---
   const sizeWords = ["2拍", "1拍", "半拍", "1/4拍"];
   function chopSlider(key: keyof ChopParams, label: string, hint: () => string): HTMLElement {
     const row = document.createElement("div");
@@ -175,351 +182,203 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     input.min = "0";
     input.max = "1";
     input.step = "0.05";
-    input.value = String(chop[key]);
     const value = document.createElement("span");
     value.className = "mix-slider-value";
     const note = document.createElement("div");
     note.className = "mix-info mix-slider-hint";
     const show = (): void => {
+      input.value = String(chop[key]);
       value.textContent = `${Math.round(chop[key] * 100)}%`;
       note.textContent = hint();
     };
     show();
     input.addEventListener("input", () => {
       chop[key] = Number(input.value);
+      song.chop = { ...chop };
       show();
+      touch();
     });
     input.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
     row.append(name, input, value, note);
+    sliderRefreshers.push(show);
     return row;
   }
+  const sliderRefreshers: (() => void)[] = [];
   const busyRow = chopSlider("busy", "いじる量", () => `いじる量 – 小節の約${Math.round(chop.busy * 80)}%を切り貼りする（頭は控えめ、終わりは多め）`);
-  const breaksRow = chopSlider("breaks", "抜き", () => {
+  const breaksRow = chopSlider("breaks", "無音", () => {
     const b6 = chop.breaks * 6;
-    return `抜き – いじりの約${Math.round((b6 / (9 + b6)) * 100)}%が、ドラムだけ・ドラム抜き・無音になる`;
+    return `無音 – いじった所の約${Math.round((b6 / (12 + b6)) * 100)}%を、音を落として無音にする`;
   });
   const sizeRow = chopSlider("size", "細かさ", () => `細かさ – 断片は${sizeWords[Math.round(chop.size * 3)]}くらいから`);
 
-  // --- ステージ（左）：刻み方と、層ごとの音符 ---
-  const draftInfo = document.createElement("div");
-  draftInfo.className = "mix-info mix-status";
-  const draftEmpty = document.createElement("div");
-  draftEmpty.className = "layer-empty";
-  draftEmpty.hidden = true;
-  const rollButton = button("刻む", () => generate("new"), "roll-button", "選んだ曲を、新しく切り貼りする。固定した小節は残す");
-  const previewDraft = button("試聴", () => togglePreview("draft"), "preset-button");
-  previewDraft.hidden = true;
-  const undoButton = button("ひとつ戻す", () => undoDraft(), "preset-button", "ひとつ前の刻みに戻す（何回でも）");
-  undoButton.disabled = true;
+  // --- ステージ（左）と操作 ---
+  const status = document.createElement("div");
+  status.className = "mix-info mix-status";
+  const notice = document.createElement("div");
+  notice.className = "layer-empty";
+  notice.hidden = true;
+  const rollButton = button("刻む", () => void generate("new"), "roll-button", "選んだ曲を、新しく切り貼りする。固定した小節は残す");
+  const playButton = button("再生", () => void togglePlay(), "preset-button on");
+  const undoButton = button("ひとつ戻す", () => undo(), "preset-button", "ひとつ前の刻みに戻す（何回でも）");
   const rollRow = document.createElement("div");
   rollRow.className = "preset-row mix-roll-row";
-  rollRow.append(rollButton, previewDraft, undoButton);
-  const draftTools = document.createElement("div");
-  draftTools.className = "preset-row";
+  rollRow.append(rollButton, playButton, undoButton);
   const replanButton = button(
-    remixLabels.replan,
-    () => generate("replan"),
+    "刻み方だけ変える",
+    () => void generate("replan"),
     "preset-button",
     "メインにする曲はそのまま、切り貼りだけやり直す（固定した小節は残す）",
   );
-  draftTools.append(
-    replanButton,
-    button("固定を全部外す", () => {
-      lockedBars.clear();
-      renderDraft();
-    }, "preset-button"),
-  );
-  draftTools.hidden = true;
+  const unlockButton = button("固定を全部外す", () => {
+    lockedBars.clear();
+    refresh();
+  });
+  const saveButton = button("WAVで保存", () => saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
+  const toolRow = document.createElement("div");
+  toolRow.className = "preset-row";
+  toolRow.append(replanButton, unlockButton, saveButton);
 
-  // --- 固定（ステージの小節をタップ）と、音づくり ---
   const lockInfo = document.createElement("div");
   lockInfo.className = "layer-empty";
-  const draftLayers = document.createElement("div");
-  draftLayers.className = "layer-list";
-  const soundButton = button("音づくりを開く", () => {
-    soundOpen = !soundOpen;
-    renderDraft();
-  }, "preset-button", "層ごとの音量・ミュート・ソロ・パン・リバーブ・ディレイ・コンプ");
-  soundButton.hidden = true;
-
-  // --- 4 並べる ---
-  const draftName = document.createElement("input");
-  draftName.type = "text";
-  draftName.className = "mix-name";
-  draftName.placeholder = "セクション名（イントロ、A、サビ…）";
-  draftName.addEventListener("input", () => {
-    if (draft) draft.name = draftName.value;
-  });
-  const addToSong = button("曲に追加", () => {
-    if (!draft) return;
-    const copy = duplicateSection(draft);
-    copy.name = draft.name.trim() || `セクション${song.sections.length + 1}`;
-    song.sections.push(copy);
-    selected = song.sections.length - 1;
-    touch();
-    renderSections();
-  }, "preset-button on");
-  const overwrite = button("上書き", () => {
-    if (!draft || !editingId) return;
-    const i = song.sections.findIndex((x) => x.id === editingId);
-    if (i < 0) {
-      editingId = null;
-      renderDraft();
-      return;
-    }
-    const copy = duplicateSection(draft);
-    copy.id = editingId;
-    copy.name = draft.name.trim() || song.sections[i].name;
-    song.sections[i] = copy;
-    selected = i;
-    touch();
-    renderSections();
-  }, "preset-button", "編集元のセクションを、いまの内容で差し替える");
-  overwrite.hidden = true;
-  const addRow = document.createElement("div");
-  addRow.className = "preset-row mix-add-row";
-  addRow.append(draftName, addToSong, overwrite);
-  addRow.hidden = true;
-
-  const playSong = button("曲を再生", () => {
-    if (songPlaying) {
-      stopAll();
-      return;
-    }
-    if (song.sections.length === 0) return;
-    previewing = null;
-    songPlaying = false; // 鳴らし直しで一度 stop が呼ばれるので、始まってから立てる
-    deps.onPlay(effectiveSections(song), { kind: "song" }, song);
-    songPlaying = true;
-    updateButtons(true);
-  }, "preset-button on");
-  const bpmInput = document.createElement("input");
-  bpmInput.type = "number";
-  bpmInput.className = "mix-bpm";
-  bpmInput.min = String(MIN_BPM);
-  bpmInput.max = String(MAX_BPM);
-  bpmInput.title = "この曲のBPM。空にすると、刻んだ曲それぞれのBPMのまま";
-  bpmInput.addEventListener("change", () => {
-    const v = Math.round(Number(bpmInput.value));
-    song.bpm = bpmInput.value === "" || !Number.isFinite(v) ? undefined : Math.min(MAX_BPM, Math.max(MIN_BPM, v));
-    touch();
-    renderDraft();
-    renderSections();
-    restartPlayback(); // 鳴らしている最中なら、新しいテンポですぐ鳴らし直す
-  });
-  const bpmLabel = document.createElement("label");
-  bpmLabel.className = "mix-info mix-bpm-row";
-  bpmLabel.append("BPM ", bpmInput, "（この曲全体のテンポ）");
-  const totalLabel = document.createElement("span");
-  totalLabel.className = "mix-info";
-  const songMeta = document.createElement("div");
-  songMeta.className = "preset-row mix-song-meta";
-  songMeta.append(playSong, totalLabel);
-
-  // 曲の流れ：長さに比例した横のブロック。タップで選ぶ
-  const timeline = document.createElement("div");
-  timeline.className = "mix-timeline";
-
-  // 選んだセクションの操作（要素は使い回し、中身だけ更新する）
-  const selName = document.createElement("input");
-  selName.type = "text";
-  selName.className = "mix-name";
-  selName.addEventListener("change", () => {
-    const s = selected === null ? undefined : song.sections[selected];
-    if (!s) return;
-    s.name = selName.value.trim() || s.name;
-    touch();
-    renderSections();
-  });
-  const selPreview = button("試聴", () => {
-    if (selected !== null) togglePreview(selected);
-  }, "layer-toggle");
-  const selBar = document.createElement("div");
-  selBar.className = "preset-row mix-selection";
-  selBar.append(
-    selName,
-    selPreview,
-    button("←", () => moveSelected(-1), "layer-toggle", "前へ"),
-    button("→", () => moveSelected(1), "layer-toggle", "後ろへ"),
-    button("編集", () => {
-      const section = selected === null ? undefined : song.sections[selected];
-      if (!section) return;
-      // 並べたものは触らず、複製をドラフトに戻して作り直せるようにする
-      draft = duplicateSection(section);
-      draft.name = section.name;
-      editingId = section.id;
-      lockedBars.clear();
-      history.length = 0;
-      undoButton.disabled = true;
-      renderDraft();
-      root.scrollTo?.({ top: 0, behavior: "smooth" });
-    }, "layer-toggle", "この区間を、いまの刻みに戻して作り直す"),
-    button("複製", () => {
-      const section = selected === null ? undefined : song.sections[selected];
-      if (!section || selected === null) return;
-      stopNumberedPreview();
-      song.sections.splice(selected + 1, 0, duplicateSection(section));
-      selected += 1;
-      touch();
-      renderSections();
-    }, "layer-toggle"),
-    button("削除", () => {
-      if (selected === null || !song.sections[selected]) return;
-      stopNumberedPreview();
-      song.sections.splice(selected, 1);
-      selected = song.sections.length === 0 ? null : Math.min(selected, song.sections.length - 1);
-      touch();
-      renderSections();
-    }, "layer-toggle"),
-  );
 
   const stagePane = document.createElement("div");
   stagePane.className = "mix-stage-pane";
-  stagePane.append(chopStage.el, draftInfo, bpmLabel, rollRow, draftTools, draftEmpty);
+  stagePane.append(stage.el, status, rollRow, toolRow, notice);
   const sidePane = document.createElement("div");
   sidePane.className = "mix-side-pane";
   sidePane.append(
     rule("材料", "刻む曲（フレーズ）を選ぶ。複数なら、曲をまたいで刻む", materialEmpty, materialList),
-    rule("刻み方", "「刻む」ときの偶然の強さ", lengthRow, busyRow, breaksRow, sizeRow),
-    rule("固定", "左のステージの小節をタップで固定。固定した小節は、刻み直しても変わらない", lockInfo),
-    rule("音づくり", "層ごとの音量・ミュート・ミキサー", soundButton, draftLayers),
+    rule("曲", "刻んだあとの曲の設定", ...songFields),
+    rule("刻み方", "「刻む」ときの偶然の強さ", busyRow, breaksRow, sizeRow),
+    rule("固定", "左の波形の小節をタップで固定。固定した小節は、刻み直しても変わらない", lockInfo),
   );
   split.append(stagePane, sidePane);
-  const arrange = rule("並べる", "セクションを曲にして、通して聴く", addRow, songMeta, timeline, selBar, energyEditor.el);
-  arrange.classList.add("mix-arrange");
-  root.append(split, arrange);
+  root.append(split);
 
   // --- 動作 ---
-
-  /** 試聴用：曲のBPMを反映した、ドラフトだけの並び。 */
-  function draftForPlay(d: Section): Section[] {
-    return effectiveSections({ sections: [d], bpm: song.bpm });
-  }
-
-  function updateSongMeta(): void {
-    const first = draft?.bpm ?? song.sections[0]?.bpm;
-    bpmInput.value = song.bpm ? String(song.bpm) : "";
-    bpmInput.placeholder = first ? String(first) : "";
-    const n = song.sections.length;
-    totalLabel.textContent = n === 0 ? "合計 0:00" : `合計 ${formatDuration(songSeconds(song))}（${n}セクション）`;
-  }
 
   function touch(): void {
     song.updatedAt = Date.now();
     deps.onSongChange(song);
   }
 
-  function materialPhrases(): Phrase[] {
-    const ids = new Set(song.materialIds);
-    return deps.getPhrases().filter((p) => ids.has(p.id));
+  function setNotice(text: string): void {
+    notice.textContent = text;
+    notice.hidden = text === "";
+  }
+
+  function phraseNames(): Record<string, string> {
+    return Object.fromEntries(deps.getPhrases().map((p) => [p.id, p.name]));
+  }
+
+  /** フレーズを書き出す（同じ曲・同じテンポなら、書き出したものを使い回す）。 */
+  function render(phrase: Phrase, bpm: number): Promise<Pcm> {
+    const key = `${phrase.id}|${phrase.updatedAt}|${bpm}`;
+    let hit = renderCache.get(key);
+    if (!hit) {
+      hit = deps.render(phrase, bpm);
+      renderCache.set(key, hit);
+      if (renderCache.size > 40) renderCache.delete(renderCache.keys().next().value as string);
+    }
+    return hit;
+  }
+
+  /** 計画から、刻んだ曲の波形を作り直す。鳴らしていれば、同じ位置から鳴らし直す。 */
+  async function rebuild(): Promise<void> {
+    const token = ++buildToken;
+    if (!song.plan) {
+      pcm = null;
+      peaks = new Float32Array(0);
+      refresh();
+      return;
+    }
+    setNotice("曲を作っています…");
+    try {
+      const sources = collectSources(song, deps.getPhrases());
+      const out = await buildSongPcm(song, sources, render, deps.audio.ctx.sampleRate);
+      if (token !== buildToken) return;
+      pcm = out;
+      peaks = out ? peaksOf(out, 900) : new Float32Array(0);
+      setNotice(out ? "" : "刻む曲が見つからない。材料を選び直して");
+      if (player.playing) {
+        if (out) player.play(out, deps.audio.ctx.sampleRate, player.progress() ?? 0);
+        else player.stop();
+      }
+    } catch (err) {
+      if (token !== buildToken) return;
+      console.error("曲の書き出しに失敗しました", err);
+      pcm = null;
+      setNotice("曲を作れなかった。もう一度「刻む」を押して");
+    }
+    refresh();
   }
 
   function pushHistory(): void {
-    if (!draft) return;
-    history.push(structuredClone(draft));
+    if (!song.plan || !song.baseId) return;
+    history.push({ plan: structuredClone(song.plan), baseId: song.baseId, lengthBars: song.lengthBars });
     if (history.length > 30) history.shift();
-    undoButton.disabled = false;
   }
 
-  function undoDraft(): void {
+  function undo(): void {
     const prev = history.pop();
-    undoButton.disabled = history.length === 0;
     if (!prev) return;
-    draft = prev;
-    renderDraft();
-    if (previewing === "draft") deps.onPlay(draftForPlay(prev), { kind: "loop", index: 0 }, song);
+    song.plan = prev.plan;
+    song.baseId = prev.baseId;
+    song.lengthBars = prev.lengthBars;
+    touch();
+    refresh();
+    void rebuild();
   }
 
-  function generate(mode: RemixMode): void {
-    const sources = collectMaterials(materialPhrases());
+  async function generate(mode: "new" | "replan"): Promise<void> {
+    const sources = collectSources(song, deps.getPhrases());
     if (sources.length === 0) {
-      draftEmpty.textContent =
-        song.materialIds.length === 0
-          ? "先に、刻む曲（フレーズ）を選んで"
-          : "材料に入れたフレーズに、音符がありません";
-      draftEmpty.hidden = false;
+      setNotice(song.materialIds.length === 0 ? "先に、刻む曲（フレーズ）を選んで" : "選んだ曲に、音符がありません");
       return;
     }
     const rng = createRng(randomSeed());
+    const lengthChanged = !!song.plan && planBars(song.plan, song.beatsPerBar) !== song.lengthBars;
+    if (lengthChanged) lockedBars.clear();
+    const result = planForSong(song, sources, rng, { newBase: mode === "new", keepBars: [...lockedBars] });
+    if (!result) return;
     pushHistory();
-    if (!draft) {
-      lockedBars.clear();
-      draft = remixNew(sources, { lengthBars: draftLength, chop }, rng);
-      // 曲のBPMは、最初に刻んだ曲のテンポから始まる（あとから、いつでも変えられる）
-      if (draft && !song.bpm) {
-        song.bpm = draft.bpm;
-        touch();
-        updateSongMeta();
-      }
-    } else if (mode === "new" && draft.lengthBars !== draftLength) {
-      // 長さを変えたときは、固定も外して長さに合わせて作り直す
-      lockedBars.clear();
-      draft = remixNew(sources, { lengthBars: draftLength, chop }, rng, draft);
-    } else {
-      draft = remix(draft, mode, sources, rng, chop, [...lockedBars]);
+    const first = !song.plan;
+    song.plan = result.plan;
+    song.baseId = result.baseId;
+    if (first && !bpmTouched) {
+      // 最初に刻むときだけ、メインにした曲のテンポから始める（このあとは曲のBPMだけで決まる）
+      const base = sources.find((p) => p.id === result.baseId);
+      if (base) song.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(base.bpm)));
     }
-    renderDraft();
-    // 試聴中なら、刻み直した結果をすぐ聴けるように鳴らし直す
-    if (previewing === "draft" && draft) deps.onPlay(draftForPlay(draft), { kind: "loop", index: 0 }, song);
-  }
-
-  /** 鳴らしている最中に、テンポなどを変えたとき：同じ再生を、新しい設定でやり直す。 */
-  function restartPlayback(): void {
-    if (previewing === "draft" && draft) {
-      deps.onPlay(draftForPlay(draft), { kind: "loop", index: 0 }, song);
-    } else if (typeof previewing === "number" && song.sections[previewing]) {
-      deps.onPlay(effectiveSections(song), { kind: "loop", index: previewing }, song);
-    } else if (songPlaying && song.sections.length > 0) {
-      deps.onPlay(effectiveSections(song), { kind: "song" }, song);
-    }
-  }
-
-  function stopAll(): void {
-    previewing = null;
-    songPlaying = false;
-    deps.onStop();
-    updateButtons(false);
-  }
-
-  /** 並びが変わるので、番号で指していた試聴は止める。 */
-  function stopNumberedPreview(): void {
-    if (typeof previewing === "number") stopAll();
-  }
-
-  function moveSelected(dir: number): void {
-    if (selected === null) return;
-    const to = selected + dir;
-    if (to < 0 || to >= song.sections.length) return;
-    stopNumberedPreview();
-    const [s] = song.sections.splice(selected, 1);
-    song.sections.splice(to, 0, s);
-    selected = to;
     touch();
-    renderSections();
+    setNotice("");
+    refresh();
+    await rebuild();
   }
 
-  function togglePreview(target: "draft" | number): void {
-    if (previewing === target) {
-      stopAll();
+  async function togglePlay(): Promise<void> {
+    if (player.playing) {
+      player.stop();
+      refresh();
       return;
     }
-    songPlaying = false;
-    if (target === "draft") {
-      if (!draft) return;
-      previewing = "draft";
-      deps.onPlay(draftForPlay(draft), { kind: "loop", index: 0 }, song);
-    } else {
-      if (!song.sections[target]) return;
-      previewing = target;
-      deps.onPlay(effectiveSections(song), { kind: "loop", index: target }, song);
-    }
-    updateButtons(true);
+    if (!pcm) return;
+    await deps.prepareAudio();
+    player.play(pcm, deps.audio.ctx.sampleRate);
+    refresh();
   }
 
-  function updateButtons(playing: boolean): void {
-    previewDraft.textContent = previewing === "draft" ? "止める" : "試聴";
-    playSong.textContent = playing && songPlaying ? "止める" : "曲を再生";
-    renderSections();
+  function saveWav(): void {
+    if (!pcm) return;
+    const bytes = encodeWav(pcm, deps.audio.ctx.sampleRate);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${song.name.trim() || "orinasu"}.wav`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
   function renderMaterials(): void {
@@ -537,223 +396,89 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
           ? [...song.materialIds, p.id]
           : song.materialIds.filter((id) => id !== p.id);
         touch();
-        renderDraft();
+        refresh();
+        if (song.plan) void rebuild(); // 材料が変わったので、曲を作り直す
       });
       const label = document.createElement("span");
       label.className = "layer-role-label";
-      const roles = [...new Set(p.layers.filter((l) => l.notes.length > 0).map((l) => roleLabels[l.role]))];
-      label.textContent = `${p.name}（${p.lengthBars}小節 / ${roles.join("・") || "音なし"}）`;
+      label.textContent = `${p.name}（${p.lengthBars}小節・元${p.bpm}BPM）`;
       row.append(check, label);
       materialList.appendChild(row);
     }
   }
 
-  function renderDraft(): void {
-    const has = !!draft;
-    chopStage.setSection(draft, lockedBars);
-    if (has) draftEmpty.hidden = true;
-    draftTools.hidden = !has;
+  /** 画面を、いまの状態に合わせる。 */
+  function refresh(): void {
+    const has = !!song.plan && !!pcm;
+    stage.setView(
+      has && song.plan && song.baseId
+        ? {
+            plan: song.plan,
+            baseId: song.baseId,
+            names: phraseNames(),
+            bars: planBars(song.plan, song.beatsPerBar),
+            beatsPerBar: song.beatsPerBar,
+            peaks,
+          }
+        : null,
+      lockedBars,
+    );
+    if (document.activeElement !== nameInput) nameInput.value = song.name;
+    if (document.activeElement !== bpmInput) bpmInput.value = String(song.bpm);
+    lengthSelect.value = String(song.lengthBars);
+    status.textContent = `${song.lengthBars}小節 · ${song.bpm}BPM · ${formatDuration(songSeconds(song))} · ${song.materialIds.length}曲`;
+    playButton.textContent = player.playing ? "止める" : "再生";
+    playButton.disabled = !pcm;
+    undoButton.disabled = history.length === 0;
+    saveButton.disabled = !pcm;
+    unlockButton.disabled = lockedBars.size === 0;
     // 曲が1つだけなら「刻む」と同じ動きなので、2つ以上選んでいるときだけ出す
-    replanButton.hidden = song.materialIds.length < 2;
-    previewDraft.hidden = !has;
-    addRow.hidden = !has;
-    soundButton.hidden = !has;
-    soundButton.textContent = soundOpen ? "音づくりを閉じる" : "音づくりを開く";
-    soundButton.className = "preset-button" + (soundOpen ? " on" : "");
-    overwrite.hidden = !editingId || !song.sections.some((x) => x.id === editingId);
+    replanButton.hidden = song.materialIds.length < 2 || !song.plan;
+    toolRow.hidden = !song.plan;
     const bars = [...lockedBars].sort((x, y) => x - y).map((b) => b + 1);
-    lockInfo.textContent = !has
-      ? "「刻む」と、左のステージに小節が出る"
+    lockInfo.textContent = !song.plan
+      ? "「刻む」と、左に波形が出る"
       : bars.length === 0
         ? "固定している小節：なし"
         : `固定している小節：${bars.join("・")}小節目`;
-    draftLayers.innerHTML = "";
-    if (!draft) return;
-    const d = draft;
-    if (document.activeElement !== draftName) draftName.value = d.name;
-    draftInfo.textContent = `${d.layers.length}層 · ${d.lengthBars}小節 · ${song.bpm ?? d.bpm}BPM${d.key ? ` · ${keyShortName(d.key)}に合わせる` : ""}`;
-    if (!soundOpen) return;
-    for (const layer of d.layers) {
-      const row = document.createElement("div");
-      row.className = "layer-row";
-      const label = document.createElement("span");
-      label.className = "layer-role-label";
-      const flags = [layer.muted ? "ミュート中" : "", layer.solo ? "ソロ" : ""].filter(Boolean).join("・");
-      label.textContent = `${layer.sourceLabel ?? roleLabels[layer.role]}（${layer.notes.length}音）${flags ? ` ${flags}` : ""}`;
-      row.appendChild(label);
-      draftLayers.appendChild(row);
-      draftLayers.appendChild(soundStrip(layer));
-    }
   }
 
-  /** 音づくり：層ごとの 音量・M・S と、ミキサー（パン・リバーブ・ディレイ・コンプ）。 */
-  function soundStrip(layer: MixLayer): HTMLElement {
-    const strip = document.createElement("div");
-    strip.className = "sound-strip";
-    const basic = document.createElement("div");
-    basic.className = "sound-basic";
-    const volume = document.createElement("input");
-    volume.type = "range";
-    volume.className = "layer-volume";
-    volume.min = "0";
-    volume.max = String(MAX_VOLUME);
-    volume.step = "0.05";
-    volume.value = String(layer.volume ?? DEFAULT_VOLUME);
-    const showVolume = (): void => {
-      volume.title = `音量 ${Math.round((layer.volume ?? DEFAULT_VOLUME) * 100)}%`;
-    };
-    showVolume();
-    volume.addEventListener("input", () => {
-      layer.volume = Number(volume.value);
-      showVolume();
-      deps.onMixChange(layer);
-    });
-    volume.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
-    const volText = document.createElement("span");
-    volText.className = "mix-info";
-    volText.textContent = "音量";
-    const mute = button("M", () => {
-      layer.muted = !layer.muted;
-      renderDraft();
-    }, "layer-toggle" + (layer.muted ? " on" : ""), "ミュート");
-    const solo = button("S", () => {
-      layer.solo = !layer.solo;
-      renderDraft();
-    }, "layer-toggle" + (layer.solo ? " on" : ""), "ソロ");
-    basic.append(volText, volume, mute, solo);
-    strip.append(basic, mixerStrip(layer));
-    return strip;
-  }
-
-  /** 層のミキサー：パン・リバーブ・ディレイ・コンプ。動かすと鳴っている音にもすぐ効く。 */
-  function mixerStrip(layer: MixLayer): HTMLElement {
-    const strip = document.createElement("div");
-    strip.className = "mixer-strip";
-    const defaults = {
-      pan: 0,
-      reverb: layer.role === "drums" ? 0 : (layer.synth?.effects.reverbSend ?? 0),
-      delay: layer.role === "drums" ? 0 : (layer.synth?.effects.delaySend ?? 0),
-      comp: 0,
-    };
-    const controls: { key: "pan" | "reverb" | "delay" | "comp"; label: string; min: number; max: number; fmt: (v: number) => string }[] = [
-      { key: "pan", label: "パン", min: -1, max: 1, fmt: (v) => (Math.abs(v) < 0.03 ? "中央" : v < 0 ? `左${Math.round(-v * 100)}` : `右${Math.round(v * 100)}`) },
-      { key: "reverb", label: "リバーブ", min: 0, max: 1, fmt: (v) => `${Math.round(v * 100)}%` },
-      { key: "delay", label: "ディレイ", min: 0, max: 1, fmt: (v) => `${Math.round(v * 100)}%` },
-      { key: "comp", label: "コンプ", min: 0, max: 1, fmt: (v) => (v < 0.02 ? "なし" : `${Math.round(v * 100)}%`) },
-    ];
-    for (const c of controls) {
-      const wrap = document.createElement("label");
-      wrap.className = "mixer-control";
-      const text = document.createElement("span");
-      text.className = "mix-info";
-      const slider = document.createElement("input");
-      slider.type = "range";
-      slider.className = "layer-volume";
-      slider.min = String(c.min);
-      slider.max = String(c.max);
-      slider.step = "0.02";
-      const current = (): number => layer.mix?.[c.key] ?? defaults[c.key];
-      slider.value = String(current());
-      const show = (): void => {
-        text.textContent = `${c.label} ${c.fmt(current())}`;
-      };
-      show();
-      slider.addEventListener("input", () => {
-        layer.mix = { ...layer.mix, [c.key]: Number(slider.value) };
-        show();
-        deps.onMixChange(layer);
-      });
-      slider.addEventListener("dblclick", () => {
-        // ダブルクリックで初期値に戻す
-        const next = { ...layer.mix };
-        delete next[c.key];
-        layer.mix = next;
-        slider.value = String(defaults[c.key]);
-        show();
-        deps.onMixChange(layer);
-      });
-      slider.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
-      wrap.append(text, slider);
-      strip.appendChild(wrap);
-    }
-    return strip;
-  }
-
-  function renderSections(): void {
-    syncEnergy();
-    updateSongMeta();
-    if (selected !== null && !song.sections[selected]) selected = null;
-    timeline.innerHTML = "";
-    if (song.sections.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "timeline-empty layer-empty";
-      empty.textContent = "「曲に追加」で、ここに横に並びます";
-      timeline.appendChild(empty);
-    }
-    const secs = effectiveSections(song);
-    song.sections.forEach((section, i) => {
-      const block = document.createElement("button");
-      block.type = "button";
-      block.className =
-        "timeline-block" + (selected === i ? " selected" : "") + (playingIndex === i ? " playing" : "");
-      // 幅は鳴らす長さに比例（山のキャンバスの帯と同じ）
-      block.style.flex = `${Math.max(0.01, sectionSeconds(secs[i]))} 1 0`;
-      block.title = `${section.name}（${section.lengthBars}小節）`;
-      const name = document.createElement("span");
-      name.className = "timeline-name";
-      name.textContent = section.name;
-      const info = document.createElement("span");
-      info.className = "mix-info";
-      info.textContent = `${section.lengthBars}小節`;
-      block.append(name, info);
-      block.addEventListener("click", () => {
-        selected = i;
-        renderSections();
-      });
-      timeline.appendChild(block);
-    });
-    selBar.hidden = selected === null;
-    if (selected !== null) {
-      if (document.activeElement !== selName) selName.value = song.sections[selected].name;
-      selPreview.textContent = previewing === selected ? "止める" : "試聴";
-    }
-  }
+  for (const f of sliderRefreshers) f();
+  refresh();
 
   return {
     el: root,
     setSong(next) {
+      player.stop();
       song = next;
-      editingId = null;
-      selected = null;
-      lockedBars.clear();
+      buildToken++;
+      pcm = null;
+      peaks = new Float32Array(0);
       history.length = 0;
-      undoButton.disabled = true;
+      lockedBars.clear();
+      bpmTouched = !!next.plan;
+      Object.assign(chop, DEFAULT_CHOP, next.chop ?? {});
+      for (const f of sliderRefreshers) f();
+      setNotice("");
       renderMaterials();
-      renderDraft();
-      renderSections();
+      refresh();
+      if (song.plan) void rebuild();
     },
     refreshMaterials() {
       // 消えたフレーズは材料から外す
       const alive = new Set(deps.getPhrases().map((p) => p.id));
       song.materialIds = song.materialIds.filter((id) => alive.has(id));
       renderMaterials();
+      refresh();
+      if (song.plan && !pcm) void rebuild(); // 起動直後は、フレーズが読み込まれてから曲を作り直す
     },
-    setPlaying(index) {
-      if (previewing === "draft") index = null; // ドラフトの試聴は並べたセクションの表示に出さない
-      if (index === null && previewing === null && songPlaying) {
-        songPlaying = false; // 曲が最後まで鳴り終わった
-        playSong.textContent = "曲を再生";
-      }
-      if (index === playingIndex) return;
-      playingIndex = index;
-      if (index === null && previewing === null) updateButtons(false);
-      else renderSections();
+    stop() {
+      if (!player.playing) return;
+      player.stop();
+      refresh();
     },
-    setProgress(t) {
-      energyEditor.setProgress(t);
-    },
-    layerIds() {
-      return [...song.sections.flatMap((s) => s.layers.map((l) => l.id)), ...(draft?.layers.map((l) => l.id) ?? [])];
+    tick() {
+      stage.setProgress(player.progress());
     },
   };
 }

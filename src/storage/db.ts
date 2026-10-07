@@ -120,7 +120,7 @@ export async function loadUserPresets(): Promise<UserPreset[]> {
   return result.sort((a, b) => a.updatedAt - b.updatedAt);
 }
 
-/** MIXの曲（材料の選択・セクション）。いまは端末内だけに保存する（クラウド同期は未対応）。 */
+/** 刻んだ曲（選んだ曲・BPM・刻み方の計画）。いまは端末内だけに保存する（クラウド同期は未対応）。 */
 export async function saveSong(song: Song): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {

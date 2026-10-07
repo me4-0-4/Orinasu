@@ -18,7 +18,7 @@ interface Voice {
 
 export class SynthEngine {
   params: SynthParams;
-  private readonly ctx: AudioContext;
+  private readonly ctx: BaseAudioContext;
   private readonly output: GainNode;
   private readonly reverbSend: GainNode;
   private readonly delaySend: GainNode;
@@ -39,7 +39,7 @@ export class SynthEngine {
   private lfoGain: GainNode | null = null;
 
   constructor(
-    ctx: AudioContext,
+    ctx: BaseAudioContext,
     dryOut: AudioNode,
     reverbSend: AudioNode,
     delaySend: AudioNode,

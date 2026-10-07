@@ -1,14 +1,12 @@
-import { makeId, type LayerRole, type Note } from "../phrase/types.ts";
-
 type Rng = () => number;
 
-/** 刻み方の種類（DJが原曲をいじる動き）。 */
-export type ChopKind = "play" | "jump" | "stutter" | "reverse" | "fill" | "break";
+/** 刻み方の種類（DJが原曲をいじる動き）。break は無音、double は倍速、half は半速。 */
+export type ChopKind = "play" | "jump" | "stutter" | "reverse" | "fill" | "break" | "double" | "half";
 
 /**
- * 刻み方の計画の1区間。セクション全体を隙間なく覆う。
- * 区間の中身は「どの曲（フレーズ）の、どこ」を丸ごと取るか。その曲の全部の層が同じ位置で一緒に鳴る
- * （曲を1つの塊として刻む。役割ごとにバラバラに拾わない）。
+ * 刻み方の計画の1区間。曲全体を隙間なく覆う。
+ * 区間の中身は「どの曲（フレーズ）の、どこ」を丸ごと取るか。曲は1本の音として扱い、中身（層）には触らない。
+ * 曲のテンポ（BPM）はフレーズのBPMとは無関係。フレーズは曲のテンポに合わせて鳴り、rate で倍速・半速にもなる。
  */
 export interface ChopSegment {
   kind: ChopKind;
@@ -17,11 +15,11 @@ export interface ChopSegment {
   /** 区間の頭（セクションの頭からの拍）。 */
   dst: number;
   len: number;
-  /** その曲のどこから取るか（拍）。曲より長いときは、曲の頭に戻って続く。 */
+  /** その曲のどこから取るか（そのフレーズの頭からの拍）。曲より長いときは、曲の頭に戻って続く。 */
   src: number;
+  /** 再生の速さ。無ければ1（等速）、2なら倍速、0.5なら半速。区間は len 拍ぶんの時間で、フレーズは len×rate 拍ぶん進む。 */
+  rate?: number;
   reverse?: boolean;
-  /** 鳴らす役割。無ければ全部。空なら無音。 */
-  mask?: LayerRole[];
 }
 
 /** 刻みの材料にする曲。bars は曲の長さ（小節）。 */
@@ -34,7 +32,7 @@ export interface ChopSource {
 export interface ChopParams {
   /** 刻み：いじりが入る小節の割合。0ならそのまま通す。 */
   busy: number;
-  /** 抜き：いじりのうち、ドラムだけ・ドラム抜き・無音にする割合。 */
+  /** 抜き：いじりのうち、無音にする割合。 */
   breaks: number;
   /** 細かさ：リピートやジャンプの断片の短さ（0＝2拍、1＝1/4拍まで）。 */
   size: number;
@@ -86,8 +84,6 @@ function repeat(kind: ChopKind, from: string, dst: number, total: number, len: n
   }
   return out;
 }
-
-const NO_DRUMS: LayerRole[] = ["melody", "bass", "chords", "other"];
 
 interface Ctx {
   bpb: number;
@@ -160,19 +156,25 @@ function gesture(kind: Exclude<ChopKind, "play">, dst: number, ctx: Ctx, rng: Rn
       ];
     }
     case "break": {
-      const mask = pickWeighted<LayerRole[]>(
-        [
-          [["drums"], 3],
-          [NO_DRUMS, 2],
-          [[], 1],
-        ],
-        rng,
-      );
-      if (rng() < 0.5) return [{ kind: "break", from: baseId, dst, len: bpb, src: dst, mask }];
+      // 無音（落とす）。小節まるごと、または後ろ半分
+      if (rng() < 0.5) return [{ kind: "break", from: baseId, dst, len: bpb, src: dst }];
       return [
         { kind: "play", from: baseId, dst, len: half, src: dst },
-        { kind: "break", from: baseId, dst: dst + half, len: half, src: dst + half, mask },
+        { kind: "break", from: baseId, dst: dst + half, len: half, src: dst + half },
       ];
+    }
+    case "double": {
+      // 倍速：2倍の速さで進む（小節まるごと、または後ろ半分）。音程は変わらない
+      if (rng() < 0.6) return [{ kind: "double", from: baseId, dst, len: bpb, src: dst, rate: 2 }];
+      return [
+        { kind: "play", from: baseId, dst, len: half, src: dst },
+        { kind: "double", from: baseId, dst: dst + half, len: half, src: dst + half, rate: 2 },
+      ];
+    }
+    case "half": {
+      // 半速：半分の速さで進む。小節の前半か後半だけを引き伸ばす
+      const src = dst + (rng() < 0.5 ? 0 : half);
+      return [{ kind: "half", from: baseId, dst, len: bpb, src, rate: 0.5 }];
     }
   }
 }
@@ -224,59 +226,13 @@ export function planChops(input: PlanInput, rng: Rng): ChopSegment[] {
         ["stutter", 3],
         ["reverse", 1.5],
         ["fill", 2.5],
+        ["double", 1.5],
+        ["half", 1.5],
         ["break", breaks * 6],
       ],
       rng,
     );
     out.push(...gesture(kind, dst, ctx, rng));
-  }
-  return out;
-}
-
-/**
- * 計画を1つの層の音符に当てる。曲の音符（srcBeats 拍のループ）から、区間ごとに切り出して並べる。
- * fromId を渡すと、その曲から取る区間だけを使う（層は曲ごとに持つため）。
- * 区間の外にはみ出す音は切る（DJが断片を切るのと同じ）。mask に含まれない役割の層は、その区間は無音。
- */
-export function applyPlan(
-  notes: Note[],
-  srcBeats: number,
-  role: LayerRole,
-  plan: ChopSegment[],
-  dstBeats: number,
-  fromId?: string,
-): Note[] {
-  if (srcBeats <= 0) return [];
-  const out: Note[] = [];
-  for (const seg of plan) {
-    if (fromId !== undefined && seg.from !== fromId) continue;
-    if (seg.mask && !seg.mask.includes(role)) continue;
-    const from = Math.floor(seg.src / srcBeats);
-    const to = Math.ceil((seg.src + seg.len) / srcBeats);
-    for (let k = from; k <= to; k++) {
-      for (const n of notes) {
-        const pos = n.startBeats + k * srcBeats;
-        if (pos < seg.src - EPS || pos >= seg.src + seg.len - EPS) continue;
-        const rel = pos - seg.src;
-        const dur = Math.max(0.05, Math.min(n.durationBeats, seg.len - rel));
-        const start = seg.reverse ? seg.len - rel - dur : rel;
-        const at = seg.dst + Math.max(0, start);
-        if (at >= dstBeats - EPS) continue;
-        out.push({ ...n, id: makeId("note"), startBeats: at, durationBeats: Math.min(dur, dstBeats - at) });
-      }
-    }
-  }
-  return dedupe(out);
-}
-
-function dedupe(notes: Note[]): Note[] {
-  const seen = new Set<string>();
-  const out: Note[] = [];
-  for (const n of notes.sort((a, b) => a.startBeats - b.startBeats)) {
-    const key = `${n.pitch}@${n.startBeats.toFixed(4)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(n);
   }
   return out;
 }
@@ -287,12 +243,20 @@ const kindLabels: Record<ChopKind, string> = {
   stutter: "リピート",
   reverse: "逆回し",
   fill: "フィル",
-  break: "抜き",
+  break: "無音",
+  double: "倍速",
+  half: "半速",
 };
 
-function breakLabel(mask: LayerRole[] | undefined): string {
-  if (!mask || mask.length === 0) return "無音";
-  return mask.includes("drums") ? "ドラムだけ" : "ドラム抜き";
+/** 計画に出てくる (曲, 速さ) の組。曲をこの速さで書き出しておく必要がある。 */
+export function neededSources(plan: ChopSegment[]): { from: string; rate: number }[] {
+  const seen = new Map<string, { from: string; rate: number }>();
+  for (const s of plan) {
+    if (s.kind === "break") continue;
+    const rate = s.rate ?? 1;
+    seen.set(`${s.from}@${rate}`, { from: s.from, rate });
+  }
+  return [...seen.values()];
 }
 
 /**
@@ -305,12 +269,11 @@ export function chopBarLabels(
   names?: { baseId: string; byId: Record<string, string> },
 ): string[] {
   const bars = plan.length === 0 ? 0 : Math.round(Math.max(...plan.map((s) => s.dst + s.len)) / beatsPerBar);
-  const rank: ChopKind[] = ["break", "reverse", "stutter", "fill", "jump", "play"];
+  const rank: ChopKind[] = ["break", "reverse", "stutter", "fill", "double", "half", "jump", "play"];
   return Array.from({ length: bars }, (_, b) => {
     const segs = plan.filter((s) => s.dst >= b * beatsPerBar - EPS && s.dst < (b + 1) * beatsPerBar - EPS);
     const top = rank.find((k) => segs.some((s) => s.kind === k)) ?? "play";
-    const seg = segs.find((s) => s.kind === top);
-    let label = top === "break" ? breakLabel(seg?.mask) : kindLabels[top];
+    let label = kindLabels[top];
     if (names) {
       const other = segs.find((s) => s.from !== names.baseId);
       if (other) label += `←${(names.byId[other.from] ?? "").slice(0, 4)}`;

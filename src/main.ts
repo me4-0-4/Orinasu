@@ -64,8 +64,8 @@ import { initCloud } from "./cloud/sync";
 import { createCloudPanel } from "./ui/cloudPanel";
 import { buildUserPresets } from "./ui/userPresets";
 import { buildMixPanel } from "./ui/mixPanel";
-import { SongPlayer } from "./mix/player";
-import { SONG_ID, createEmptySong, type Song } from "./mix/types";
+import { renderPhrase } from "./audio/renderPhrase";
+import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = "";
@@ -194,7 +194,7 @@ function refreshPhraseUI(): void {
       lengthBars: currentPhrase.lengthBars,
     });
   }
-  synths.prune(new Set([...(currentPhrase?.layers.map((l) => l.id) ?? []), ...mixPanel.layerIds()]));
+  synths.prune(new Set(currentPhrase?.layers.map((l) => l.id) ?? []));
   updateFooterMode();
   syncSoundPanel();
   refreshAssist();
@@ -234,33 +234,7 @@ const transport = new Transport(engine.ctx, engine.drumOut, {
 
 const recorder = new Recorder(transport, activeLayer);
 
-// --- MIX（セクションを並べて鳴らす） -----------------------------------------
-
-const songPlayer = new SongPlayer(engine.ctx, {
-  playNote: (layer, note, time, voiceKey) => {
-    if (layer.role === "drums") {
-      const id = noteNumberToDrum[note.pitch];
-      if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), time, synths.drumOut(layer));
-    } else {
-      synths.forLayer(layer).noteOn(`mix:${voiceKey}`, note.pitch, note.velocity, time);
-    }
-  },
-  stopNote: (layer, _note, time, voiceKey) => {
-    if (layer.role !== "drums") synths.forLayer(layer).noteOff(`mix:${voiceKey}`, false, time);
-  },
-  onSection: (index) => mixPanel.setPlaying(index),
-  onFilterOffset: (cents) => synths.setFilterOffsetAll(cents),
-  onEnd: () => {
-    allSoundsOff();
-    mixPanel.setPlaying(null);
-  },
-});
-
-function stopSongPlayer(): void {
-  if (!songPlayer.playing) return;
-  songPlayer.stop();
-  allSoundsOff();
-}
+// --- 刻む（選んだ曲を1本の波形にして、切り貼りして鳴らす） ---------------------
 
 let persistSongTimer: number | null = null;
 function persistSongSoon(song: Song): void {
@@ -274,23 +248,20 @@ function persistSongSoon(song: Song): void {
 const mixPanel = buildMixPanel({
   getPhrases: () => savedPhrases,
   onSongChange: persistSongSoon,
-  onPlay: (sections, mode, song) => {
-    void ensureAudio();
+  prepareAudio: async () => {
+    await ensureAudio();
     stopPreview();
     if (transport.state !== "stopped") transport.stop();
     allSoundsOff();
-    // 山とマクロは、山をオンにしていて曲を通して鳴らすときだけ効かせる（セクションの試聴は素のまま）
-    const shaping = song.energyOn && song.energy && song.macros ? { curve: song.energy, macros: song.macros } : undefined;
-    songPlayer.start(sections, mode, shaping);
   },
-  onStop: stopSongPlayer,
-  onMixChange: (layer) => synths.refresh(layer),
+  audio: { ctx: engine.ctx, out: engine.masterGain },
+  render: (phrase, bpm) => renderPhrase(phrase, bpm, engine.ctx.sampleRate),
 });
 
 function toggleRecord(): void {
   void ensureAudio();
   stopPreview();
-  stopSongPlayer();
+  mixPanel.stop();
   if (transport.state !== "stopped") {
     transport.stop();
     allSoundsOff();
@@ -305,7 +276,7 @@ function toggleRecord(): void {
 function togglePlay(): void {
   void ensureAudio();
   stopPreview();
-  stopSongPlayer();
+  mixPanel.stop();
   if (transport.state !== "stopped") {
     transport.stop();
     allSoundsOff();
@@ -903,10 +874,7 @@ const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "mix", label: "刻む", panel: mixPanel.el },
 ];
 function selectTab(id: string): void {
-  if (id !== "mix") {
-    stopSongPlayer();
-    mixPanel.setPlaying(null);
-  }
+  if (id !== "mix") mixPanel.stop();
   pianoRoll.deleteButton.hidden = id !== "phrase"; // ノート削除はピアノロールのあるタブだけ
   for (const tab of tabs) {
     const active = tab.id === id;
@@ -1124,7 +1092,7 @@ window.setInterval(updateLatency, 500);
 let lastPlayheadBeats: number | null = -1;
 function playheadLoop(): void {
   const beats = transport.currentPositionBeats();
-  mixPanel.setProgress(songPlayer.progress());
+  mixPanel.tick();
   if (beats !== lastPlayheadBeats) {
     pianoRoll.setPlayheadBeats(beats);
     lastPlayheadBeats = beats;
@@ -1137,7 +1105,7 @@ playheadLoop();
 void reloadPhraseList();
 mixPanel.setSong(createEmptySong());
 void loadSong(SONG_ID).then((song) => {
-  if (song) mixPanel.setSong(song);
+  if (song) mixPanel.setSong(migrateSong(song));
   mixPanel.refreshMaterials();
 });
 refreshPhraseUI();

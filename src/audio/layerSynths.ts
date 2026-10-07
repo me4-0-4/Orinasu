@@ -1,4 +1,11 @@
-import type { AudioEngine } from "./context";
+/** LayerSynths が使うバス。ライブ（AudioEngine）にも、書き出し（AudioBuses＋オフライン）にも使える。 */
+export interface SynthBusSet {
+  ctx: BaseAudioContext;
+  synthDry: AudioNode;
+  synthReverbSend: AudioNode;
+  synthDelaySend: AudioNode;
+  drumOut: AudioNode;
+}
 import { SynthEngine } from "./synth";
 import { clone, defaultSynthParams, synthPresets, type SynthParams } from "./synthParams";
 import type { Layer, LayerRole } from "../phrase/types";
@@ -27,11 +34,11 @@ export function defaultSynthFor(role: LayerRole): SynthParams {
  */
 export class LayerSynths {
   private readonly engines = new Map<string, SynthEngine>();
-  private readonly audio: AudioEngine;
+  private readonly audio: SynthBusSet;
   private filterOffset = 0;
   private readonly drumStrips = new Map<string, DrumStrip>();
 
-  constructor(audio: AudioEngine) {
+  constructor(audio: SynthBusSet) {
     this.audio = audio;
   }
 
