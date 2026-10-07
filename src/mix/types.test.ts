@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, formatDuration, migrateSong, songSeconds } from "./types.ts";
+import { createEmptySong, formatDuration, migrateSong, songSeconds, type Lane } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = createEmptySong(); // 4小節・4拍・120BPM
@@ -42,4 +42,37 @@ test("いまの形はそのまま読める。壊れた値は初期値に戻す",
   assert.equal(s.params.size, 0.5);
   assert.equal(migrateSong(null).bpm, 120);
   assert.equal(migrateSong({ bpm: 9999, lengthBars: 7 }).lengthBars, 4);
+});
+
+test("ずらし：層に効く値＝全体＋ずらし（0〜1に収める）。切り方は層の指定があればそれ", async () => {
+  const { effectiveParams, setLaneShape, laneIsCustom } = await import("./types.ts");
+  const global = { ...createEmptySong().params, busy: 0.5, motion: 0.9 };
+  let lane: Lane = { phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3 };
+  assert.equal(laneIsCustom(lane), false);
+  lane = setLaneShape(lane, global, "busy", 0.7);
+  assert.ok(Math.abs((lane.shift?.busy ?? 0) - 0.2) < 1e-9);
+  assert.ok(Math.abs(effectiveParams(global, lane).busy - 0.7) < 1e-9);
+  // 全体を動かすと、差を保って一緒に動く
+  assert.ok(Math.abs(effectiveParams({ ...global, busy: 0.3 }, lane).busy - 0.5) < 1e-9);
+  // 上限で止まる
+  lane = setLaneShape(lane, global, "motion", 1);
+  assert.equal(effectiveParams({ ...global, motion: 1 }, lane).motion, 1);
+  assert.equal(laneIsCustom(lane), true);
+  // 全体と同じ値に戻すと、ずらしは消える
+  lane = setLaneShape(lane, global, "busy", 0.5);
+  lane = setLaneShape(lane, global, "motion", 0.9);
+  assert.equal(lane.shift, undefined);
+  assert.equal(effectiveParams(global, { mode: "divide" }).mode, "divide");
+  assert.equal(laneIsCustom({ ...lane, muted: true }), true);
+});
+
+test("保存データの層：ずらし・切り方・音量・ミュートを読む。おかしな値は捨てる", () => {
+  const s = migrateSong({
+    lanes: [
+      { phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, shift: { busy: 0.3, motion: 5, nope: 1 }, mode: "divide", volume: 9, muted: true },
+      { phraseId: "b", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, mode: "weird", shift: "x" },
+    ],
+  });
+  assert.deepEqual(s.lanes![0], { phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, muted: true, mode: "divide", volume: 1.5, shift: { busy: 0.3, motion: 1 } });
+  assert.deepEqual(s.lanes![1], { phraseId: "b", cutSeed: 1, rhythmSeed: 2, orderSeed: 3 });
 });

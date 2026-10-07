@@ -1,19 +1,33 @@
 import { LoopPlayer } from "../audio/loopPlayer";
 import { encodeWav } from "../audio/wav";
-import { buildCollage, collectSources, rerollLanes, syncLanes, type CollageResult, type RerollPart } from "../mix/collageSong";
+import {
+  applySeeds,
+  buildCollage,
+  collectSources,
+  rerollLanes,
+  seedSnapshot,
+  syncLanes,
+  type CollageResult,
+  type RerollPart,
+  type SeedSnapshot,
+} from "../mix/collageSong";
 import type { Pcm } from "../mix/pcm";
 import { STEPS_PER_BEAT } from "../mix/sequencer";
 import { divisionsFor, sliceLimits, type CutMode } from "../mix/slicer";
 import {
   LENGTH_OPTIONS,
   MAX_BPM,
+  MAX_LANE_VOLUME,
   MIN_BPM,
   createEmptySong,
   formatDuration,
+  effectiveParams,
+  laneIsCustom,
+  setLaneShape,
   songSeconds,
   type Lane,
+  type ShapeKey,
   type Song,
-  type SongParams,
 } from "../mix/types";
 import type { Phrase } from "../phrase/types";
 import { randomSeed } from "../theory/rng";
@@ -40,6 +54,8 @@ export interface MixPanel {
   stop: () => void;
   /** 毎フレーム呼ぶ。再生位置の線と時間の表示を動かす。 */
   tick: () => void;
+  /** 再生⇔停止（スペースキー用）。 */
+  togglePlay: () => void;
 }
 
 function button(label: string, onClick: () => void, cls = "preset-button", title?: string): HTMLButtonElement {
@@ -85,8 +101,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let rebuildTimer: number | null = null;
   /** BPMを自分で触ったか。触っていなければ、最初に刻むときだけ、いちばん上の層の曲のテンポから始める。 */
   let bpmTouched = false;
-  const undoStack: Lane[][] = [];
-  const redoStack: Lane[][] = [];
+  const undoStack: SeedSnapshot[] = [];
+  const redoStack: SeedSnapshot[] = [];
+  /** いま選んでいる層（曲のid）。選ぶと、その層だけの形を変えられる。 */
+  let selectedId: string | null = null;
   const renderCache = new Map<string, Promise<Pcm>>();
   const player = new LoopPlayer(deps.audio.ctx, deps.audio.out);
   const sampleRate = deps.audio.ctx.sampleRate;
@@ -97,10 +115,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   split.className = "mix-split";
 
   const laneView = buildLaneView((i) => {
-    const lane = song.lanes?.[i];
-    if (!lane) return;
-    lane.locked = !lane.locked;
-    touch();
+    const id = result?.lanes[i]?.phraseId;
+    if (!id) return;
+    selectedId = selectedId === id ? null : id;
     refresh();
   });
 
@@ -184,7 +201,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   // --- 形（つまみ）。動かすと、すぐ作り直す（同じ種のまま） ---
   const sliderRefreshers: (() => void)[] = [];
-  function slider(key: keyof Omit<SongParams, "mode">, label: string, hint: () => string): HTMLElement {
+  function slider(key: ShapeKey, label: string, hint: () => string): HTMLElement {
     const row = document.createElement("div");
     row.className = "mix-slider-row";
     const name = document.createElement("span");
@@ -238,6 +255,144 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     for (const f of sliderRefreshers) f();
   }
 
+  // --- 選んだ層の形（全体からのずらし） ---
+  const laneTitle = document.createElement("div");
+  laneTitle.className = "mix-lane-title";
+  const laneEmpty = document.createElement("div");
+  laneEmpty.className = "layer-empty";
+  const laneBox = document.createElement("div");
+  laneBox.className = "mix-lane-box";
+  const lockButton = button("固定", () => updateLane((l) => ({ ...l, locked: !l.locked }), false), "preset-button", "固定すると、刻み直してもこの層は変わらない");
+  const muteButton = button("ミュート", () => updateLane((l) => ({ ...l, muted: !l.muted })), "preset-button");
+  const resetButton = button("全体に戻す", () =>
+    updateLane((l) => ({ phraseId: l.phraseId, cutSeed: l.cutSeed, rhythmSeed: l.rhythmSeed, orderSeed: l.orderSeed, locked: l.locked })),
+  "preset-button", "この層のずらし・切り方・音量・ミュートを消して、全体と同じにする");
+  const laneButtons = document.createElement("div");
+  laneButtons.className = "preset-row";
+  laneButtons.append(lockButton, muteButton, resetButton);
+  const laneVolume = document.createElement("input");
+  laneVolume.type = "range";
+  laneVolume.className = "layer-volume";
+  laneVolume.min = "0";
+  laneVolume.max = String(MAX_LANE_VOLUME);
+  laneVolume.step = "0.05";
+  const laneVolumeValue = document.createElement("span");
+  laneVolumeValue.className = "mix-slider-value";
+  laneVolume.addEventListener("input", () => {
+    const v = Number(laneVolume.value);
+    updateLane((l) => {
+      const { volume: _v, ...rest } = l;
+      return Math.abs(v - 1) < 1e-9 ? rest : { ...rest, volume: v };
+    });
+  });
+  laneVolume.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+  const volumeRow = document.createElement("div");
+  volumeRow.className = "mix-slider-row";
+  const volumeName = document.createElement("span");
+  volumeName.className = "mix-slider-name";
+  volumeName.textContent = "音量";
+  volumeRow.append(volumeName, laneVolume, laneVolumeValue);
+  const laneMode = document.createElement("select");
+  laneMode.className = "quantize-select";
+  for (const [value, label] of [
+    ["", "全体と同じ"],
+    ["transient", "アタックで切る"],
+    ["divide", "等分に切る"],
+  ] as const) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    laneMode.appendChild(opt);
+  }
+  laneMode.addEventListener("change", () => {
+    const v = laneMode.value;
+    updateLane((l) => {
+      const { mode: _m, ...rest } = l;
+      return v === "" ? rest : { ...rest, mode: v as CutMode };
+    });
+  });
+  const laneSliderSync: (() => void)[] = [];
+  function laneSlider(key: ShapeKey, label: string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "mix-slider-row";
+    const name = document.createElement("span");
+    name.className = "mix-slider-name";
+    name.textContent = label;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.className = "layer-volume";
+    input.min = "0";
+    input.max = "1";
+    input.step = "0.05";
+    const value = document.createElement("span");
+    value.className = "mix-slider-value";
+    const note = document.createElement("div");
+    note.className = "mix-info mix-slider-hint";
+    laneSliderSync.push(() => {
+      const lane = selectedLane();
+      if (!lane) return;
+      const eff = effectiveParams(song.params, lane)[key];
+      const shift = lane.shift?.[key] ?? 0;
+      input.value = String(eff);
+      value.textContent = pct(eff);
+      note.textContent =
+        Math.abs(shift) < 1e-9
+          ? `全体と同じ（${pct(song.params[key])}）`
+          : `全体 ${pct(song.params[key])} ${shift > 0 ? "＋" : "−"}${Math.round(Math.abs(shift) * 100)}%`;
+    });
+    input.addEventListener("input", () => updateLane((l) => setLaneShape(l, song.params, key, Number(input.value))));
+    input.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+    row.append(name, input, value, note);
+    return row;
+  }
+  laneBox.append(
+    laneButtons,
+    volumeRow,
+    fieldRow("切り方", laneMode),
+    laneSlider("busy", "密度"),
+    laneSlider("breaks", "休み"),
+    laneSlider("onBeat", "拍に寄せる"),
+    laneSlider("size", "断片の長さ"),
+    laneSlider("motion", "音程の動き"),
+  );
+
+  function selectedLane(): Lane | undefined {
+    return selectedId ? song.lanes?.find((l) => l.phraseId === selectedId) : undefined;
+  }
+
+  /** 選んでいる層を変える。音に関わる変更なら作り直す。 */
+  function updateLane(fn: (lane: Lane) => Lane, rebuildAfter = true): void {
+    if (!song.lanes || !selectedId) return;
+    const i = song.lanes.findIndex((l) => l.phraseId === selectedId);
+    if (i < 0) return;
+    song.lanes[i] = fn(song.lanes[i]);
+    touch();
+    refresh();
+    if (rebuildAfter) scheduleRebuild();
+  }
+
+  function syncLanePanel(): void {
+    const lane = selectedLane();
+    laneBox.hidden = !lane;
+    laneEmpty.hidden = !!lane;
+    laneTitle.hidden = !lane;
+    laneEmpty.textContent = !song.lanes
+      ? "「刻む」と、左に層（選んだ曲）の線が出る"
+      : "左の層の名前をタップで選ぶと、その層だけの形を変えられる（全体からのずらし）";
+    if (!lane) return;
+    laneTitle.textContent = `${result?.lanes.find((l) => l.phraseId === lane.phraseId)?.name ?? "層"}${laneIsCustom(lane) ? " ＊" : ""}`;
+    lockButton.textContent = lane.locked ? "固定中" : "固定";
+    lockButton.className = "preset-button" + (lane.locked ? " on" : "");
+    muteButton.textContent = lane.muted ? "ミュート中" : "ミュート";
+    muteButton.className = "preset-button" + (lane.muted ? " on" : "");
+    resetButton.disabled = !laneIsCustom(lane);
+    const vol = lane.volume ?? 1;
+    laneVolume.value = String(vol);
+    laneVolumeValue.textContent = pct(vol);
+    laneMode.value = lane.mode ?? "";
+    for (const f of laneSliderSync) f();
+  }
+
   // --- 左：層の線と操作 ---
   const status = document.createElement("div");
   status.className = "mix-info mix-status";
@@ -263,12 +418,17 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const saveButton = button("WAVで保存", () => saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
   partRow.append(saveButton);
 
-  const lockInfo = document.createElement("div");
-  lockInfo.className = "layer-empty";
-
   const stagePane = document.createElement("div");
   stagePane.className = "mix-stage-pane";
-  stagePane.append(laneView.el, status, timeInfo, rollRow, partRow, notice);
+  stagePane.append(
+    laneView.el,
+    status,
+    timeInfo,
+    rollRow,
+    partRow,
+    notice,
+    rule("層", "選んだ層だけの形。全体からの差として持つので、全体を動かすと一緒に動く", laneEmpty, laneTitle, laneBox),
+  );
   const sidePane = document.createElement("div");
   sidePane.className = "mix-side-pane";
   sidePane.append(
@@ -281,8 +441,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       fieldRow("長さ", lengthSelect),
       fieldRow("切り方", modeSelect),
     ),
-    rule("形", "動かすと、同じ刻みのまま形だけ変わる", busyRow, breaksRow, onBeatRow, sizeRow, motionRow),
-    rule("固定", "左の層の名前をタップで固定。固定した層は、刻み直しても変わらない", lockInfo),
+    rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, motionRow),
   );
   split.append(stagePane, sidePane);
   root.append(split);
@@ -347,8 +506,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     refresh();
   }
 
-  function snapshot(): Lane[] {
-    return structuredClone(song.lanes ?? []);
+  function snapshot(): SeedSnapshot {
+    return seedSnapshot(song.lanes ?? []);
   }
 
   async function chop(part: RerollPart): Promise<void> {
@@ -379,7 +538,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     const prev = undoStack.pop();
     if (!prev) return;
     redoStack.push(snapshot());
-    song.lanes = prev;
+    song.lanes = applySeeds(song.lanes ?? [], prev);
     touch();
     void rebuild();
   }
@@ -388,7 +547,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     const next = redoStack.pop();
     if (!next) return;
     undoStack.push(snapshot());
-    song.lanes = next;
+    song.lanes = applySeeds(song.lanes ?? [], next);
     touch();
     void rebuild();
   }
@@ -448,11 +607,17 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     laneView.setData(
       result
         ? {
-            lanes: result.lanes.map((l) => ({
-              name: l.name,
-              locked: !!song.lanes?.find((x) => x.phraseId === l.phraseId)?.locked,
-              events: l.events,
-            })),
+            lanes: result.lanes.map((l) => {
+              const lane = song.lanes?.find((x) => x.phraseId === l.phraseId);
+              return {
+                name: l.name,
+                locked: !!lane?.locked,
+                muted: !!lane?.muted,
+                custom: !!lane && laneIsCustom(lane),
+                selected: l.phraseId === selectedId,
+                events: l.events,
+              };
+            }),
             totalSteps: result.totalSteps,
             stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT,
           }
@@ -478,9 +643,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     undoButton.disabled = undoStack.length === 0;
     redoButton.disabled = redoStack.length === 0;
     partRow.hidden = !song.lanes;
-    const locked = (song.lanes ?? []).filter((l) => l.locked).length;
-    lockInfo.textContent = !song.lanes ? "「刻む」と、左に層の線が出る" : locked === 0 ? "固定している層：なし" : `固定している層：${locked}本`;
+    if (selectedId && !song.lanes?.some((l) => l.phraseId === selectedId)) selectedId = null;
     refreshSliders();
+    syncLanePanel();
     updateTime();
   }
 
@@ -504,6 +669,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;
+      selectedId = null;
       setNotice("");
       renderMaterials();
       refresh();
@@ -526,6 +692,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     tick() {
       laneView.setProgress(player.progress());
       if (player.playing) updateTime();
+    },
+    togglePlay() {
+      void togglePlay();
     },
   };
 }

@@ -12,7 +12,19 @@ export interface Lane {
   orderSeed: number;
   /** 固定：刻み直しても、この層は変えない。 */
   locked?: boolean;
+  /** 全体の形からの「ずらし」（-1〜1）。無い項目は0（全体と同じ）。全体を動かすと、差を保ったまま一緒に動く。 */
+  shift?: Partial<Record<ShapeKey, number>>;
+  /** この層だけの切り方。無ければ全体と同じ。 */
+  mode?: CutMode;
+  /** 音量（0〜1.5）。無ければ1。 */
+  volume?: number;
+  muted?: boolean;
 }
+
+/** 層ごとにずらせる形のつまみ。 */
+export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion";
+export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion"];
+export const MAX_LANE_VOLUME = 1.5;
 
 /** 形と切り方の設定。 */
 export interface SongParams extends ShapeParams {
@@ -57,6 +69,34 @@ export const DEFAULT_PARAMS: SongParams = {
   size: 0.5,
   motion: 0,
 };
+
+const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
+
+/** 層に実際に効く形（全体＋ずらし、0〜1に収める）と切り方。 */
+export function effectiveParams(global: SongParams, lane: Pick<Lane, "shift" | "mode">): SongParams {
+  const out: SongParams = { ...global, mode: lane.mode ?? global.mode };
+  for (const key of SHAPE_KEYS) out[key] = clamp01(global[key] + (lane.shift?.[key] ?? 0));
+  return out;
+}
+
+/** 層が全体と違う設定を持っているか（ずらし・切り方・音量・ミュート）。 */
+export function laneIsCustom(lane: Lane): boolean {
+  const shifted = SHAPE_KEYS.some((k) => Math.abs(lane.shift?.[k] ?? 0) > 1e-9);
+  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted;
+}
+
+/**
+ * 層のつまみを、実際に効かせたい値 value にする：全体との差を「ずらし」として持つ。
+ * 全体と同じ値なら、ずらしは消す。
+ */
+export function setLaneShape(lane: Lane, global: SongParams, key: ShapeKey, value: number): Lane {
+  const shift = { ...lane.shift };
+  const d = Math.round((clamp01(value) - global[key]) * 100) / 100;
+  if (Math.abs(d) < 1e-9) delete shift[key];
+  else shift[key] = d;
+  const { shift: _old, ...rest } = lane;
+  return Object.keys(shift).length === 0 ? rest : { ...rest, shift };
+}
 
 export function createEmptySong(): Song {
   return {
@@ -106,7 +146,7 @@ export function migrateSong(raw: unknown): Song {
         typeof l === "object" && l !== null && typeof (l as Lane).phraseId === "string" &&
         isNum((l as Lane).cutSeed) && isNum((l as Lane).rhythmSeed) && isNum((l as Lane).orderSeed),
     );
-    if (lanes.length > 0) song.lanes = lanes;
+    if (lanes.length > 0) song.lanes = lanes.map(sanitizeLane);
   }
   if (typeof r.params === "object" && r.params !== null) {
     const p = r.params as Record<string, unknown>;
@@ -116,4 +156,21 @@ export function migrateSong(raw: unknown): Song {
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
   }
   return song;
+}
+
+function sanitizeLane(raw: Lane): Lane {
+  const lane: Lane = { phraseId: raw.phraseId, cutSeed: raw.cutSeed, rhythmSeed: raw.rhythmSeed, orderSeed: raw.orderSeed };
+  if (raw.locked) lane.locked = true;
+  if (raw.muted) lane.muted = true;
+  if (raw.mode === "transient" || raw.mode === "divide") lane.mode = raw.mode;
+  if (isNum(raw.volume)) lane.volume = Math.min(MAX_LANE_VOLUME, Math.max(0, raw.volume));
+  if (typeof raw.shift === "object" && raw.shift !== null) {
+    const shift: Partial<Record<ShapeKey, number>> = {};
+    for (const key of SHAPE_KEYS) {
+      const v = (raw.shift as Record<string, unknown>)[key];
+      if (isNum(v) && v !== 0) shift[key] = Math.min(1, Math.max(-1, v));
+    }
+    if (Object.keys(shift).length > 0) lane.shift = shift;
+  }
+  return lane;
 }
