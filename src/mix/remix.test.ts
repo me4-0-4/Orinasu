@@ -96,3 +96,16 @@ test("複製：層と音符のidが新しくなる", () => {
   assert.notEqual(d.layers[0].id, s.layers[0].id);
   assert.equal(d.layers[0].notes.length, s.layers[0].notes.length);
 });
+
+test("曲の長さ：セクションの合計。曲のBPMがあればそれで数える", async () => {
+  const { songSeconds, formatDuration, effectiveSections, createSection } = await import("./types.ts");
+  const mats = collectMaterials([phraseA]);
+  const s1 = remixNew(mats, { lengthBars: 4 }, createRng(1))!; // 4小節・4拍・120BPM = 8秒
+  const s2 = createSection("b", { bpm: 60, beatsPerBar: 4 }, 2, s1.layers); // 2小節・60BPM = 8秒
+  assert.equal(songSeconds({ sections: [s1, s2] }), 16);
+  assert.equal(songSeconds({ sections: [s1, s2], bpm: 120 }), 8 + 4);
+  assert.equal(effectiveSections({ sections: [s1], bpm: 90 })[0].bpm, 90);
+  assert.equal(s1.bpm, 120); // 元のセクションは書き換えない
+  assert.equal(formatDuration(65), "1:05");
+  assert.equal(formatDuration(8), "0:08");
+});

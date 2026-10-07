@@ -25,15 +25,19 @@ export class DrumMachine {
   private readonly ctx: AudioContext;
   private readonly noiseBuffer: AudioBuffer;
   private readonly out: AudioNode;
+  /** いま鳴らしている音の送り先（trigger の間だけ、層ごとの出口に差し替わる）。 */
+  private dest: AudioNode;
 
   constructor(ctx: AudioContext, noiseBuffer: AudioBuffer, out: AudioNode) {
     this.ctx = ctx;
     this.noiseBuffer = noiseBuffer;
     this.out = out;
+    this.dest = out;
   }
 
-  trigger(id: DrumId, velocity = 1, time?: number): void {
+  trigger(id: DrumId, velocity = 1, time?: number, out?: AudioNode): void {
     const now = time ?? this.ctx.currentTime;
+    this.dest = out ?? this.out;
     switch (id) {
       case "kick":
         this.playKick(velocity, now);
@@ -64,7 +68,7 @@ export class DrumMachine {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
 
     osc.connect(gain);
-    gain.connect(this.out);
+    gain.connect(this.dest);
     osc.start(now);
     osc.stop(now + 0.4);
   }
@@ -81,7 +85,7 @@ export class DrumMachine {
 
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
-    noiseGain.connect(this.out);
+    noiseGain.connect(this.dest);
     noise.start(now);
     noise.stop(now + 0.2);
 
@@ -92,7 +96,7 @@ export class DrumMachine {
     toneGain.gain.setValueAtTime(velocity * 0.5, now);
     toneGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
     tone.connect(toneGain);
-    toneGain.connect(this.out);
+    toneGain.connect(this.dest);
     tone.start(now);
     tone.stop(now + 0.15);
   }
@@ -109,7 +113,7 @@ export class DrumMachine {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(this.out);
+    gain.connect(this.dest);
     noise.start(now);
     noise.stop(now + 0.08);
   }
@@ -130,7 +134,7 @@ export class DrumMachine {
 
       noise.connect(filter);
       filter.connect(gain);
-      gain.connect(this.out);
+      gain.connect(this.dest);
       noise.start(t);
       noise.stop(t + 0.12);
     }
@@ -147,7 +151,7 @@ export class DrumMachine {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
 
     osc.connect(gain);
-    gain.connect(this.out);
+    gain.connect(this.dest);
     osc.start(now);
     osc.stop(now + 0.45);
   }

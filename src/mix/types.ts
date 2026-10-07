@@ -31,6 +31,8 @@ export interface Song {
   materialIds: string[];
   /** 並べた順。 */
   sections: Section[];
+  /** 曲全体のBPM。未設定なら、各セクションが持つBPM（最初に選んだ材料のもの）のまま。 */
+  bpm?: number;
   /** 盛り上がりの山（曲全体を0〜1に正規化した線）。古いデータには無い。 */
   energy?: EnergyCurve;
   /** 山が動かすもの（マクロ）の設定。古いデータには無い。 */
@@ -92,4 +94,30 @@ export function duplicateSection(section: Section): Section {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export const MIN_BPM = 40;
+export const MAX_BPM = 240;
+
+/** 曲のBPMを反映したセクション（鳴らす・長さを数えるときに使う）。層や音符は同じものを指す。 */
+export function effectiveSections(song: Pick<Song, "sections" | "bpm">): Section[] {
+  const bpm = song.bpm;
+  return bpm ? song.sections.map((s) => ({ ...s, bpm })) : song.sections;
+}
+
+export function sectionSeconds(section: Pick<Section, "lengthBars" | "beatsPerBar" | "bpm">): number {
+  return (sectionBeats(section) * 60) / section.bpm;
+}
+
+/** 並べたセクション全体の長さ（秒）。 */
+export function songSeconds(song: Pick<Song, "sections" | "bpm">): number {
+  return effectiveSections(song).reduce((sum, s) => sum + sectionSeconds(s), 0);
+}
+
+/** 秒を「1:05」の形にする。 */
+export function formatDuration(seconds: number): string {
+  const total = Math.round(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }

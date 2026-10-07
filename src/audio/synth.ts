@@ -1,3 +1,5 @@
+import { MixStage } from "./mixStage";
+import type { LayerMix } from "../phrase/types";
 import { noteToFrequency } from "./context";
 import type { SynthParams } from "./synthParams";
 
@@ -29,6 +31,9 @@ export class SynthEngine {
   private lastFrequency: number | null = null;
   /** 盛り上がりマクロ用：フィルターを全体にずらす量（セント）。0なら素の音色。 */
   private filterOffsetCents = 0;
+  private readonly stage: MixStage;
+  /** ミキサーで決めたリバーブ・ディレイ送り。未設定なら音色の設定を使う。 */
+  private mix: LayerMix = {};
 
   private lfoOsc: OscillatorNode | null = null;
   private lfoGain: GainNode | null = null;
@@ -45,7 +50,9 @@ export class SynthEngine {
 
     this.output = ctx.createGain();
     this.output.gain.value = 0.9;
-    this.output.connect(dryOut);
+    this.stage = new MixStage(ctx);
+    this.output.connect(this.stage.input);
+    this.stage.output.connect(dryOut);
 
     this.reverbSend = ctx.createGain();
     this.reverbSend.gain.value = params.effects.reverbSend;
@@ -63,8 +70,8 @@ export class SynthEngine {
   updateParams(params: SynthParams): void {
     this.params = params;
     const now = this.ctx.currentTime;
-    this.reverbSend.gain.setTargetAtTime(params.effects.reverbSend, now, 0.02);
-    this.delaySend.gain.setTargetAtTime(params.effects.delaySend, now, 0.02);
+    this.reverbSend.gain.setTargetAtTime(this.mix.reverb ?? params.effects.reverbSend, now, 0.02);
+    this.delaySend.gain.setTargetAtTime(this.mix.delay ?? params.effects.delaySend, now, 0.02);
     this.applyLfoSettings();
 
     for (const voice of this.voices.values()) {
@@ -268,6 +275,15 @@ export class SynthEngine {
     }
   }
 
+  /** ミキサー：パン・コンプ・リバーブ送り・ディレイ送り。 */
+  setMix(mix: LayerMix | undefined): void {
+    this.mix = mix ?? {};
+    const now = this.ctx.currentTime;
+    this.stage.setMix(mix);
+    this.reverbSend.gain.setTargetAtTime(this.mix.reverb ?? this.params.effects.reverbSend, now, 0.02);
+    this.delaySend.gain.setTargetAtTime(this.mix.delay ?? this.params.effects.delaySend, now, 0.02);
+  }
+
   /** 層を消すとき：鳴っている音を止めて、内部のノードをつなぎ外す。 */
   dispose(): void {
     this.allNotesOff();
@@ -277,6 +293,7 @@ export class SynthEngine {
       // すでに止まっている場合は無視
     }
     this.output.disconnect();
+    this.stage.dispose();
   }
 
   allNotesOff(): void {
