@@ -7,12 +7,12 @@ import { createSection, type MixLayer, type Section } from "./types.ts";
 
 type Rng = () => number;
 
-/** new＝メインの曲も刻み方も新しく / replan＝同じメインの曲で、刻み方だけ新しく。 */
+/** new＝メインの曲も切り貼りも新しく / replan＝同じメインの曲で、切り貼りだけ新しく。 */
 export type RemixMode = "new" | "replan";
 
 export const remixLabels: Record<RemixMode, string> = {
-  new: "振る",
-  replan: "刻み直す",
+  new: "刻む",
+  replan: "刻み方だけ変える",
 };
 
 function pick<T>(arr: T[], rng: Rng): T {
@@ -132,7 +132,7 @@ export function remixNew(sources: Phrase[], opts: RemixOptions, rng: Rng, prev?:
 }
 
 /**
- * 振り直す。固定した小節（keepBars）は、前の計画のまま残す。
+ * 刻み直す。固定した小節（keepBars）は、前の計画のまま残す。
  * new：メインの曲も刻み方も新しく。replan：同じメインの曲で、刻み方だけ新しく。
  */
 export function remix(

@@ -97,9 +97,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   /** タイムラインで選んでいるセクションの番号。 */
   let selected: number | null = null;
 
-  /** 刻みのスライダー。次に「振る」ときから効く。 */
+  /** 刻み方のスライダー。次に「刻む」ときから効く。 */
   const chop: ChopParams = { ...DEFAULT_CHOP };
-  /** 振る前のドラフト（「ひとつ戻す」用）。新しいものが後ろ。 */
+  /** 刻む前のドラフト（「ひとつ戻す」用）。新しいものが後ろ。 */
   const history: Section[] = [];
 
   const root = document.createElement("div");
@@ -193,7 +193,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     row.append(name, input, value, note);
     return row;
   }
-  const busyRow = chopSlider("busy", "刻み", () => `刻み – 小節の約${Math.round(chop.busy * 80)}%にいじりが入る（頭は控えめ、終わりは強め）`);
+  const busyRow = chopSlider("busy", "いじる量", () => `いじる量 – 小節の約${Math.round(chop.busy * 80)}%を切り貼りする（頭は控えめ、終わりは多め）`);
   const breaksRow = chopSlider("breaks", "抜き", () => {
     const b6 = chop.breaks * 6;
     return `抜き – いじりの約${Math.round((b6 / (9 + b6)) * 100)}%が、ドラムだけ・ドラム抜き・無音になる`;
@@ -206,18 +206,24 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const draftEmpty = document.createElement("div");
   draftEmpty.className = "layer-empty";
   draftEmpty.hidden = true;
-  const rollButton = button("振る", () => generate("new"), "roll-button", "曲を新しく刻む。メインの曲も変わる。固定した小節は残す");
+  const rollButton = button("刻む", () => generate("new"), "roll-button", "選んだ曲を、新しく切り貼りする。固定した小節は残す");
   const previewDraft = button("試聴", () => togglePreview("draft"), "preset-button");
   previewDraft.hidden = true;
-  const undoButton = button("ひとつ戻す", () => undoDraft(), "preset-button", "振る前に戻す（何回でも）");
+  const undoButton = button("ひとつ戻す", () => undoDraft(), "preset-button", "ひとつ前の刻みに戻す（何回でも）");
   undoButton.disabled = true;
   const rollRow = document.createElement("div");
   rollRow.className = "preset-row mix-roll-row";
   rollRow.append(rollButton, previewDraft, undoButton);
   const draftTools = document.createElement("div");
   draftTools.className = "preset-row";
+  const replanButton = button(
+    remixLabels.replan,
+    () => generate("replan"),
+    "preset-button",
+    "メインにする曲はそのまま、切り貼りだけやり直す（固定した小節は残す）",
+  );
   draftTools.append(
-    button(remixLabels.replan, () => generate("replan"), "preset-button", "メインの曲はそのまま、刻み方だけ新しくする（固定した小節は残す）"),
+    replanButton,
     button("固定を全部外す", () => {
       lockedBars.clear();
       renderDraft();
@@ -292,21 +298,23 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   bpmInput.className = "mix-bpm";
   bpmInput.min = String(MIN_BPM);
   bpmInput.max = String(MAX_BPM);
-  bpmInput.title = "曲全体のBPM。空にすると、セクションごとのBPM（最初に選んだ材料のもの）のまま";
+  bpmInput.title = "この曲のBPM。空にすると、刻んだ曲それぞれのBPMのまま";
   bpmInput.addEventListener("change", () => {
     const v = Math.round(Number(bpmInput.value));
     song.bpm = bpmInput.value === "" || !Number.isFinite(v) ? undefined : Math.min(MAX_BPM, Math.max(MIN_BPM, v));
     touch();
+    renderDraft();
     renderSections();
+    restartPlayback(); // 鳴らしている最中なら、新しいテンポですぐ鳴らし直す
   });
   const bpmLabel = document.createElement("label");
-  bpmLabel.className = "mix-info";
-  bpmLabel.append("BPM ", bpmInput);
+  bpmLabel.className = "mix-info mix-bpm-row";
+  bpmLabel.append("BPM ", bpmInput, "（この曲全体のテンポ）");
   const totalLabel = document.createElement("span");
   totalLabel.className = "mix-info";
   const songMeta = document.createElement("div");
   songMeta.className = "preset-row mix-song-meta";
-  songMeta.append(playSong, bpmLabel, totalLabel);
+  songMeta.append(playSong, totalLabel);
 
   // 曲の流れ：長さに比例した横のブロック。タップで選ぶ
   const timeline = document.createElement("div");
@@ -345,7 +353,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       undoButton.disabled = true;
       renderDraft();
       root.scrollTo?.({ top: 0, behavior: "smooth" });
-    }, "layer-toggle", "複製を「振る」の側に戻して作り直す"),
+    }, "layer-toggle", "この区間を、いまの刻みに戻して作り直す"),
     button("複製", () => {
       const section = selected === null ? undefined : song.sections[selected];
       if (!section || selected === null) return;
@@ -367,13 +375,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   const stagePane = document.createElement("div");
   stagePane.className = "mix-stage-pane";
-  stagePane.append(chopStage.el, draftInfo, rollRow, draftTools, draftEmpty);
+  stagePane.append(chopStage.el, draftInfo, bpmLabel, rollRow, draftTools, draftEmpty);
   const sidePane = document.createElement("div");
   sidePane.className = "mix-side-pane";
   sidePane.append(
     rule("材料", "刻む曲（フレーズ）を選ぶ。複数なら、曲をまたいで刻む", materialEmpty, materialList),
-    rule("刻み", "振るときの偶然の強さ", lengthRow, busyRow, breaksRow, sizeRow),
-    rule("固定", "左のステージの小節をタップで固定。固定した小節は、振っても変わらない", lockInfo),
+    rule("刻み方", "「刻む」ときの偶然の強さ", lengthRow, busyRow, breaksRow, sizeRow),
+    rule("固定", "左のステージの小節をタップで固定。固定した小節は、刻み直しても変わらない", lockInfo),
     rule("音づくり", "層ごとの音量・ミュート・ミキサー", soundButton, draftLayers),
   );
   split.append(stagePane, sidePane);
@@ -389,7 +397,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   function updateSongMeta(): void {
-    const first = song.sections[0]?.bpm;
+    const first = draft?.bpm ?? song.sections[0]?.bpm;
     bpmInput.value = song.bpm ? String(song.bpm) : "";
     bpmInput.placeholder = first ? String(first) : "";
     const n = song.sections.length;
@@ -427,7 +435,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (sources.length === 0) {
       draftEmpty.textContent =
         song.materialIds.length === 0
-          ? "先に、材料のフレーズを選んで"
+          ? "先に、刻む曲（フレーズ）を選んで"
           : "材料に入れたフレーズに、音符がありません";
       draftEmpty.hidden = false;
       return;
@@ -437,6 +445,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (!draft) {
       lockedBars.clear();
       draft = remixNew(sources, { lengthBars: draftLength, chop }, rng);
+      // 曲のBPMは、最初に刻んだ曲のテンポから始まる（あとから、いつでも変えられる）
+      if (draft && !song.bpm) {
+        song.bpm = draft.bpm;
+        touch();
+        updateSongMeta();
+      }
     } else if (mode === "new" && draft.lengthBars !== draftLength) {
       // 長さを変えたときは、固定も外して長さに合わせて作り直す
       lockedBars.clear();
@@ -445,8 +459,19 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       draft = remix(draft, mode, sources, rng, chop, [...lockedBars]);
     }
     renderDraft();
-    // 試聴中なら、振り直した結果をすぐ聴けるように鳴らし直す
+    // 試聴中なら、刻み直した結果をすぐ聴けるように鳴らし直す
     if (previewing === "draft" && draft) deps.onPlay(draftForPlay(draft), { kind: "loop", index: 0 }, song);
+  }
+
+  /** 鳴らしている最中に、テンポなどを変えたとき：同じ再生を、新しい設定でやり直す。 */
+  function restartPlayback(): void {
+    if (previewing === "draft" && draft) {
+      deps.onPlay(draftForPlay(draft), { kind: "loop", index: 0 }, song);
+    } else if (typeof previewing === "number" && song.sections[previewing]) {
+      deps.onPlay(effectiveSections(song), { kind: "loop", index: previewing }, song);
+    } else if (songPlaying && song.sections.length > 0) {
+      deps.onPlay(effectiveSections(song), { kind: "song" }, song);
+    }
   }
 
   function stopAll(): void {
@@ -512,6 +537,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
           ? [...song.materialIds, p.id]
           : song.materialIds.filter((id) => id !== p.id);
         touch();
+        renderDraft();
       });
       const label = document.createElement("span");
       label.className = "layer-role-label";
@@ -527,6 +553,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     chopStage.setSection(draft, lockedBars);
     if (has) draftEmpty.hidden = true;
     draftTools.hidden = !has;
+    // 曲が1つだけなら「刻む」と同じ動きなので、2つ以上選んでいるときだけ出す
+    replanButton.hidden = song.materialIds.length < 2;
     previewDraft.hidden = !has;
     addRow.hidden = !has;
     soundButton.hidden = !has;
@@ -535,7 +563,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     overwrite.hidden = !editingId || !song.sections.some((x) => x.id === editingId);
     const bars = [...lockedBars].sort((x, y) => x - y).map((b) => b + 1);
     lockInfo.textContent = !has
-      ? "「振る」と、左のステージに小節が出る"
+      ? "「刻む」と、左のステージに小節が出る"
       : bars.length === 0
         ? "固定している小節：なし"
         : `固定している小節：${bars.join("・")}小節目`;
@@ -543,7 +571,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (!draft) return;
     const d = draft;
     if (document.activeElement !== draftName) draftName.value = d.name;
-    draftInfo.textContent = `${d.layers.length}層 · ${d.lengthBars}小節 · ${d.bpm}BPM${d.key ? ` · ${keyShortName(d.key)}に合わせる` : ""}`;
+    draftInfo.textContent = `${d.layers.length}層 · ${d.lengthBars}小節 · ${song.bpm ?? d.bpm}BPM${d.key ? ` · ${keyShortName(d.key)}に合わせる` : ""}`;
     if (!soundOpen) return;
     for (const layer of d.layers) {
       const row = document.createElement("div");

@@ -59,7 +59,7 @@ export function buildChopStage(onBarClick: (bar: number) => void): ChopStage {
 
     if (!section || rows === 0) {
       g.fillStyle = dim;
-      g.fillText("「振る」で、ここに刻み方が出る", 8, height / 2);
+      g.fillText("「刻む」を押すと、ここに刻み方が出る", 8, height / 2);
       return;
     }
 

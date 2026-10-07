@@ -1237,6 +1237,12 @@ body {
   }
 }
 
+.mix-bpm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .mix-song-meta {
   align-items: center;
 }
