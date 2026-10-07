@@ -1,4 +1,4 @@
-import type { Pcm } from "../mix/audioChop.ts";
+import type { Pcm } from "../mix/pcm.ts";
 
 /** ステレオの波形を、16bit PCM の WAV ファイルにする。 */
 export function encodeWav(pcm: Pcm, sampleRate: number): Uint8Array<ArrayBuffer> {

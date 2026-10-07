@@ -1011,19 +1011,20 @@ body {
   letter-spacing: 0.04em;
 }
 
-.chop-stage {
+.lane-view {
   border: 1px solid var(--border);
   background: var(--bg);
 }
 
-.chop-canvas {
+.lane-canvas {
   display: block;
   width: 100%;
+  cursor: pointer;
 }
 
 .mix-slider-row {
   display: grid;
-  grid-template-columns: 4.5em minmax(0, 1fr) 3em;
+  grid-template-columns: 6.5em minmax(0, 1fr) 3em;
   align-items: center;
   gap: 2px 10px;
   font-size: 0.8rem;
@@ -1101,7 +1102,7 @@ body {
 }
 
 .mix-field-row {
-  grid-template-columns: 4.5em minmax(0, 1fr);
+  grid-template-columns: 6.5em minmax(0, 1fr);
 }
 
 .mix-field-row .mix-name {
