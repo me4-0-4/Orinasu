@@ -94,8 +94,11 @@ export async function buildCollage(
   const stepSamples = (sampleRate * 60) / song.bpm / STEPS_PER_BEAT;
   const baseKey = phraseKey(byId.get(lanes[0].phraseId)!);
 
+  // 音楽モードの交代は、ミュートしていない層だけで回す（ミュートした層の番で、無音の4小節ができないように）
+  const playing = lanes.filter((l) => !l.muted);
   const built = await Promise.all(
-    lanes.map(async (lane, laneIndex) => {
+    lanes.map(async (lane, i) => {
+      const turn = lane.muted ? { laneIndex: i, laneCount: lanes.length } : { laneIndex: playing.indexOf(lane), laneCount: playing.length };
       const phrase = byId.get(lane.phraseId)!;
       const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし
@@ -113,8 +116,8 @@ export async function buildCollage(
           stepsPerBar,
           srcBars,
           slotSteps,
-          laneIndex,
-          laneCount: lanes.length,
+          laneIndex: turn.laneIndex,
+          laneCount: turn.laneCount,
           params,
           cutRng: createRng(lane.cutSeed),
           rhythmRng: createRng(lane.rhythmSeed),

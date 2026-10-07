@@ -116,3 +116,13 @@ test("ひとつ戻すは、種だけを戻す（形のずらし・固定はそ�
   assert.deepEqual(back[0].shift, { busy: 0.2 });
   assert.equal(back[0].locked, true);
 });
+
+test("音楽モード：ミュートした層があっても、交代はミュートしていない層だけで回す（無音の4小節ができない）", async () => {
+  const phrases = [phrase("a", 100), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], lengthBars: 8 };
+  song.lanes = syncLanes(song, seq);
+  song.lanes[1].muted = true;
+  const out = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  const a = out.lanes[0].events;
+  assert.ok(a.some((e) => e.step < 64) && a.some((e) => e.step >= 64), "鳴っている層が、前半も後半も打つ");
+});

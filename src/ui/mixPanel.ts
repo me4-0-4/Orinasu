@@ -108,6 +108,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let bpmTouched = false;
   const undoStack: SeedSnapshot[] = [];
   const redoStack: SeedSnapshot[] = [];
+  /** 最後に作ったときの、層の曲の更新時刻（フレーズを直したら作り直すため）。 */
+  let builtStamps = "";
+  function stampsOf(lanes: Lane[]): string {
+    const byId = new Map(deps.getPhrases().map((p) => [p.id, p.updatedAt]));
+    return lanes.map((l) => `${l.phraseId}:${byId.get(l.phraseId) ?? 0}`).join(",");
+  }
   /** いま選んでいる層（曲のid）。選ぶと、その層だけの形を変えられる。 */
   let selectedId: string | null = null;
   const renderCache = new Map<string, Promise<Pcm>>();
@@ -592,6 +598,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         if (token !== buildToken) return;
       }
       result = out;
+      builtStamps = stampsOf(song.lanes ?? []);
       setNotice(out ? "" : "刻む曲が見つからない。材料を選び直して");
       if (player.playing) {
         if (out) player.play(out.pcm, sampleRate, player.progress() ?? 0);
@@ -789,6 +796,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       renderMaterials();
       refresh();
       if (song.lanes && !result) void rebuild(); // 起動直後は、フレーズが読み込まれてから曲を作り直す
+      else if (song.lanes && stampsOf(song.lanes) !== builtStamps) scheduleRebuild(); // フレーズタブで曲を直したら、作り直す
     },
     stop() {
       if (!player.playing) return;
