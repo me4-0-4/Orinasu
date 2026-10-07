@@ -1,126 +1,50 @@
-import type { Layer, Phrase } from "../phrase/types.ts";
-import { makeId } from "../phrase/types.ts";
-import type { ChopSegment } from "./chop.ts";
-import { defaultCurve, defaultMacros, type EnergyCurve, type Macro } from "./energy.ts";
+import type { ChopParams, ChopSegment } from "./chop.ts";
 
-/** セクション内の層。組み替えで作った音符データを持つ（元のフレーズは触らない）。 */
-export interface MixLayer extends Layer {
-  /** 固定：振り直しても変えない。 */
-  locked: boolean;
-  /** 材料にした層（表示用）。 */
-  sourceLabel?: string;
-  /** 材料にしたフレーズと層のid（「刻み直す」で、同じ材料から切り直すため）。古いデータには無い。 */
-  srcPhraseId?: string;
-  srcLayerId?: string;
-}
-
-export interface Section {
-  id: string;
-  name: string;
-  lengthBars: number;
-  beatsPerBar: number;
-  bpm: number;
-  layers: MixLayer[];
-  /** 調の自動合わせの基準にした調（なければ合わせない）。 */
-  key?: { tonic: number; mode: "major" | "minor" };
-  /** 刻み方の計画（全部の層に同じものを当てた）。古いデータには無い。 */
-  plan?: ChopSegment[];
-  createdAt: number;
-  updatedAt: number;
-}
-
-/** 曲：材料にするフレーズと、並べたセクション。1つだけ持つ（端末内）。 */
+/**
+ * 曲：刻むために選んだ曲（フレーズ）と、刻み方の計画。1つだけ持つ（端末内）。
+ * 刻んだ音そのものは保存せず、計画から作り直す。
+ */
 export interface Song {
   id: string;
   name: string;
-  /** 材料に入れたフレーズのid。 */
+  /** 刻む曲（フレーズ）のid。 */
   materialIds: string[];
-  /** 並べた順。 */
-  sections: Section[];
-  /** 曲全体のBPM。未設定なら、各セクションが持つBPM（最初に選んだ材料のもの）のまま。 */
-  bpm?: number;
-  /** 盛り上がりの山を曲に効かせるか。無い・false なら効かせない（初期はオフ）。 */
-  energyOn?: boolean;
-  /** 盛り上がりの山（曲全体を0〜1に正規化した線）。古いデータには無い。 */
-  energy?: EnergyCurve;
-  /** 山が動かすもの（マクロ）の設定。古いデータには無い。 */
-  macros?: Macro[];
+  /** 刻んだあとの曲のBPM。フレーズ自身のBPMとは無関係（フレーズは、この曲のテンポに合わせて鳴る）。 */
+  bpm: number;
+  beatsPerBar: number;
+  /** 曲の長さ（小節）。 */
+  lengthBars: number;
+  /** 刻み方の計画。まだ刻んでいなければ無い。 */
+  plan?: ChopSegment[];
+  /** 計画のメインにした曲（フレーズ）のid。 */
+  baseId?: string;
+  /** 刻み方のスライダー。 */
+  chop?: ChopParams;
   updatedAt: number;
 }
 
 export const SONG_ID = "song";
+
+export const MIN_BPM = 40;
+export const MAX_BPM = 240;
+export const LENGTH_OPTIONS = [4, 8, 16, 32];
+export const DEFAULT_BPM = 120;
 
 export function createEmptySong(): Song {
   return {
     id: SONG_ID,
     name: "無題の曲",
     materialIds: [],
-    sections: [],
-    energyOn: false,
-    energy: defaultCurve(),
-    macros: defaultMacros(),
+    bpm: DEFAULT_BPM,
+    beatsPerBar: 4,
+    lengthBars: 8,
     updatedAt: Date.now(),
   };
 }
 
-export function sectionBeats(section: Pick<Section, "lengthBars" | "beatsPerBar">): number {
-  return section.lengthBars * section.beatsPerBar;
-}
-
-export function createSection(
-  name: string,
-  base: Pick<Phrase, "bpm" | "beatsPerBar">,
-  lengthBars: number,
-  layers: MixLayer[],
-  key?: Section["key"],
-): Section {
-  const now = Date.now();
-  return {
-    id: makeId("section"),
-    name,
-    lengthBars,
-    beatsPerBar: base.beatsPerBar,
-    bpm: base.bpm,
-    layers,
-    key,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/** セクションを複製する（層・音符のidも振り直す）。 */
-export function duplicateSection(section: Section): Section {
-  const now = Date.now();
-  return {
-    ...structuredClone(section),
-    id: makeId("section"),
-    name: `${section.name}のコピー`,
-    layers: section.layers.map((l) => ({
-      ...structuredClone(l),
-      id: makeId("layer"),
-      notes: l.notes.map((n) => ({ ...n, id: makeId("note") })),
-    })),
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-export const MIN_BPM = 40;
-export const MAX_BPM = 240;
-
-/** 曲のBPMを反映したセクション（鳴らす・長さを数えるときに使う）。層や音符は同じものを指す。 */
-export function effectiveSections(song: Pick<Song, "sections" | "bpm">): Section[] {
-  const bpm = song.bpm;
-  return bpm ? song.sections.map((s) => ({ ...s, bpm })) : song.sections;
-}
-
-export function sectionSeconds(section: Pick<Section, "lengthBars" | "beatsPerBar" | "bpm">): number {
-  return (sectionBeats(section) * 60) / section.bpm;
-}
-
-/** 並べたセクション全体の長さ（秒）。 */
-export function songSeconds(song: Pick<Song, "sections" | "bpm">): number {
-  return effectiveSections(song).reduce((sum, s) => sum + sectionSeconds(s), 0);
+/** 曲の長さ（秒）。 */
+export function songSeconds(song: Pick<Song, "lengthBars" | "beatsPerBar" | "bpm">): number {
+  return (song.lengthBars * song.beatsPerBar * 60) / song.bpm;
 }
 
 /** 秒を「1:05」の形にする。 */
@@ -129,4 +53,26 @@ export function formatDuration(seconds: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * 保存されていたデータを、いまの曲の形にする。
+ * 古い形（セクションを並べた曲）からは、名前・選んだ曲・BPMだけを引き継ぐ。
+ */
+export function migrateSong(raw: unknown): Song {
+  const base = createEmptySong();
+  if (typeof raw !== "object" || raw === null) return base;
+  const r = raw as Record<string, unknown>;
+  const song: Song = { ...base, updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : base.updatedAt };
+  if (typeof r.name === "string" && r.name) song.name = r.name;
+  if (Array.isArray(r.materialIds)) song.materialIds = r.materialIds.filter((x): x is string => typeof x === "string");
+  if (typeof r.bpm === "number" && r.bpm >= MIN_BPM && r.bpm <= MAX_BPM) song.bpm = Math.round(r.bpm);
+  if (typeof r.beatsPerBar === "number" && r.beatsPerBar >= 1 && r.beatsPerBar <= 12) song.beatsPerBar = Math.round(r.beatsPerBar);
+  if (typeof r.lengthBars === "number" && LENGTH_OPTIONS.includes(r.lengthBars)) song.lengthBars = r.lengthBars;
+  if (Array.isArray(r.plan) && r.plan.length > 0 && typeof r.baseId === "string") {
+    song.plan = r.plan as ChopSegment[];
+    song.baseId = r.baseId;
+  }
+  if (typeof r.chop === "object" && r.chop !== null) song.chop = r.chop as ChopParams;
+  return song;
 }

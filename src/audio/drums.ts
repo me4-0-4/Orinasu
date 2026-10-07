@@ -22,13 +22,13 @@ export const noteNumberToDrum: Record<number, DrumId> = Object.fromEntries(
 ) as Record<number, DrumId>;
 
 export class DrumMachine {
-  private readonly ctx: AudioContext;
+  private readonly ctx: BaseAudioContext;
   private readonly noiseBuffer: AudioBuffer;
   private readonly out: AudioNode;
   /** いま鳴らしている音の送り先（trigger の間だけ、層ごとの出口に差し替わる）。 */
   private dest: AudioNode;
 
-  constructor(ctx: AudioContext, noiseBuffer: AudioBuffer, out: AudioNode) {
+  constructor(ctx: BaseAudioContext, noiseBuffer: AudioBuffer, out: AudioNode) {
     this.ctx = ctx;
     this.noiseBuffer = noiseBuffer;
     this.out = out;
