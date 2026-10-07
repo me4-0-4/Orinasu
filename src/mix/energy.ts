@@ -145,11 +145,12 @@ export const macroInfo: Record<MacroId, MacroInfo> = {
 
 export const macroOrder: MacroId[] = ["layers", "density", "filter", "fill"];
 
+/** 山をオンにしたとき、層も音もほとんど消えない初期値（低いところでも層は過半数、音は8割残る）。 */
 export function defaultMacros(): Macro[] {
   return [
-    { id: "layers", enabled: true, from: 0.3, to: 1 },
-    { id: "density", enabled: true, from: 0.5, to: 1 },
-    { id: "filter", enabled: true, from: 0.25, to: 1 },
+    { id: "layers", enabled: true, from: 0.6, to: 1 },
+    { id: "density", enabled: true, from: 0.8, to: 1 },
+    { id: "filter", enabled: true, from: 0.6, to: 1 },
     { id: "fill", enabled: true, from: 0, to: 0.6 },
   ];
 }

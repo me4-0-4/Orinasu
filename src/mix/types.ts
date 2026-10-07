@@ -33,6 +33,8 @@ export interface Song {
   sections: Section[];
   /** 曲全体のBPM。未設定なら、各セクションが持つBPM（最初に選んだ材料のもの）のまま。 */
   bpm?: number;
+  /** 盛り上がりの山を曲に効かせるか。無い・false なら効かせない（初期はオフ）。 */
+  energyOn?: boolean;
   /** 盛り上がりの山（曲全体を0〜1に正規化した線）。古いデータには無い。 */
   energy?: EnergyCurve;
   /** 山が動かすもの（マクロ）の設定。古いデータには無い。 */
@@ -48,6 +50,7 @@ export function createEmptySong(): Song {
     name: "無題の曲",
     materialIds: [],
     sections: [],
+    energyOn: false,
     energy: defaultCurve(),
     macros: defaultMacros(),
     updatedAt: Date.now(),
