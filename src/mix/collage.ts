@@ -10,6 +10,8 @@ export interface CollageLane {
   /** 層全体を半音いくつずらすか（調をそろえるため）。 */
   keyShift: number;
   gain?: number;
+  /** 次に打つ所までに鳴らす割合（0〜1。無ければ1＝次まで伸ばす）。 */
+  holdFraction?: number;
 }
 
 /** 断片の継ぎ目のプチ音を消す、短いフェード（秒）。 */
@@ -35,7 +37,8 @@ export function renderCollage(
       if (!slice) continue;
       const start = Math.round(ev.step * opts.stepSamples);
       if (start >= total) continue;
-      const gate = Math.round((ev.step + ev.len) * opts.stepSamples) - start;
+      const fullGate = Math.round((ev.step + ev.len) * opts.stepSamples) - start;
+      const gate = Math.max(1, Math.round(fullGate * Math.min(1, Math.max(0, lane.holdFraction ?? 1))));
       const ratio = Math.pow(2, (ev.pitch + lane.keyShift) / 12);
       const available = Math.floor((slice.end - slice.start - 1) / ratio);
       const len = Math.min(gate, available, total - start);

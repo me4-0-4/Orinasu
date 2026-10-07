@@ -255,7 +255,7 @@ const mixPanel = buildMixPanel({
     allSoundsOff();
   },
   audio: { ctx: engine.ctx, out: engine.masterGain },
-  render: (phrase, bpm) => renderPhrase(phrase, bpm, engine.ctx.sampleRate),
+  render: (phrase, bpm, opts) => renderPhrase(phrase, bpm, engine.ctx.sampleRate, opts),
 });
 
 function toggleRecord(): void {

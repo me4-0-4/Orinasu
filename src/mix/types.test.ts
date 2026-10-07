@@ -76,3 +76,13 @@ test("保存データの層：ずらし・切り方・音量・ミュートを�
   assert.deepEqual(s.lanes![0], { phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, muted: true, mode: "divide", volume: 1.5, shift: { busy: 0.3, motion: 1 } });
   assert.deepEqual(s.lanes![1], { phraseId: "b", cutSeed: 1, rhythmSeed: 2, orderSeed: 3 });
 });
+
+test("音の長さ・余韻の設定を読む。古いデータには無いので初期値（音の長さ60%・余韻なし）", () => {
+  const old = migrateSong({ params: { busy: 0.4 } });
+  assert.equal(old.params.hold, 0.6);
+  assert.equal(old.params.dry, true);
+  const s = migrateSong({ params: { hold: 0.2, dry: false }, lanes: [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, shift: { hold: -0.3 } }] });
+  assert.equal(s.params.hold, 0.2);
+  assert.equal(s.params.dry, false);
+  assert.deepEqual(s.lanes![0].shift, { hold: -0.3 });
+});

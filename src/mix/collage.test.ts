@@ -43,3 +43,17 @@ test("層は重ねて鳴る", () => {
   );
   assert.ok(Math.abs(two.l[100] - 2 * one.l[100]) < 1e-6);
 });
+
+test("音の長さ：次に打つ所までの一部だけ鳴らして、残りは無音（ブツ切れ）", () => {
+  const pcm = ramp(4000);
+  const lane = (holdFraction?: number) =>
+    renderCollage(
+      [{ pcm, slices: [{ start: 0, end: 4000 }], events: [{ step: 0, len: 4, slice: 0, pitch: 0 }], keyShift: 0, gain: 1, holdFraction }],
+      opts,
+    );
+  const full = lane(undefined);
+  const half = lane(0.5);
+  assert.ok(full.l[300] !== 0); // 伸ばすと4ステップぶん鳴る
+  assert.ok(half.l.slice(200).every((x) => x === 0)); // 半分なら2ステップで切れる
+  assert.ok(half.l[100] !== 0);
+});

@@ -12,7 +12,12 @@ const TAIL_SECONDS = 2.5;
  * フレーズ（1曲）を、指定のBPMで1周ぶんの波形に書き出す。
  * 層（ドラム・ベース…）は、ここで1本に混ぜてしまう。刻むときは、この波形だけを扱う。
  */
-export async function renderPhrase(phrase: Phrase, bpm: number, sampleRate: number): Promise<Pcm> {
+export async function renderPhrase(
+  phrase: Phrase,
+  bpm: number,
+  sampleRate: number,
+  opts: { dry?: boolean } = {},
+): Promise<Pcm> {
   const secondsPerBeat = 60 / bpm;
   const loopFrames = Math.max(1, Math.round(totalBeats(phrase) * secondsPerBeat * sampleRate));
   const totalFrames = loopFrames + Math.ceil(TAIL_SECONDS * sampleRate);
@@ -22,11 +27,13 @@ export async function renderPhrase(phrase: Phrase, bpm: number, sampleRate: numb
   master.gain.value = 0.8; // ライブの出力と同じ音量
   master.connect(ctx.destination);
   const buses = new AudioBuses(ctx, master);
+  // 余韻なし：リバーブ・ディレイの送り先を、どこにもつながっていない行き止まりにする（刻んだ断片がにじまない）
+  const deadEnd = ctx.createGain();
   const synths = new LayerSynths({
     ctx,
     synthDry: buses.synthDry,
-    synthReverbSend: buses.synthReverbSend,
-    synthDelaySend: buses.synthDelaySend,
+    synthReverbSend: opts.dry ? deadEnd : buses.synthReverbSend,
+    synthDelaySend: opts.dry ? deadEnd : buses.synthDelaySend,
     drumOut: buses.drumOut,
   });
   const drums = new DrumMachine(ctx, createNoiseBuffer(ctx), buses.drumOut);

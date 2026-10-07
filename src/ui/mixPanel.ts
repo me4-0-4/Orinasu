@@ -12,7 +12,7 @@ import {
   type SeedSnapshot,
 } from "../mix/collageSong";
 import type { Pcm } from "../mix/pcm";
-import { STEPS_PER_BEAT } from "../mix/sequencer";
+import { STEPS_PER_BEAT, holdFraction } from "../mix/sequencer";
 import { divisionsFor, sliceLimits, type CutMode } from "../mix/slicer";
 import {
   LENGTH_OPTIONS,
@@ -42,7 +42,7 @@ export interface MixPanelDeps {
   prepareAudio: () => Promise<void>;
   audio: { ctx: AudioContext; out: AudioNode };
   /** フレーズを、指定のBPMで1周ぶんの波形に書き出す。 */
-  render: (phrase: Phrase, bpm: number) => Promise<Pcm>;
+  render: (phrase: Phrase, bpm: number, opts: { dry: boolean }) => Promise<Pcm>;
 }
 
 export interface MixPanel {
@@ -186,6 +186,22 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     refreshSliders();
     scheduleRebuild();
   });
+  const drySelect = document.createElement("select");
+  drySelect.className = "quantize-select";
+  for (const [value, label] of [
+    ["dry", "余韻なし（キレよく）"],
+    ["wet", "余韻あり（リバーブ・ディレイごと）"],
+  ] as const) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    drySelect.appendChild(opt);
+  }
+  drySelect.addEventListener("change", () => {
+    song.params.dry = drySelect.value === "dry";
+    touch();
+    scheduleRebuild();
+  });
   const fieldRow = (label: string, ...children: HTMLElement[]): HTMLElement => {
     const row = document.createElement("label");
     row.className = "mix-slider-row mix-field-row";
@@ -250,6 +266,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   });
   const motionRow = slider("motion", "音程の動き", () =>
     song.params.motion < 0.05 ? "音程の動き – 動かさない" : `音程の動き – ${pct(song.params.motion)}（断片の高さを、近い高さへ少しずつ動かす）`,
+  );
+  const holdRow = slider("hold", "音の長さ", () =>
+    `音の長さ – 次に打つ所までの ${Math.round(holdFraction(song.params.hold) * 100)}% で切る（短いほどブツ切れ）`,
   );
   function refreshSliders(): void {
     for (const f of sliderRefreshers) f();
@@ -354,6 +373,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     laneSlider("onBeat", "拍に寄せる"),
     laneSlider("size", "断片の長さ"),
     laneSlider("motion", "音程の動き"),
+    laneSlider("hold", "音の長さ"),
   );
 
   function selectedLane(): Lane | undefined {
@@ -440,8 +460,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       fieldRow("BPM", bpmInput, bpmHint),
       fieldRow("長さ", lengthSelect),
       fieldRow("切り方", modeSelect),
+      fieldRow("余韻", drySelect),
     ),
-    rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, motionRow),
+    rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, holdRow, motionRow),
   );
   split.append(stagePane, sidePane);
   root.append(split);
@@ -459,11 +480,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   /** フレーズを書き出す（同じ曲・同じテンポなら、書き出したものを使い回す）。 */
-  function render(phrase: Phrase, bpm: number): Promise<Pcm> {
-    const key = `${phrase.id}|${phrase.updatedAt}|${bpm}`;
+  function render(phrase: Phrase, bpm: number, opts: { dry: boolean }): Promise<Pcm> {
+    const key = `${phrase.id}|${phrase.updatedAt}|${bpm}|${opts.dry ? "dry" : "wet"}`;
     let hit = renderCache.get(key);
     if (!hit) {
-      hit = deps.render(phrase, bpm);
+      hit = deps.render(phrase, bpm, opts);
       renderCache.set(key, hit);
       if (renderCache.size > 24) renderCache.delete(renderCache.keys().next().value as string);
     }
@@ -627,6 +648,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (document.activeElement !== bpmInput) bpmInput.value = String(song.bpm);
     lengthSelect.value = String(song.lengthBars);
     modeSelect.value = song.params.mode;
+    drySelect.value = song.params.dry ? "dry" : "wet";
     const hits = result ? result.lanes.reduce((a, l) => a + l.events.length, 0) : 0;
     status.textContent = [
       `層 ${result?.lanes.length ?? 0}`,

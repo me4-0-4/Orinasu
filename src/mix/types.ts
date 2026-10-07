@@ -22,14 +22,16 @@ export interface Lane {
 }
 
 /** 層ごとにずらせる形のつまみ。 */
-export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion";
-export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion"];
+export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold";
+export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold"];
 export const MAX_LANE_VOLUME = 1.5;
 
 /** 形と切り方の設定。 */
 export interface SongParams extends ShapeParams {
   /** 切り方：アタックで切るか、等分に切るか。 */
   mode: CutMode;
+  /** 余韻なし：刻む前の書き出しで、リバーブ・ディレイを外す（断片同士がにじまない）。 */
+  dry: boolean;
   /** 断片の長さ（0〜1）。 */
   size: number;
 }
@@ -68,6 +70,8 @@ export const DEFAULT_PARAMS: SongParams = {
   onBeat: 0,
   size: 0.5,
   motion: 0,
+  hold: 0.6,
+  dry: true,
 };
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -150,10 +154,11 @@ export function migrateSong(raw: unknown): Song {
   }
   if (typeof r.params === "object" && r.params !== null) {
     const p = r.params as Record<string, unknown>;
-    for (const key of ["busy", "breaks", "onBeat", "size", "motion"] as const) {
+    for (const key of SHAPE_KEYS) {
       if (isNum(p[key])) song.params[key] = Math.min(1, Math.max(0, p[key]));
     }
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
+    if (typeof p.dry === "boolean") song.params.dry = p.dry;
   }
   return song;
 }

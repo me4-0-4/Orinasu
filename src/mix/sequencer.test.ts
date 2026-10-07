@@ -73,3 +73,23 @@ test("音程の動き：上げると高さが変わる。1回に動くのは、�
     assert.ok(Math.abs(a - b) <= 2);
   }
 });
+
+test("音の長さのつまみ：0で15%、1で100%", async () => {
+  const { holdFraction } = await import("./sequencer.ts");
+  assert.equal(holdFraction(1), 1);
+  assert.ok(Math.abs(holdFraction(0) - 0.15) < 1e-9);
+  assert.ok(holdFraction(0.6) > holdFraction(0.3));
+});
+
+test("連打：同じ断片を続けて打つことが、それなりに多い（4割前後）", () => {
+  let same = 0;
+  let all = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const events = planOrder(planRhythm(STEPS, 4, shape(0.8), createRng(seed)), 12, 0, createRng(seed + 100));
+    for (let i = 1; i < events.length; i++) {
+      all++;
+      if (events[i].slice === events[i - 1].slice) same++;
+    }
+  }
+  assert.ok(same / all > 0.35 && same / all < 0.6, String(same / all));
+});

@@ -13,6 +13,13 @@ export interface ShapeParams {
   onBeat: number;
   /** 音程の動き：断片の高さを、近い高さへ少しずつ動かす。 */
   motion: number;
+  /** 音の長さ：次に打つ所までの、どれだけ鳴らすか（0で短く切る、1で次まで伸ばす）。 */
+  hold: number;
+}
+
+/** 音の長さのつまみ（0〜1）を、次に打つ所までに鳴らす割合にする（0で15%、1で100%）。 */
+export function holdFraction(hold: number): number {
+  return 0.15 + 0.85 * clamp01(hold);
 }
 
 /** 打つ1回：何ステップ目から、何ステップぶん、どの断片を、何半音ずらして。 */
@@ -81,7 +88,7 @@ export function planRhythm(
 
 /**
  * どの断片を打つか・どの高さで打つか。
- * 前と同じ断片をもう一度（連打）、前の続きの断片、どれでも、の3つから偶然で選ぶ。
+ * 前と同じ断片をもう一度（連打、45%）、前の続きの断片（15%）、どれでも、の3つから偶然で選ぶ。
  */
 export function planOrder(
   hits: { step: number; len: number }[],
@@ -99,7 +106,7 @@ export function planOrder(
     const any = randInt(sliceCount, rng);
     const m = rng();
     const move = moves[randInt(moves.length, rng)];
-    const slice = prev < 0 ? any : r < 0.3 ? prev : r < 0.45 ? (prev + 1) % sliceCount : any;
+    const slice = prev < 0 ? any : r < 0.45 ? prev : r < 0.6 ? (prev + 1) % sliceCount : any;
     if (m < clamp01(motion)) rung = Math.min(PITCH_LADDER.length - 1, Math.max(0, rung + move));
     prev = slice;
     return { step, len, slice, pitch: PITCH_LADDER[rung] };

@@ -4,7 +4,7 @@ import type { Phrase } from "../phrase/types.ts";
 import { renderCollage, type CollageLane } from "./collage.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
-import { STEPS_PER_BEAT, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
+import { STEPS_PER_BEAT, holdFraction, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
 import { cutSlices } from "./slicer.ts";
 import { effectiveParams, type Lane, type Song } from "./types.ts";
 
@@ -76,13 +76,13 @@ export interface CollageResult {
 }
 
 /**
- * 曲を作る：層ごとに、曲を曲のBPMで1本の波形に書き出し、断片に切り、格子に打って、全部の層を重ねる。
+ * 曲を作る：層ごとに、曲を曲のBPMで1本の波形に書き出し（余韻なしなら、リバーブ・ディレイを外して）、断片に切り、格子に打って、全部の層を重ねる。
  * フレーズ自身のBPMは関係ない。ほかの層の調は、いちばん上の層の調に寄せる。
  */
 export async function buildCollage(
   song: Song,
   phrases: Phrase[],
-  render: (phrase: Phrase, bpm: number) => Promise<Pcm>,
+  render: (phrase: Phrase, bpm: number, opts: { dry: boolean }) => Promise<Pcm>,
   sampleRate: number,
 ): Promise<CollageResult | null> {
   const sources = collectSources(song, phrases);
@@ -96,7 +96,7 @@ export async function buildCollage(
   const built = await Promise.all(
     lanes.map(async (lane) => {
       const phrase = byId.get(lane.phraseId)!;
-      const pcm = await render(phrase, song.bpm);
+      const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし
       const params = effectiveParams(song.params, lane);
       const slices = cutSlices(pcm, sampleRate, { mode: params.mode, size: params.size }, createRng(lane.cutSeed));
@@ -105,7 +105,7 @@ export async function buildCollage(
       const key = phraseKey(phrase);
       const keyShift = key && baseKey ? transposeSemitones(key, baseKey) : 0;
       const gain = lane.muted ? 0 : 0.9 * (lane.volume ?? 1);
-      const collage: CollageLane = { pcm, slices, events, keyShift, gain };
+      const collage: CollageLane = { pcm, slices, events, keyShift, gain, holdFraction: holdFraction(params.hold) };
       const view: LaneView = {
         phraseId: phrase.id,
         name: phrase.name,
