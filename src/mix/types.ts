@@ -26,8 +26,16 @@ export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold"
 export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold"];
 export const MAX_LANE_VOLUME = 1.5;
 
+/**
+ * 刻み方のモード。
+ * music：音楽モード（拍の格子で切り、コードの流れと1拍目を守り、パターンをくり返す）。
+ * material：素材モード（phrz風。アタックや等分で自由に切って、偶然で打つ）。
+ */
+export type ChopStyle = "music" | "material";
+
 /** 形と切り方の設定。 */
 export interface SongParams extends ShapeParams {
+  style: ChopStyle;
   /** 切り方：アタックで切るか、等分に切るか。 */
   mode: CutMode;
   /** 余韻なし：刻む前の書き出しで、リバーブ・ディレイを外す（断片同士がにじまない）。 */
@@ -64,6 +72,7 @@ export const LENGTH_OPTIONS = [4, 8, 16, 32];
 export const DEFAULT_BPM = 120;
 
 export const DEFAULT_PARAMS: SongParams = {
+  style: "music",
   mode: "transient",
   busy: 0.5,
   breaks: 0,
@@ -159,6 +168,7 @@ export function migrateSong(raw: unknown): Song {
     }
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
     if (typeof p.dry === "boolean") song.params.dry = p.dry;
+    if (p.style === "music" || p.style === "material") song.params.style = p.style;
   }
   return song;
 }

@@ -1,11 +1,12 @@
 import { createRng } from "../theory/rng.ts";
 import { keyShortName } from "../theory/key.ts";
-import type { Phrase } from "../phrase/types.ts";
+import { totalBeats, type Phrase } from "../phrase/types.ts";
 import { renderCollage, type CollageLane } from "./collage.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
 import { STEPS_PER_BEAT, holdFraction, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
-import { cutSlices } from "./slicer.ts";
+import { cutSlices, type Slice } from "./slicer.ts";
+import { musicSlices, musicSlotSteps, planMusicLane } from "./musicChop.ts";
 import { effectiveParams, type Lane, type Song } from "./types.ts";
 
 /** 刻む曲：音符のある曲だけ。選んだ順。 */
@@ -94,18 +95,40 @@ export async function buildCollage(
   const baseKey = phraseKey(byId.get(lanes[0].phraseId)!);
 
   const built = await Promise.all(
-    lanes.map(async (lane) => {
+    lanes.map(async (lane, laneIndex) => {
       const phrase = byId.get(lane.phraseId)!;
       const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし
       const params = effectiveParams(song.params, lane);
-      const slices = cutSlices(pcm, sampleRate, { mode: params.mode, size: params.size }, createRng(lane.cutSeed));
-      const hits = planRhythm(totalSteps, song.beatsPerBar, params, createRng(lane.rhythmSeed));
-      const events = planOrder(hits, slices.length, params.motion, createRng(lane.orderSeed));
+      let slices: Slice[];
+      let events: LaneEvent[];
+      if (song.params.style === "music") {
+        // 音楽モード：拍の格子で切り、元の同じ小節（コード）から取り、パターンをくり返す。層は交代で鳴らす
+        const stepsPerBar = song.beatsPerBar * STEPS_PER_BEAT;
+        const slotSteps = musicSlotSteps(params.size);
+        const srcBars = Math.max(1, Math.floor((totalBeats(phrase) * STEPS_PER_BEAT) / stepsPerBar));
+        slices = musicSlices({ srcBars, stepsPerBar, slotSteps, stepSamples, length: pcm.l.length });
+        events = planMusicLane({
+          totalSteps,
+          stepsPerBar,
+          srcBars,
+          slotSteps,
+          laneIndex,
+          laneCount: lanes.length,
+          params,
+          cutRng: createRng(lane.cutSeed),
+          rhythmRng: createRng(lane.rhythmSeed),
+          orderRng: createRng(lane.orderSeed),
+        });
+      } else {
+        slices = cutSlices(pcm, sampleRate, { mode: params.mode, size: params.size }, createRng(lane.cutSeed));
+        const hits = planRhythm(totalSteps, song.beatsPerBar, params, createRng(lane.rhythmSeed));
+        events = planOrder(hits, slices.length, params.motion, createRng(lane.orderSeed));
+      }
       const key = phraseKey(phrase);
       const keyShift = key && baseKey ? transposeSemitones(key, baseKey) : 0;
       const gain = lane.muted ? 0 : 0.9 * (lane.volume ?? 1);
-      const collage: CollageLane = { pcm, slices, events, keyShift, gain, holdFraction: holdFraction(params.hold) };
+      const collage: CollageLane = { pcm, slices, events, keyShift, gain, holdFraction: holdFraction(params.hold, song.params.style) };
       const view: LaneView = {
         phraseId: phrase.id,
         name: phrase.name,

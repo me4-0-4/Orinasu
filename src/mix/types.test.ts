@@ -86,3 +86,9 @@ test("音の長さ・余韻の設定を読む。古いデータには無いの�
   assert.equal(s.params.dry, false);
   assert.deepEqual(s.lanes![0].shift, { hold: -0.3 });
 });
+
+test("刻み方のモード：初期は音楽モード。保存データから読める", () => {
+  assert.equal(createEmptySong().params.style, "music");
+  assert.equal(migrateSong({ params: { style: "material" } }).params.style, "material");
+  assert.equal(migrateSong({ params: { style: "???" } }).params.style, "music");
+});

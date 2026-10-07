@@ -17,9 +17,12 @@ export interface ShapeParams {
   hold: number;
 }
 
-/** 音の長さのつまみ（0〜1）を、次に打つ所までに鳴らす割合にする（0で15%、1で100%）。 */
-export function holdFraction(hold: number): number {
-  return 0.15 + 0.85 * clamp01(hold);
+/**
+ * 音の長さのつまみ（0〜1）を、次に打つ所までに鳴らす割合にする。
+ * 素材モードは 0で15%〜1で100%。音楽モードは流れを切りすぎないよう、0で50%〜1で100%。
+ */
+export function holdFraction(hold: number, style: "music" | "material" = "material"): number {
+  return style === "music" ? 0.5 + 0.5 * clamp01(hold) : 0.15 + 0.85 * clamp01(hold);
 }
 
 /** 打つ1回：何ステップ目から、何ステップぶん、どの断片を、何半音ずらして。 */

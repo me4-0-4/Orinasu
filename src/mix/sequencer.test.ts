@@ -79,6 +79,9 @@ test("音の長さのつまみ：0で15%、1で100%", async () => {
   assert.equal(holdFraction(1), 1);
   assert.ok(Math.abs(holdFraction(0) - 0.15) < 1e-9);
   assert.ok(holdFraction(0.6) > holdFraction(0.3));
+  // 音楽モードは切りすぎない
+  assert.equal(holdFraction(0, "music"), 0.5);
+  assert.ok(Math.abs(holdFraction(0.6, "music") - 0.8) < 1e-9);
 });
 
 test("連打：同じ断片を続けて打つことが、それなりに多い（4割前後）", () => {
