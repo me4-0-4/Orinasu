@@ -279,8 +279,8 @@ const mixPanel = buildMixPanel({
     stopPreview();
     if (transport.state !== "stopped") transport.stop();
     allSoundsOff();
-    // 山とマクロは、曲を通して鳴らすときだけ効かせる（セクションの試聴は素のまま）
-    const shaping = song.energy && song.macros ? { curve: song.energy, macros: song.macros } : undefined;
+    // 山とマクロは、山をオンにしていて曲を通して鳴らすときだけ効かせる（セクションの試聴は素のまま）
+    const shaping = song.energyOn && song.energy && song.macros ? { curve: song.energy, macros: song.macros } : undefined;
     songPlayer.start(sections, mode, shaping);
   },
   onStop: stopSongPlayer,
@@ -900,7 +900,7 @@ tabBar.className = "tab-bar";
 const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "perform", label: "演奏", panel: performTab },
   { id: "phrase", label: "フレーズ", panel: phraseTab },
-  { id: "mix", label: "MIX", panel: mixPanel.el },
+  { id: "mix", label: "刻む", panel: mixPanel.el },
 ];
 function selectTab(id: string): void {
   if (id !== "mix") {

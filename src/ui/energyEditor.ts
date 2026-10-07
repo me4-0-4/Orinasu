@@ -14,13 +14,14 @@ import {
 import { sectionBeats, type Section } from "../mix/types";
 
 export interface EnergyEditorHandlers {
+  onEnabledChange: (enabled: boolean) => void;
   onCurveChange: (curve: EnergyCurve) => void;
   onMacrosChange: (macros: Macro[]) => void;
 }
 
 export interface EnergyEditor {
   el: HTMLElement;
-  setData: (curve: EnergyCurve, macros: Macro[], sections: Section[]) => void;
+  setData: (curve: EnergyCurve, macros: Macro[], sections: Section[], enabled: boolean) => void;
   /** 再生位置（0〜1）。鳴っていないときはnull。 */
   setProgress: (t: number | null) => void;
 }
@@ -34,6 +35,7 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
   let macros: Macro[] = [];
   let sections: Section[] = [];
   let progress: number | null = null;
+  let enabled = false;
   let width = 600;
   /** ドラッグ中に動かしている点の番号。ペンでなぞっているときは null。 */
   let dragIndex: number | null = null;
@@ -47,12 +49,30 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
   const root = document.createElement("div");
   root.className = "energy-editor";
 
+  // 見出し：山を使うかどうかのスイッチ。オフのあいだは、これだけ見せる
+  const switchRow = document.createElement("label");
+  switchRow.className = "preset-row energy-switch";
+  const useCheck = document.createElement("input");
+  useCheck.type = "checkbox";
+  useCheck.addEventListener("change", () => {
+    enabled = useCheck.checked;
+    applyEnabled();
+    draw();
+    handlers.onEnabledChange(enabled);
+  });
+  const title = document.createElement("span");
+  title.className = "panel-heading";
+  title.textContent = "盛り上がりの山を使う";
+  const switchHint = document.createElement("span");
+  switchHint.className = "mix-info";
+  switchHint.textContent = "曲の流れに沿って、層の数・音の密度などを自動で動かす";
+  switchRow.append(useCheck, title, switchHint);
+
+  const body = document.createElement("div");
+  body.className = "energy-body";
+
   const head = document.createElement("div");
   head.className = "preset-row";
-  const title = document.createElement("div");
-  title.className = "panel-heading";
-  title.textContent = "盛り上がりの山";
-  head.appendChild(title);
   for (const shape of Object.keys(curveShapeLabels) as CurveShape[]) {
     const b = document.createElement("button");
     b.type = "button";
@@ -109,7 +129,14 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
   const macroBox = document.createElement("div");
   macroBox.className = "macro-list";
 
-  root.append(head, canvas, macroBox);
+  body.append(head, canvas, macroBox);
+  root.append(switchRow, body);
+
+  function applyEnabled(): void {
+    useCheck.checked = enabled;
+    body.hidden = !enabled;
+  }
+  applyEnabled();
 
   // --- 描画 ---
 
@@ -339,7 +366,9 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
 
   return {
     el: root,
-    setData(nextCurve, nextMacros, nextSections) {
+    setData(nextCurve, nextMacros, nextSections, nextEnabled) {
+      enabled = nextEnabled;
+      applyEnabled();
       if (nextCurve !== curve) {
         // 曲を読み込み直したなど、こちらが出した線ではないとき：履歴は引き継がない
         history.length = 0;

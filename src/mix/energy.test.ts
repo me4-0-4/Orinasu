@@ -69,3 +69,13 @@ test("マクロ：山の高さで from〜to に写り、オフなら無効", () 
   filter.enabled = false;
   assert.equal(getMacro(macros, "filter"), undefined);
 });
+
+test("初期マクロ：山が最低でも、層は過半数が鳴り、音も8割は残る", () => {
+  const macros = defaultMacros();
+  const layers = getMacro(macros, "layers")!;
+  const density = getMacro(macros, "density")!;
+  const roles = ["drums", "bass", "chords", "other", "melody"] as const;
+  const audible = roles.filter((r) => layerAudible(r, [...roles], macroValue(layers, 0)));
+  assert.ok(audible.length >= 3, String(audible.length));
+  assert.ok(macroValue(density, 0) >= 0.8);
+});
