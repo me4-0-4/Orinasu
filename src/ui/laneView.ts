@@ -4,6 +4,11 @@ import type { LaneEvent } from "../mix/sequencer";
 export interface LaneRow {
   name: string;
   locked: boolean;
+  muted: boolean;
+  /** 全体と違う形（ずらし・切り方・音量）を持っているか。 */
+  custom: boolean;
+  /** いま選んでいる層か。 */
+  selected: boolean;
   events: LaneEvent[];
 }
 
@@ -28,7 +33,7 @@ const EMPTY_H = 72;
 /**
  * phrz の円環を、横に並べた直線にしたもの。層（＝刻む曲）1つが1本の線で、左が頭、右が終わり。
  * 線の上の小さな棒が「打った断片」。色は断片の番号（同じ色＝同じ断片の連打）、上下の位置は音程。
- * 左の名前をタップすると、その層を固定できる。
+ * 左の名前をタップすると、その層を選べる（選んだ層は、その層だけの形を変えられる）。
  */
 export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
   const root = document.createElement("div");
@@ -87,12 +92,17 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
     data.lanes.forEach((lane, i) => {
       const top = HEAD_H + i * ROW_H;
       const mid = top + ROW_H / 2;
-      if (lane.locked) {
-        g.fillStyle = "rgba(94,180,255,0.12)";
+      if (lane.selected) {
+        g.fillStyle = "rgba(255,255,255,0.07)";
+        g.fillRect(0, top, width, ROW_H);
+        g.fillStyle = css("--accent-green", "#3ee6b0");
+        g.fillRect(0, top + 2, 3, ROW_H - 4);
+      } else if (lane.locked) {
+        g.fillStyle = "rgba(94,180,255,0.10)";
         g.fillRect(0, top, width, ROW_H);
       }
-      g.fillStyle = lane.locked ? blue : text;
-      g.fillText(`${lane.locked ? "● " : ""}${lane.name}`, 6, mid, GUTTER - 10);
+      g.fillStyle = lane.muted ? dim : lane.locked ? blue : text;
+      g.fillText(`${lane.locked ? "● " : ""}${lane.name}${lane.custom ? " ＊" : ""}`, 8, mid, GUTTER - 12);
       // 線
       g.strokeStyle = "rgba(255,255,255,0.18)";
       g.beginPath();
@@ -100,12 +110,14 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
       g.lineTo(width, mid);
       g.stroke();
       // 打った断片
+      g.globalAlpha = lane.muted ? 0.25 : 1;
       for (const ev of lane.events) {
         const hue = (ev.slice * 47) % 360;
         g.fillStyle = `hsl(${hue} 75% 62%)`;
         const y = mid - 3 - (ev.pitch / 12) * 8;
         g.fillRect(GUTTER + ev.step * sx, y, Math.max(2, ev.len * sx - 1), 6);
       }
+      g.globalAlpha = 1;
     });
 
     if (progress !== null) {

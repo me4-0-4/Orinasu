@@ -873,7 +873,11 @@ const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "phrase", label: "フレーズ", panel: phraseTab },
   { id: "mix", label: "刻む", panel: mixPanel.el },
 ];
+let currentTab = "perform";
 function selectTab(id: string): void {
+  currentTab = id;
+  // 刻むタブでは、下の鍵盤は使わないので隠す（CSS で body[data-tab="mix"] を見る）
+  document.body.dataset.tab = id;
   if (id !== "mix") mixPanel.stop();
   pianoRoll.deleteButton.hidden = id !== "phrase"; // ノート削除はピアノロールのあるタブだけ
   for (const tab of tabs) {
@@ -1030,6 +1034,14 @@ window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   const target = e.target as HTMLElement | null;
   if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) return;
+  if (currentTab === "mix") {
+    // 刻むタブ：鍵盤は隠しているので音符は鳴らさない。スペースは刻んだ曲の再生⇔停止
+    if (e.code === "Space") {
+      e.preventDefault();
+      mixPanel.togglePlay();
+    }
+    return;
+  }
   if (e.code === "Space") {
     // スペースキーはページスクロールやフォーカス中ボタンのクリックを引き起こすため、
     // それを止めた上で「再生⇔停止」専用のキーにする（録音の開始はしない）。

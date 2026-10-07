@@ -28,6 +28,7 @@ export function renderCollage(
   const fadeMax = Math.max(1, Math.round(FADE_SECONDS * opts.sampleRate));
   for (const lane of lanes) {
     const gain = lane.gain ?? 0.9;
+    if (gain <= 0) continue; // ミュートした層
     const { l: sl, r: sr } = lane.pcm;
     for (const ev of lane.events) {
       const slice = lane.slices[ev.slice];

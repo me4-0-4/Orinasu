@@ -346,6 +346,11 @@ body {
   flex: none;
 }
 
+/* 刻むタブでは、下の鍵盤を使わない */
+body[data-tab="mix"] .app-footer {
+  display: none;
+}
+
 .footer-drum-pads {
   grid-template-columns: repeat(5, 1fr);
   height: 100px;
@@ -972,8 +977,10 @@ body {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-  position: sticky;
-  top: 0;
+}
+
+.mix-stage-pane > .mix-rule {
+  margin-top: 8px;
 }
 
 .mix-side-pane {
@@ -1103,6 +1110,17 @@ body {
 
 .mix-field-row {
   grid-template-columns: 6.5em minmax(0, 1fr);
+}
+
+.mix-lane-title {
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.mix-lane-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .mix-field-row .mix-name {

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
-import { buildCollage, collectSources, rerollLanes, syncLanes } from "./collageSong.ts";
+import { applySeeds, buildCollage, collectSources, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
@@ -78,4 +78,41 @@ test("同じ種なら同じ曲になる", async () => {
   const a = (await buildCollage(song, phrases, render, 1000))!;
   const b = (await buildCollage(song, phrases, render, 1000))!;
   assert.deepEqual(a.lanes[0].events, b.lanes[0].events);
+});
+
+const steadyRender = async (): Promise<Pcm> => {
+  const l = new Float32Array(4000).map((_, i) => Math.sin(i / 7) * (i % 500 < 50 ? 1 : 0.1));
+  return { l, r: l.slice() };
+};
+
+test("層ごとのずらし：密度を上げた層だけ、打つ数が増える。ほかの層はそのまま", async () => {
+  const phrases = [phrase("a", 100), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"] };
+  song.lanes = syncLanes(song, seq);
+  const before = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  song.lanes[0] = { ...song.lanes[0], shift: { busy: 0.4 } };
+  const after = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  assert.ok(after.lanes[0].events.length > before.lanes[0].events.length);
+  assert.deepEqual(after.lanes[1].events, before.lanes[1].events);
+});
+
+test("ミュートした層は鳴らない（線には出る）", async () => {
+  const phrases = [phrase("a", 100)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a"] };
+  song.lanes = syncLanes(song, seq);
+  song.lanes[0].muted = true;
+  const out = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  assert.ok(out.pcm.l.every((x) => x === 0));
+  assert.ok(out.lanes[0].muted && out.lanes[0].events.length > 0);
+});
+
+test("ひとつ戻すは、種だけを戻す（形のずらし・固定はそのまま）", () => {
+  const lanes = syncLanes({ materialIds: ["a", "b"], lanes: undefined }, seq);
+  const snap = seedSnapshot(lanes);
+  const changed = rerollLanes(lanes, "all", seq).map((l, i) => (i === 0 ? { ...l, shift: { busy: 0.2 }, locked: true } : l));
+  const back = applySeeds(changed, snap);
+  assert.equal(back[0].cutSeed, lanes[0].cutSeed);
+  assert.equal(back[1].orderSeed, lanes[1].orderSeed);
+  assert.deepEqual(back[0].shift, { busy: 0.2 });
+  assert.equal(back[0].locked, true);
 });
