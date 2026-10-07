@@ -39,8 +39,10 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
   let dragIndex: number | null = null;
   let stroke: EnergyPoint[] | null = null;
   let strokeBase: EnergyCurve = [];
-  /** いちばん最後に選んだ型。「型に戻す」で、描き直した線をこの形に戻す。 */
-  let lastShape: CurveShape = "jpop";
+  /** 変える前の線（「ひとつ戻す」用）。新しいものが後ろ。 */
+  const history: EnergyCurve[] = [];
+  /** 操作の最中だけ持つ、操作を始める前の線。変わっていたら履歴に積む。 */
+  let pending: EnergyCurve | null = null;
 
   const root = document.createElement("div");
   root.className = "energy-editor";
@@ -58,28 +60,45 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
     b.textContent = curveShapeLabels[shape];
     b.title = "型を選ぶと線がその形になる。あとから描き直せる";
     b.addEventListener("click", () => {
-      lastShape = shape;
+      pushHistory(copyCurve(curve));
       curve = shapeCurve(shape);
       draw();
       handlers.onCurveChange(curve);
     });
     head.appendChild(b);
   }
-  const reset = document.createElement("button");
-  reset.type = "button";
-  reset.className = "preset-button";
-  reset.textContent = "型に戻す";
-  reset.title = "描き直した線を、最後に選んだ型（まだ選んでいなければJ-POP型）の形に戻す";
-  reset.addEventListener("click", () => {
-    curve = shapeCurve(lastShape);
+  const undo = document.createElement("button");
+  undo.type = "button";
+  undo.className = "preset-button";
+  undo.textContent = "ひとつ戻す";
+  undo.title = "線を変える前の形に戻す（何回でも）";
+  undo.addEventListener("click", () => {
+    const prev = history.pop();
+    if (!prev) return;
+    curve = prev;
+    updateUndo();
     draw();
     handlers.onCurveChange(curve);
   });
-  head.appendChild(reset);
+  head.appendChild(undo);
   const hint = document.createElement("span");
   hint.className = "mix-info";
   hint.textContent = "ドラッグでなぞって描く／点をつかんで動かす／点をダブルクリックで消す";
   head.appendChild(hint);
+
+  const MAX_HISTORY = 50;
+  function copyCurve(c: EnergyCurve): EnergyCurve {
+    return c.map((p) => ({ t: p.t, v: p.v }));
+  }
+  function updateUndo(): void {
+    undo.disabled = history.length === 0;
+  }
+  function pushHistory(before: EnergyCurve): void {
+    history.push(before);
+    if (history.length > MAX_HISTORY) history.shift();
+    updateUndo();
+  }
+  updateUndo();
 
   const canvas = document.createElement("canvas");
   canvas.className = "energy-canvas";
@@ -200,6 +219,7 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
     canvas.setPointerCapture(e.pointerId);
     const { x, y } = pos(e);
     const hit = nearestPoint(x, y);
+    pending = copyCurve(curve);
     if (hit !== null) {
       dragIndex = hit;
     } else {
@@ -233,6 +253,8 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
     dragIndex = null;
     stroke = null;
     curve = normalizeCurve(curve);
+    if (pending && JSON.stringify(pending) !== JSON.stringify(curve)) pushHistory(pending);
+    pending = null;
     draw();
     handlers.onCurveChange(curve);
   }
@@ -243,6 +265,7 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
     const { x, y } = pos(e as unknown as PointerEvent);
     const hit = nearestPoint(x, y);
     if (hit === null || curve.length <= 2) return;
+    pushHistory(copyCurve(curve));
     curve = curve.filter((_, i) => i !== hit);
     draw();
     handlers.onCurveChange(curve);
@@ -317,6 +340,11 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
   return {
     el: root,
     setData(nextCurve, nextMacros, nextSections) {
+      if (nextCurve !== curve) {
+        // 曲を読み込み直したなど、こちらが出した線ではないとき：履歴は引き継がない
+        history.length = 0;
+        updateUndo();
+      }
       curve = nextCurve;
       macros = nextMacros;
       sections = nextSections;
