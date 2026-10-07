@@ -1,4 +1,4 @@
-import type { Pcm } from "../mix/audioChop";
+import type { Pcm } from "../mix/pcm";
 
 /** 刻んだ波形を、つなぎ目なしで繰り返し鳴らす。 */
 export class LoopPlayer {

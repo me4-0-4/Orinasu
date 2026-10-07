@@ -3,42 +3,43 @@ import assert from "node:assert/strict";
 import { createEmptySong, formatDuration, migrateSong, songSeconds } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
-  const s = createEmptySong(); // 8小節・4拍・120BPM
-  assert.equal(songSeconds(s), 16);
-  assert.equal(songSeconds({ ...s, bpm: 60 }), 32);
-  assert.equal(songSeconds({ ...s, lengthBars: 4, bpm: 90 }), 10.666666666666666);
+  const s = createEmptySong(); // 4小節・4拍・120BPM
+  assert.equal(songSeconds(s), 8);
+  assert.equal(songSeconds({ ...s, bpm: 60 }), 16);
   assert.equal(formatDuration(65), "1:05");
   assert.equal(formatDuration(8), "0:08");
 });
 
-test("古い形（セクションを並べた曲）からは、名前・選んだ曲・BPMだけ引き継ぐ", () => {
+test("古い形の曲からは、名前・選んだ曲・BPM・長さだけ引き継ぐ", () => {
   const old = {
-    id: "song",
     name: "むかしの曲",
     materialIds: ["a", "b"],
     sections: [{ id: "s1", layers: [] }],
+    plan: [{ kind: "play", from: "a", dst: 0, len: 4, src: 0 }],
+    baseId: "a",
     bpm: 100,
+    lengthBars: 16,
     energy: [{ t: 0, v: 0.2 }],
-    macros: [],
     updatedAt: 5,
   };
   const s = migrateSong(old);
   assert.equal(s.name, "むかしの曲");
   assert.deepEqual(s.materialIds, ["a", "b"]);
   assert.equal(s.bpm, 100);
-  assert.equal(s.lengthBars, 8);
-  assert.equal(s.plan, undefined);
-  assert.equal("sections" in s, false);
+  assert.equal(s.lengthBars, 16);
+  assert.equal(s.lanes, undefined);
+  assert.equal("sections" in s || "plan" in s, false);
+  assert.equal(s.params.busy, 0.5);
 });
 
-test("壊れたデータや範囲外の値は、初期値に戻す。新しい形はそのまま読める", () => {
+test("いまの形はそのまま読める。壊れた値は初期値に戻す", () => {
+  const lanes = [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, locked: true }, { phraseId: 5 }];
+  const s = migrateSong({ ...createEmptySong(), lanes, params: { busy: 2, breaks: 0.3, mode: "divide", size: "x" } });
+  assert.deepEqual(s.lanes, [lanes[0]]);
+  assert.equal(s.params.busy, 1);
+  assert.equal(s.params.breaks, 0.3);
+  assert.equal(s.params.mode, "divide");
+  assert.equal(s.params.size, 0.5);
   assert.equal(migrateSong(null).bpm, 120);
-  assert.equal(migrateSong({ bpm: 9999, lengthBars: 7 }).bpm, 120);
-  assert.equal(migrateSong({ bpm: 9999, lengthBars: 7 }).lengthBars, 8);
-  const plan = [{ kind: "play", from: "a", dst: 0, len: 4, src: 0 }];
-  const s = migrateSong({ ...createEmptySong(), plan, baseId: "a", lengthBars: 16, bpm: 140 });
-  assert.equal(s.lengthBars, 16);
-  assert.equal(s.bpm, 140);
-  assert.deepEqual(s.plan, plan);
-  assert.equal(s.baseId, "a");
+  assert.equal(migrateSong({ bpm: 9999, lengthBars: 7 }).lengthBars, 4);
 });

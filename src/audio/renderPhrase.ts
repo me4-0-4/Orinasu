@@ -3,7 +3,7 @@ import { DrumMachine, noteNumberToDrum } from "./drums";
 import { DEFAULT_VOLUME, LayerSynths } from "./layerSynths";
 import { quantizeBeat } from "../phrase/quantize";
 import { totalBeats, type Phrase } from "../phrase/types";
-import type { Pcm } from "../mix/audioChop";
+import type { Pcm } from "../mix/pcm";
 
 /** リバーブ・ディレイの余韻を取っておく長さ（秒）。余韻は曲の頭に重ねて、繰り返してもつながるようにする。 */
 const TAIL_SECONDS = 2.5;
