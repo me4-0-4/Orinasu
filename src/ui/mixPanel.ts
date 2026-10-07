@@ -106,7 +106,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   root.className = "tab-panel mix-tab";
   const split = document.createElement("div");
   split.className = "mix-split";
-  const chopStage = buildChopStage();
+  /** 固定している小節（0から数える）。振っても、その小節の刻み方は変えない。 */
+  const lockedBars = new Set<number>();
+  const chopStage = buildChopStage((bar) => {
+    if (!draft) return;
+    if (lockedBars.has(bar)) lockedBars.delete(bar);
+    else lockedBars.add(bar);
+    renderDraft();
+  });
 
   const energyEditor = buildEnergyEditor({
     onEnabledChange: (on) => {
@@ -199,7 +206,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const draftEmpty = document.createElement("div");
   draftEmpty.className = "layer-empty";
   draftEmpty.hidden = true;
-  const rollButton = button("振る", () => generate("new"), "roll-button", "材料から新しく切り貼りする。固定した層は残す");
+  const rollButton = button("振る", () => generate("new"), "roll-button", "曲を新しく刻む。メインの曲も変わる。固定した小節は残す");
   const previewDraft = button("試聴", () => togglePreview("draft"), "preset-button");
   previewDraft.hidden = true;
   const undoButton = button("ひとつ戻す", () => undoDraft(), "preset-button", "振る前に戻す（何回でも）");
@@ -210,30 +217,24 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const draftTools = document.createElement("div");
   draftTools.className = "preset-row";
   draftTools.append(
-    button(remixLabels.replan, () => generate("replan"), "preset-button", "同じ素材のまま、刻み方だけ新しくする（固定した層は残す）"),
-    button(remixLabels.source, () => generate("source"), "preset-button", "同じ刻み方のまま、素材だけ替える（固定した層は残す）"),
+    button(remixLabels.replan, () => generate("replan"), "preset-button", "メインの曲はそのまま、刻み方だけ新しくする（固定した小節は残す）"),
     button("固定を全部外す", () => {
-      if (!draft) return;
-      for (const l of draft.layers) l.locked = false;
+      lockedBars.clear();
       renderDraft();
     }, "preset-button"),
   );
   draftTools.hidden = true;
 
-  // --- 固定 ---
+  // --- 固定（ステージの小節をタップ）と、音づくり ---
+  const lockInfo = document.createElement("div");
+  lockInfo.className = "layer-empty";
   const draftLayers = document.createElement("div");
   draftLayers.className = "layer-list";
-  const layersEmpty = document.createElement("div");
-  layersEmpty.className = "layer-empty";
-  layersEmpty.textContent = "「振る」と、ここに層が出る";
-  const soundButton = button("音づくり", () => {
+  const soundButton = button("音づくりを開く", () => {
     soundOpen = !soundOpen;
     renderDraft();
   }, "preset-button", "層ごとの音量・ミュート・ソロ・パン・リバーブ・ディレイ・コンプ");
-  const draftBox = document.createElement("div");
-  draftBox.className = "mix-draft";
-  draftBox.append(draftLayers, soundButton);
-  draftBox.hidden = true;
+  soundButton.hidden = true;
 
   // --- 4 並べる ---
   const draftName = document.createElement("input");
@@ -339,6 +340,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       draft = duplicateSection(section);
       draft.name = section.name;
       editingId = section.id;
+      lockedBars.clear();
       history.length = 0;
       undoButton.disabled = true;
       renderDraft();
@@ -369,9 +371,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const sidePane = document.createElement("div");
   sidePane.className = "mix-side-pane";
   sidePane.append(
-    rule("材料", "使うフレーズを選ぶ", materialEmpty, materialList),
+    rule("材料", "刻む曲（フレーズ）を選ぶ。複数なら、曲をまたいで刻む", materialEmpty, materialList),
     rule("刻み", "振るときの偶然の強さ", lengthRow, busyRow, breaksRow, sizeRow),
-    rule("固定", "層をタップで固定。固定した層は、振っても変わらない", layersEmpty, draftBox),
+    rule("固定", "左のステージの小節をタップで固定。固定した小節は、振っても変わらない", lockInfo),
+    rule("音づくり", "層ごとの音量・ミュート・ミキサー", soundButton, draftLayers),
   );
   split.append(stagePane, sidePane);
   const arrange = rule("並べる", "セクションを曲にして、通して聴く", addRow, songMeta, timeline, selBar, energyEditor.el);
@@ -420,24 +423,26 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   function generate(mode: RemixMode): void {
-    const materials = collectMaterials(materialPhrases());
-    if (materials.length === 0) {
+    const sources = collectMaterials(materialPhrases());
+    if (sources.length === 0) {
       draftEmpty.textContent =
         song.materialIds.length === 0
           ? "先に、材料のフレーズを選んで"
-          : "材料に入れたフレーズに、音符のある層がありません";
+          : "材料に入れたフレーズに、音符がありません";
       draftEmpty.hidden = false;
       return;
     }
     const rng = createRng(randomSeed());
     pushHistory();
     if (!draft) {
-      draft = remixNew(materials, { lengthBars: draftLength, chop }, rng);
+      lockedBars.clear();
+      draft = remixNew(sources, { lengthBars: draftLength, chop }, rng);
     } else if (mode === "new" && draft.lengthBars !== draftLength) {
-      // 長さを変えたときは、固定も含めて長さに合わせて作り直す
-      draft = remixNew(materials, { lengthBars: draftLength, chop }, rng, draft);
+      // 長さを変えたときは、固定も外して長さに合わせて作り直す
+      lockedBars.clear();
+      draft = remixNew(sources, { lengthBars: draftLength, chop }, rng, draft);
     } else {
-      draft = remix(draft, mode, materials, rng, chop);
+      draft = remix(draft, mode, sources, rng, chop, [...lockedBars]);
     }
     renderDraft();
     // 試聴中なら、振り直した結果をすぐ聴けるように鳴らし直す
@@ -519,49 +524,37 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   function renderDraft(): void {
     const has = !!draft;
-    chopStage.setSection(draft);
-    draftBox.hidden = !has;
-    layersEmpty.hidden = has;
+    chopStage.setSection(draft, lockedBars);
     if (has) draftEmpty.hidden = true;
     draftTools.hidden = !has;
     previewDraft.hidden = !has;
     addRow.hidden = !has;
-    overwrite.hidden = !editingId || !song.sections.some((x) => x.id === editingId);
+    soundButton.hidden = !has;
+    soundButton.textContent = soundOpen ? "音づくりを閉じる" : "音づくりを開く";
     soundButton.className = "preset-button" + (soundOpen ? " on" : "");
+    overwrite.hidden = !editingId || !song.sections.some((x) => x.id === editingId);
+    const bars = [...lockedBars].sort((x, y) => x - y).map((b) => b + 1);
+    lockInfo.textContent = !has
+      ? "「振る」と、左のステージに小節が出る"
+      : bars.length === 0
+        ? "固定している小節：なし"
+        : `固定している小節：${bars.join("・")}小節目`;
+    draftLayers.innerHTML = "";
     if (!draft) return;
     const d = draft;
     if (document.activeElement !== draftName) draftName.value = d.name;
     draftInfo.textContent = `${d.layers.length}層 · ${d.lengthBars}小節 · ${d.bpm}BPM${d.key ? ` · ${keyShortName(d.key)}に合わせる` : ""}`;
-    draftLayers.innerHTML = "";
+    if (!soundOpen) return;
     for (const layer of d.layers) {
       const row = document.createElement("div");
-      row.className = "layer-row lock-row" + (layer.locked ? " active" : "");
-      row.tabIndex = 0;
-      row.setAttribute("role", "button");
-      row.setAttribute("aria-pressed", String(!!layer.locked));
-      row.title = "タップで固定／解除。固定すると振り直しで変わらない";
-      const toggleLock = (): void => {
-        layer.locked = !layer.locked;
-        renderDraft();
-      };
-      row.addEventListener("click", toggleLock);
-      row.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          toggleLock();
-        }
-      });
+      row.className = "layer-row";
       const label = document.createElement("span");
       label.className = "layer-role-label";
       const flags = [layer.muted ? "ミュート中" : "", layer.solo ? "ソロ" : ""].filter(Boolean).join("・");
-      label.textContent = `${roleLabels[layer.role]}（${layer.notes.length}音）${flags ? ` ${flags}` : ""}`;
-      label.title = layer.sourceLabel ?? "";
-      const badge = document.createElement("span");
-      badge.className = "lock-badge";
-      badge.textContent = layer.locked ? "固定中" : "タップで固定";
-      row.append(label, badge);
+      label.textContent = `${layer.sourceLabel ?? roleLabels[layer.role]}（${layer.notes.length}音）${flags ? ` ${flags}` : ""}`;
+      row.appendChild(label);
       draftLayers.appendChild(row);
-      if (soundOpen) draftLayers.appendChild(soundStrip(layer));
+      draftLayers.appendChild(soundStrip(layer));
     }
   }
 
@@ -704,6 +697,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       song = next;
       editingId = null;
       selected = null;
+      lockedBars.clear();
       history.length = 0;
       undoButton.disabled = true;
       renderMaterials();

@@ -11,7 +11,8 @@ function note(pitch: number, start: number, dur = 0.5): Note {
 const input = (busy: number, breaks = 0.3, size = 0.5, bars = 8, loopBars = 4) => ({
   dstBeats: bars * 4,
   beatsPerBar: 4,
-  loopBars,
+  sources: [{ id: "A", bars: loopBars }],
+  baseId: "A",
   params: { busy, breaks, size },
 });
 
@@ -29,7 +30,7 @@ function assertCovers(plan: ChopSegment[], dstBeats: number): void {
 
 test("刻み0：そのまま通すだけの計画になる", () => {
   const plan = planChops(input(0), createRng(1));
-  assert.deepEqual(plan, planStraight(32, 4));
+  assert.deepEqual(plan, planStraight(32, 4, "A"));
   assert.ok(plan.every((s) => s.kind === "play"));
 });
 
@@ -88,7 +89,7 @@ test("材料が1小節だけなら、ジャンプは出ない", () => {
 
 test("そのまま通す計画は、材料のループを繰り返すだけ", () => {
   const notes = [note(60, 0), note(62, 1), note(64, 2), note(65, 3)];
-  const out = applyPlan(notes, 4, "melody", planStraight(8, 4), 8);
+  const out = applyPlan(notes, 4, "melody", planStraight(8, 4, "A"), 8);
   assert.deepEqual(out.map((n) => n.pitch), [60, 62, 64, 65, 60, 62, 64, 65]);
   assert.deepEqual(out.map((n) => n.startBeats), [0, 1, 2, 3, 4, 5, 6, 7]);
 });
@@ -96,10 +97,10 @@ test("そのまま通す計画は、材料のループを繰り返すだけ", ()
 test("リピート：同じ断片を並べる。断片の外にはみ出す音は切る", () => {
   const notes = [note(60, 0, 3), note(62, 1)];
   const plan: ChopSegment[] = [
-    { kind: "stutter", dst: 0, len: 1, src: 0 },
-    { kind: "stutter", dst: 1, len: 1, src: 0 },
-    { kind: "stutter", dst: 2, len: 1, src: 0 },
-    { kind: "stutter", dst: 3, len: 1, src: 0 },
+    { kind: "stutter", from: "A", dst: 0, len: 1, src: 0 },
+    { kind: "stutter", from: "A", dst: 1, len: 1, src: 0 },
+    { kind: "stutter", from: "A", dst: 2, len: 1, src: 0 },
+    { kind: "stutter", from: "A", dst: 3, len: 1, src: 0 },
   ];
   const out = applyPlan(notes, 4, "melody", plan, 4);
   assert.deepEqual(out.map((n) => [n.pitch, n.startBeats, n.durationBeats]), [
@@ -112,7 +113,7 @@ test("リピート：同じ断片を並べる。断片の外にはみ出す音�
 
 test("逆回し：音の順番が逆になる", () => {
   const notes = [note(60, 0), note(62, 1), note(64, 2), note(65, 3)];
-  const plan: ChopSegment[] = [{ kind: "reverse", dst: 0, len: 4, src: 0, reverse: true }];
+  const plan: ChopSegment[] = [{ kind: "reverse", from: "A", dst: 0, len: 4, src: 0, reverse: true }];
   const out = applyPlan(notes, 4, "melody", plan, 4);
   assert.deepEqual(out.map((n) => n.pitch), [65, 64, 62, 60]);
   assert.deepEqual(out.map((n) => n.startBeats), [0.5, 1.5, 2.5, 3.5]);
@@ -121,30 +122,92 @@ test("逆回し：音の順番が逆になる", () => {
 test("抜き：ドラムだけの区間では、ドラム以外が無音になる。全層に同じ計画で効く", () => {
   const notes = [note(60, 0), note(62, 2)];
   const plan: ChopSegment[] = [
-    { kind: "play", dst: 0, len: 2, src: 0 },
-    { kind: "break", dst: 2, len: 2, src: 2, mask: ["drums"] },
+    { kind: "play", from: "A", dst: 0, len: 2, src: 0 },
+    { kind: "break", from: "A", dst: 2, len: 2, src: 2, mask: ["drums"] },
   ];
   assert.deepEqual(applyPlan(notes, 4, "melody", plan, 4).map((n) => n.startBeats), [0]);
   assert.deepEqual(applyPlan(notes, 4, "drums", plan, 4).map((n) => n.startBeats), [0, 2]);
-  const silent: ChopSegment[] = [{ kind: "break", dst: 0, len: 4, src: 0, mask: [] }];
+  const silent: ChopSegment[] = [{ kind: "break", from: "A", dst: 0, len: 4, src: 0, mask: [] }];
   assert.equal(applyPlan(notes, 4, "drums", silent, 4).length, 0);
 });
 
 test("ジャンプ：材料の別の小節から取る。材料より先の位置は頭に戻って続く", () => {
   const notes = [note(60, 0), note(61, 4), note(62, 8), note(63, 12)]; // 4小節の材料
-  const plan: ChopSegment[] = [{ kind: "jump", dst: 0, len: 4, src: 8 }];
+  const plan: ChopSegment[] = [{ kind: "jump", from: "A", dst: 0, len: 4, src: 8 }];
   assert.deepEqual(applyPlan(notes, 16, "melody", plan, 4).map((n) => n.pitch), [62]);
-  const wrapped: ChopSegment[] = [{ kind: "jump", dst: 0, len: 4, src: 20 }]; // 16 を越えて、2周目の1小節目
+  const wrapped: ChopSegment[] = [{ kind: "jump", from: "A", dst: 0, len: 4, src: 20 }]; // 16 を越えて、2周目の1小節目
   assert.deepEqual(applyPlan(notes, 16, "melody", wrapped, 4).map((n) => n.pitch), [61]);
 });
 
 test("小節ごとの説明", () => {
   const plan: ChopSegment[] = [
-    { kind: "play", dst: 0, len: 4, src: 0 },
-    { kind: "play", dst: 4, len: 2, src: 4 },
-    { kind: "break", dst: 6, len: 2, src: 6, mask: ["drums"] },
-    { kind: "stutter", dst: 8, len: 2, src: 8 },
-    { kind: "stutter", dst: 10, len: 2, src: 8 },
+    { kind: "play", from: "A", dst: 0, len: 4, src: 0 },
+    { kind: "play", from: "A", dst: 4, len: 2, src: 4 },
+    { kind: "break", from: "A", dst: 6, len: 2, src: 6, mask: ["drums"] },
+    { kind: "stutter", from: "A", dst: 8, len: 2, src: 8 },
+    { kind: "stutter", from: "A", dst: 10, len: 2, src: 8 },
   ];
   assert.deepEqual(chopBarLabels(plan, 4), ["そのまま", "ドラムだけ", "リピート"]);
+});
+
+test("曲が複数なら、別の曲から取る区間が出る。曲が1つなら出ない", () => {
+  const multi = { ...input(1, 0.2, 0.5, 8, 4), sources: [{ id: "A", bars: 4 }, { id: "B", bars: 2 }] };
+  let other = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const plan = planChops(multi, createRng(seed));
+    assertCovers(plan, 32);
+    other += plan.filter((s) => s.from === "B").length;
+  }
+  assert.ok(other > 0);
+  for (let seed = 1; seed <= 60; seed++) {
+    assert.ok(planChops(input(1), createRng(seed)).every((s) => s.from === "A"));
+  }
+});
+
+test("1小節だけの曲が1つなら、ジャンプは出ない。曲が複数ならジャンプで別の曲へ飛べる", () => {
+  const multi = { ...input(1, 0, 0.5, 8, 1), sources: [{ id: "A", bars: 1 }, { id: "B", bars: 1 }] };
+  let jumps = 0;
+  for (let seed = 1; seed <= 80; seed++) {
+    jumps += planChops(multi, createRng(seed)).filter((s) => s.kind === "jump").length;
+  }
+  assert.ok(jumps > 0);
+});
+
+test("固定した小節は、前の計画のまま残る（ほかは変わる）", () => {
+  const first = planChops(input(1), createRng(3));
+  const next = planChops({ ...input(1), keep: { bars: [1, 2], plan: first } }, createRng(4));
+  const inBar = (plan: ChopSegment[], b: number) => plan.filter((s) => s.dst >= b * 4 && s.dst < (b + 1) * 4);
+  assert.deepEqual(inBar(next, 1), inBar(first, 1));
+  assert.deepEqual(inBar(next, 2), inBar(first, 2));
+  assertCovers(next, 32);
+  assert.notDeepEqual(next, first); // 固定していない小節は変わる
+});
+
+test("固定した小節の曲が材料から無くなっていたら、固定は無視して作り直す", () => {
+  const first = planChops({ ...input(1), sources: [{ id: "A", bars: 4 }, { id: "B", bars: 4 }] }, createRng(9));
+  assert.ok(first.some((s) => s.from === "B")); // 前の計画には B から取った区間がある
+  const next = planChops({ ...input(1), keep: { bars: [0, 1, 2, 3, 4, 5, 6, 7], plan: first } }, createRng(10));
+  assert.ok(next.every((s) => s.from === "A"));
+  assertCovers(next, 32);
+});
+
+test("曲ごとに取り出せる：fromId を渡すと、その曲の区間だけを使う", () => {
+  const notes = [note(60, 0), note(62, 1)];
+  const plan: ChopSegment[] = [
+    { kind: "play", from: "A", dst: 0, len: 2, src: 0 },
+    { kind: "jump", from: "B", dst: 2, len: 2, src: 0 },
+  ];
+  assert.deepEqual(applyPlan(notes, 4, "melody", plan, 4, "A").map((n) => n.startBeats), [0, 1]);
+  assert.deepEqual(applyPlan(notes, 4, "melody", plan, 4, "B").map((n) => n.startBeats), [2, 3]);
+});
+
+test("別の曲から取った小節には、ラベルに曲名が付く", () => {
+  const plan: ChopSegment[] = [
+    { kind: "play", from: "A", dst: 0, len: 4, src: 0 },
+    { kind: "jump", from: "B", dst: 4, len: 4, src: 0 },
+  ];
+  assert.deepEqual(chopBarLabels(plan, 4, { baseId: "A", byId: { A: "曲A", B: "ひこうき雲" } }), [
+    "そのまま",
+    "ジャンプ←ひこうき",
+  ]);
 });

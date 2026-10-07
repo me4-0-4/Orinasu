@@ -1065,29 +1065,6 @@ body {
   align-items: center;
 }
 
-.lock-row {
-  cursor: pointer;
-  user-select: none;
-}
-
-.lock-row.active {
-  background: rgba(62, 230, 176, 0.1);
-}
-
-.lock-row:focus-visible {
-  outline: 2px solid var(--accent-blue);
-  outline-offset: -2px;
-}
-
-.lock-badge {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-}
-
-.lock-row.active .lock-badge {
-  color: var(--accent-green);
-}
-
 .sound-strip {
   display: flex;
   flex-direction: column;

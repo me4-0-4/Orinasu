@@ -23,8 +23,10 @@ export interface Section {
   layers: MixLayer[];
   /** 調の自動合わせの基準にした調（なければ合わせない）。 */
   key?: { tonic: number; mode: "major" | "minor" };
-  /** 刻み方の計画（全部の層に同じものを当てた）。古いデータには無い。 */
+  /** 刻み方の計画（曲を1つの塊として切った区間の並び）。古いデータには無い。 */
   plan?: ChopSegment[];
+  /** 計画のメインにした曲（フレーズ）のid。古いデータには無い。 */
+  baseId?: string;
   createdAt: number;
   updatedAt: number;
 }
