@@ -210,6 +210,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     return `無音 – いじった所の約${Math.round((b6 / (12 + b6)) * 100)}%を、音を落として無音にする`;
   });
   const sizeRow = chopSlider("size", "細かさ", () => `細かさ – 断片は${sizeWords[Math.round(chop.size * 3)]}くらいから`);
+  const pitchRow = chopSlider("pitch", "音程", () =>
+    chop.pitch < 0.05 ? "音程 – 変えない" : `音程 – 断片の約${Math.round(chop.pitch * 100)}%を高く・低くして、メロディのように鳴らす`,
+  );
 
   // --- ステージ（左）と操作 ---
   const status = document.createElement("div");
@@ -249,7 +252,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   sidePane.append(
     rule("材料", "刻む曲（フレーズ）を選ぶ。複数なら、曲をまたいで刻む", materialEmpty, materialList),
     rule("曲", "刻んだあとの曲の設定", ...songFields),
-    rule("刻み方", "「刻む」ときの偶然の強さ", busyRow, breaksRow, sizeRow),
+    rule("刻み方", "「刻む」ときの偶然の強さ", busyRow, breaksRow, sizeRow, pitchRow),
     rule("固定", "左の波形の小節をタップで固定。固定した小節は、刻み直しても変わらない", lockInfo),
   );
   split.append(stagePane, sidePane);

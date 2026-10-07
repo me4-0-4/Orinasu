@@ -1,4 +1,4 @@
-import { chopBarLabels, type ChopKind, type ChopSegment } from "../mix/chop";
+import { chopBarLabels, isSilent, type ChopKind, type ChopSegment } from "../mix/chop";
 
 /** ステージに描く内容：刻んだ曲の波形と、刻み方の計画。 */
 export interface StageView {
@@ -36,6 +36,8 @@ const kindColors: Record<ChopKind, string> = {
   break: "#9a6bff",
   double: "#3ee6b0",
   half: "#c58bff",
+  scatter: "#ff5fa2",
+  roll: "#ffa94d",
 };
 
 /** onBarClick：小節（0から数える）をタップしたとき。固定の切り替えに使う。 */
@@ -89,13 +91,13 @@ export function buildChopStage(onBarClick: (bar: number) => void): ChopStage {
 
     // 刻み方の帯
     for (const seg of plan) {
-      g.fillStyle = kindColors[seg.kind];
+      g.fillStyle = seg.mute ? "rgba(255,255,255,0.06)" : kindColors[seg.kind];
       g.fillRect(seg.dst * sx, LABEL_H, Math.max(1, seg.len * sx - 1), BAND_H);
     }
 
     // 波形（無音の区間は暗く）
     const accent = css("--accent-green", "#3ee6b0");
-    const silent = plan.filter((s) => s.kind === "break");
+    const silent = plan.filter((s) => isSilent(s));
     const n = view.peaks.length;
     for (let x = 0; x < width; x++) {
       const p = view.peaks[Math.min(n - 1, Math.floor((x / width) * n))] ?? 0;

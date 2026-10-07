@@ -1,4 +1,4 @@
-import type { ChopSegment } from "./chop.ts";
+import { isSilent, type ChopSegment } from "./chop.ts";
 
 /** ステレオの波形。 */
 export interface Pcm {
@@ -30,8 +30,8 @@ const mod = (a: number, n: number): number => ((a % n) + n) % n;
 
 /** 区間 a のあとに b が、途切れず続いて聞こえるか（同じ曲の同じ速さで、位置がつながる）。 */
 function continues(a: ChopSegment, b: ChopSegment, beatsOf: (from: string) => number): boolean {
-  if (a.kind === "break" || b.kind === "break") return false;
-  if (a.from !== b.from || a.reverse || b.reverse) return false;
+  if (isSilent(a) || isSilent(b)) return false;
+  if (a.from !== b.from || a.reverse || b.reverse || a.pitch || b.pitch) return false;
   const ra = a.rate ?? 1;
   if (ra !== (b.rate ?? 1)) return false;
   const beats = beatsOf(a.from);
@@ -52,7 +52,7 @@ export function chopPcm(input: ChopInput): Pcm {
   const segs = plan.slice().sort((a, b) => a.dst - b.dst);
 
   segs.forEach((seg, i) => {
-    if (seg.kind === "break") return;
+    if (isSilent(seg)) return;
     const rate = seg.rate ?? 1;
     const src = getSource(seg.from, rate);
     const beats = beatsOf(seg.from);
@@ -71,15 +71,28 @@ export function chopPcm(input: ChopInput): Pcm {
     const fadeOut = !continues(seg, next, beatsOf);
     const fade = Math.min(Math.floor(FADE_SECONDS * sampleRate), Math.floor(len / 2));
 
+    // 音程：再生の速さごと変える（サンプラーと同じ）。ratio が2なら1オクターブ上で、読む量も2倍
+    const ratio = seg.pitch ? Math.pow(2, seg.pitch / 12) : 1;
     for (let k = 0; k < len; k++) {
-      const idx = seg.reverse ? (pos + len - 1 - k) % srcLen : (pos + k) % srcLen;
+      const t = seg.reverse ? len - 1 - k : k;
       let g = 1;
       if (fade > 0) {
         if (fadeIn && k < fade) g = k / fade;
         if (fadeOut && len - 1 - k < fade) g = Math.min(g, (len - 1 - k) / fade);
       }
-      out.l[start + k] += src.l[idx] * g;
-      out.r[start + k] += src.r[idx] * g;
+      if (ratio === 1) {
+        const idx = (pos + t) % srcLen;
+        out.l[start + k] += src.l[idx] * g;
+        out.r[start + k] += src.r[idx] * g;
+      } else {
+        const x = pos + t * ratio;
+        const i0 = Math.floor(x);
+        const f = x - i0;
+        const a = i0 % srcLen;
+        const b = (i0 + 1) % srcLen;
+        out.l[start + k] += (src.l[a] * (1 - f) + src.l[b] * f) * g;
+        out.r[start + k] += (src.r[a] * (1 - f) + src.r[b] * f) * g;
+      }
     }
   });
   return out;

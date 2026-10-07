@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
-import { chopBarLabels, neededSources, planChops, planStraight, type ChopSegment } from "./chop.ts";
+import { chopBarLabels, isSilent, neededSources, planChops, planStraight, type ChopSegment } from "./chop.ts";
 
-const input = (busy: number, breaks = 0.3, size = 0.5, bars = 8, loopBars = 4) => ({
+const input = (busy: number, breaks = 0.3, size = 0.5, bars = 8, loopBars = 4, pitch = 0) => ({
   dstBeats: bars * 4,
   beatsPerBar: 4,
   sources: [{ id: "A", bars: loopBars }],
   baseId: "A",
-  params: { busy, breaks, size },
+  params: { busy, breaks, size, pitch },
 });
 
 /** 計画が隙間も重なりもなく、頭から終わりまでを覆っているか。 */
@@ -165,4 +165,61 @@ test("小節ごとの説明。別の曲から取った小節には、曲名が�
     "無音",
     "倍速",
   ]);
+});
+
+test("音MAD風：パターン打ちは短い断片を格子に打ち、打たない所は無音。ロールはだんだん細かくなる", () => {
+  let scatters = 0;
+  let rolls = 0;
+  for (let seed = 1; seed <= 80; seed++) {
+    const plan = planChops(input(1, 0.2, 0.8, 8, 4, 0.5), createRng(seed));
+    assertCovers(plan, 32);
+    for (const s of plan) {
+      if (s.kind === "scatter" && !s.mute) {
+        scatters++;
+        assert.ok(s.len <= 0.5 + 1e-9, `断片は8分以下: ${s.len}`);
+        assert.ok(Math.abs(s.dst * 4 - Math.round(s.dst * 4)) < 1e-6, "16分の格子に乗る");
+      }
+      if (s.kind === "roll") rolls++;
+    }
+    const roll = plan.filter((s) => s.kind === "roll");
+    for (let i = 1; i < roll.length; i++) {
+      if (Math.abs(roll[i].dst - (roll[i - 1].dst + roll[i - 1].len)) < 1e-6) assert.ok(roll[i].len <= roll[i - 1].len + 1e-9);
+    }
+  }
+  assert.ok(scatters > 0 && rolls > 0, `${scatters} ${rolls}`);
+});
+
+test("同じパターンを、続く小節で繰り返すことがある", () => {
+  let repeated = 0;
+  const key = (plan: ChopSegment[], b: number) =>
+    JSON.stringify(plan.filter((s) => s.dst >= b * 4 && s.dst < (b + 1) * 4).map((s) => ({ ...s, dst: s.dst - b * 4 })));
+  for (let seed = 1; seed <= 100; seed++) {
+    const plan = planChops(input(1, 0.2, 0.8, 8, 4, 0.5), createRng(seed));
+    for (let b = 0; b < 7; b++) {
+      if (plan.some((s) => s.kind === "scatter" && s.dst >= b * 4 && s.dst < (b + 1) * 4) && key(plan, b) === key(plan, b + 1)) repeated++;
+    }
+  }
+  assert.ok(repeated > 5, String(repeated));
+});
+
+test("音程：0なら断片の音程は変わらない。上げると、半音が付く", () => {
+  for (let seed = 1; seed <= 60; seed++) {
+    assert.ok(planChops(input(1, 0.2, 0.8, 8, 4, 0), createRng(seed)).every((s) => !s.pitch));
+  }
+  let pitched = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    pitched += planChops(input(1, 0.2, 0.8, 8, 4, 1), createRng(seed)).filter((s) => s.pitch).length;
+  }
+  assert.ok(pitched > 10, String(pitched));
+});
+
+test("無音の扱い：break と mute は無音。書き出す必要もない", () => {
+  assert.ok(isSilent({ kind: "break" }));
+  assert.ok(isSilent({ kind: "scatter", mute: true }));
+  assert.ok(!isSilent({ kind: "scatter" }));
+  const plan: ChopSegment[] = [
+    { kind: "scatter", from: "A", dst: 0, len: 0.5, src: 0 },
+    { kind: "scatter", from: "B", dst: 0.5, len: 0.5, src: 0, mute: true },
+  ];
+  assert.deepEqual(neededSources(plan), [{ from: "A", rate: 1 }]);
 });

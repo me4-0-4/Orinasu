@@ -48,7 +48,7 @@ export function planForSong(
       beatsPerBar: song.beatsPerBar,
       sources: sources.map(chopSourceOf),
       baseId,
-      params: song.chop ?? DEFAULT_CHOP,
+      params: { ...DEFAULT_CHOP, ...song.chop },
       keep: sameLength && opts.keepBars.length > 0 && song.plan ? { bars: opts.keepBars, plan: song.plan } : undefined,
     },
     rng,

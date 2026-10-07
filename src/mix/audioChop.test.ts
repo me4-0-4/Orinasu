@@ -92,6 +92,26 @@ test("半速：半分のテンポで書き出した波形から取り、1拍の�
   assert.equal(out.l[500], src.l[2000 + 500]);
 });
 
+test("音程：1オクターブ上げると、2倍の速さで読む（サンプラーと同じ）。下げると半分", () => {
+  const up = chop([{ kind: "scatter", from: "A", dst: 0, len: 1, src: 0, pitch: 12 }], 1);
+  const src = srcAt(1);
+  assert.ok(Math.abs(up.l[300] - src.l[600]) < 1e-6);
+  const down = chop([{ kind: "scatter", from: "A", dst: 0, len: 1, src: 0, pitch: -12 }], 1);
+  assert.ok(Math.abs(down.l[401] - (src.l[200] + src.l[201]) / 2) < 1e-6); // 0.5倍の速さ：401番目は、200.5番目
+});
+
+test("パターンの打たない所（mute）は無音", () => {
+  const out = chop(
+    [
+      { kind: "scatter", from: "A", dst: 0, len: 0.5, src: 0 },
+      { kind: "scatter", from: "A", dst: 0.5, len: 0.5, src: 0, mute: true },
+    ],
+    1,
+  );
+  assert.ok(out.l.slice(500).every((x) => x === 0));
+  assert.ok(out.l.slice(50, 450).some((x) => x !== 0));
+});
+
 test("材料に無い曲の区間は無音。曲の位置は、曲の長さで折り返す", () => {
   const out = chop(
     [
