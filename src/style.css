@@ -1047,3 +1047,32 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+.mix-song-meta {
+  align-items: center;
+}
+
+.mix-bpm {
+  width: 4.5em;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+  font-size: 0.8rem;
+}
+
+.mixer-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-left: 2px solid var(--accent-blue);
+}
+
+.mixer-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+}

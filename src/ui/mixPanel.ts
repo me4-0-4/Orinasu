@@ -1,6 +1,17 @@
 import { DEFAULT_VOLUME, MAX_VOLUME } from "../audio/layerSynths";
 import { collectMaterials, remix, remixLabels, remixNew, type RemixMode } from "../mix/remix";
-import { createEmptySong, duplicateSection, type Section, type Song } from "../mix/types";
+import {
+  MAX_BPM,
+  MIN_BPM,
+  createEmptySong,
+  duplicateSection,
+  effectiveSections,
+  formatDuration,
+  songSeconds,
+  type MixLayer,
+  type Section,
+  type Song,
+} from "../mix/types";
 import { roleLabels, type Phrase } from "../phrase/types";
 import { randomSeed, createRng } from "../theory/rng";
 import { keyShortName } from "../theory/key";
@@ -15,6 +26,8 @@ export interface MixPanelDeps {
   /** 鳴らす。sections の並びで、loop ならひとつをループ。 */
   onPlay: (sections: Section[], mode: { kind: "loop"; index: number } | { kind: "song" }, song: Song) => void;
   onStop: () => void;
+  /** ミキサー・音量を動かした。鳴っている音にもすぐ反映してほしい。 */
+  onMixChange: (layer: MixLayer) => void;
 }
 
 export interface MixPanel {
@@ -57,8 +70,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let draft: Section | null = null;
   let draftLength = 4;
   let playingIndex: number | null = null;
+  /** 「編集」で曲の中のセクションから戻したときの元のid。「上書き」で差し替える先。 */
+  let editingId: string | null = null;
+  /** ミキサーを開いている層のid。 */
+  const openMixers = new Set<string>();
   /** 試聴の対象：ドラフトか、並べたセクションの番号か。 */
   let previewing: "draft" | number | null = null;
+  /** 「曲を再生」で並べた順に通して鳴らしている最中か。 */
+  let songPlaying = false;
 
   const root = document.createElement("div");
   root.className = "tab-panel mix-tab";
@@ -78,7 +97,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   function syncEnergy(): void {
     if (!song.energy) song.energy = defaultCurve();
     if (!song.macros) song.macros = defaultMacros();
-    energyEditor.setData(song.energy, song.macros, song.sections);
+    energyEditor.setData(song.energy, song.macros, effectiveSections(song));
   }
 
   // --- 材料 ---
@@ -138,8 +157,24 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     touch();
     renderSections();
   });
+  const overwrite = button("上書き", () => {
+    if (!draft || !editingId) return;
+    const i = song.sections.findIndex((x) => x.id === editingId);
+    if (i < 0) {
+      editingId = null;
+      renderDraft();
+      return;
+    }
+    const copy = duplicateSection(draft);
+    copy.id = editingId;
+    copy.name = draft.name.trim() || song.sections[i].name;
+    song.sections[i] = copy;
+    touch();
+    renderSections();
+  }, "preset-button", "編集元のセクションを、いまの内容で差し替える");
+  overwrite.hidden = true;
   const previewDraft = button("試聴", () => togglePreview("draft"), "preset-button");
-  draftActions.append(previewDraft, addToSong);
+  draftActions.append(previewDraft, addToSong, overwrite);
   const draftBox = document.createElement("div");
   draftBox.className = "mix-draft";
   const draftEmpty = document.createElement("div");
@@ -152,27 +187,62 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const songActions = document.createElement("div");
   songActions.className = "preset-row";
   const playSong = button("曲を再生", () => {
-    if (previewing === "draft" || typeof previewing === "number" || playingIndex !== null) {
+    if (songPlaying) {
       stopAll();
       return;
     }
     if (song.sections.length === 0) return;
     previewing = null;
-    deps.onPlay(song.sections, { kind: "song" }, song);
+    songPlaying = false; // 鳴らし直しで一度 stop が呼ばれるので、始まってから立てる
+    deps.onPlay(effectiveSections(song), { kind: "song" }, song);
+    songPlaying = true;
     updateButtons(true);
   });
+  const bpmInput = document.createElement("input");
+  bpmInput.type = "number";
+  bpmInput.className = "mix-bpm";
+  bpmInput.min = String(MIN_BPM);
+  bpmInput.max = String(MAX_BPM);
+  bpmInput.title = "曲全体のBPM。空にすると、セクションごとのBPM（最初に選んだ材料のもの）のまま";
+  bpmInput.addEventListener("change", () => {
+    const v = Math.round(Number(bpmInput.value));
+    song.bpm = bpmInput.value === "" || !Number.isFinite(v) ? undefined : Math.min(MAX_BPM, Math.max(MIN_BPM, v));
+    touch();
+    renderSections();
+  });
+  const bpmLabel = document.createElement("label");
+  bpmLabel.className = "mix-info";
+  bpmLabel.append("BPM ", bpmInput);
+  const totalLabel = document.createElement("span");
+  totalLabel.className = "mix-info";
+  const songMeta = document.createElement("div");
+  songMeta.className = "preset-row mix-song-meta";
+  songMeta.append(bpmLabel, totalLabel);
   songActions.append(playSong);
 
   columns.append(
     column("材料", materialEmpty, materialList, makeRow),
     column("いまのセクション", draftEmpty, draftBox),
-    column("曲の流れ", sectionList, songActions),
+    column("曲の流れ", songMeta, sectionList, songActions),
   );
   root.append(columns, energyEditor.el);
   draftBox.append(draftName, draftInfo, draftLayers, draftTools, draftActions);
   draftBox.hidden = true;
 
   // --- 動作 ---
+
+  /** 試聴用：曲のBPMを反映した、ドラフトだけの並び。 */
+  function draftForPlay(d: Section): Section[] {
+    return effectiveSections({ sections: [d], bpm: song.bpm });
+  }
+
+  function updateSongMeta(): void {
+    const first = song.sections[0]?.bpm;
+    bpmInput.value = song.bpm ? String(song.bpm) : "";
+    bpmInput.placeholder = first ? String(first) : "";
+    const n = song.sections.length;
+    totalLabel.textContent = n === 0 ? "合計 0:00" : `合計 ${formatDuration(songSeconds(song))}（${n}セクション）`;
+  }
 
   function touch(): void {
     song.updatedAt = Date.now();
@@ -203,11 +273,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     }
     renderDraft();
     // 試聴中なら、振り直した結果をすぐ聴けるように鳴らし直す
-    if (previewing === "draft" && draft) deps.onPlay([draft], { kind: "loop", index: 0 }, song);
+    if (previewing === "draft" && draft) deps.onPlay(draftForPlay(draft), { kind: "loop", index: 0 }, song);
   }
 
   function stopAll(): void {
     previewing = null;
+    songPlaying = false;
     deps.onStop();
     updateButtons(false);
   }
@@ -217,21 +288,22 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       stopAll();
       return;
     }
+    songPlaying = false;
     if (target === "draft") {
       if (!draft) return;
       previewing = "draft";
-      deps.onPlay([draft], { kind: "loop", index: 0 }, song);
+      deps.onPlay(draftForPlay(draft), { kind: "loop", index: 0 }, song);
     } else {
       if (!song.sections[target]) return;
       previewing = target;
-      deps.onPlay(song.sections, { kind: "loop", index: target }, song);
+      deps.onPlay(effectiveSections(song), { kind: "loop", index: target }, song);
     }
     updateButtons(true);
   }
 
   function updateButtons(playing: boolean): void {
     previewDraft.textContent = previewing === "draft" ? "止める" : "試聴";
-    playSong.textContent = playing ? "止める" : "曲を再生";
+    playSong.textContent = playing && songPlaying ? "止める" : "曲を再生";
     renderSections();
   }
 
@@ -263,6 +335,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   function renderDraft(): void {
     draftBox.hidden = !draft;
     draftEmpty.hidden = !!draft;
+    overwrite.hidden = !editingId || !song.sections.some((x) => x.id === editingId);
     if (!draft) return;
     const d = draft;
     draftName.value = d.name;
@@ -298,15 +371,78 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       volume.addEventListener("input", () => {
         layer.volume = Number(volume.value);
         volume.title = `音量 ${Math.round(layer.volume * 100)}%`;
+        deps.onMixChange(layer);
       });
       volume.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
-      row.append(label, volume, lock, mute, solo);
+      const mixOpen = openMixers.has(layer.id);
+      const mixBtn = button("MIX", () => {
+        if (mixOpen) openMixers.delete(layer.id);
+        else openMixers.add(layer.id);
+        renderDraft();
+      }, "layer-toggle" + (mixOpen ? " on" : ""), "パン・リバーブ・ディレイ・コンプ");
+      row.append(label, volume, lock, mute, solo, mixBtn);
       draftLayers.appendChild(row);
+      if (mixOpen) draftLayers.appendChild(mixerStrip(layer));
     }
+  }
+
+  /** 層のミキサー：パン・リバーブ・ディレイ・コンプ。動かすと鳴っている音にもすぐ効く。 */
+  function mixerStrip(layer: MixLayer): HTMLElement {
+    const strip = document.createElement("div");
+    strip.className = "mixer-strip";
+    const defaults = {
+      pan: 0,
+      reverb: layer.role === "drums" ? 0 : (layer.synth?.effects.reverbSend ?? 0),
+      delay: layer.role === "drums" ? 0 : (layer.synth?.effects.delaySend ?? 0),
+      comp: 0,
+    };
+    const controls: { key: "pan" | "reverb" | "delay" | "comp"; label: string; min: number; max: number; fmt: (v: number) => string }[] = [
+      { key: "pan", label: "パン", min: -1, max: 1, fmt: (v) => (Math.abs(v) < 0.03 ? "中央" : v < 0 ? `左${Math.round(-v * 100)}` : `右${Math.round(v * 100)}`) },
+      { key: "reverb", label: "リバーブ", min: 0, max: 1, fmt: (v) => `${Math.round(v * 100)}%` },
+      { key: "delay", label: "ディレイ", min: 0, max: 1, fmt: (v) => `${Math.round(v * 100)}%` },
+      { key: "comp", label: "コンプ", min: 0, max: 1, fmt: (v) => (v < 0.02 ? "なし" : `${Math.round(v * 100)}%`) },
+    ];
+    for (const c of controls) {
+      const wrap = document.createElement("label");
+      wrap.className = "mixer-control";
+      const text = document.createElement("span");
+      text.className = "mix-info";
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.className = "layer-volume";
+      slider.min = String(c.min);
+      slider.max = String(c.max);
+      slider.step = "0.02";
+      const current = (): number => layer.mix?.[c.key] ?? defaults[c.key];
+      slider.value = String(current());
+      const show = (): void => {
+        text.textContent = `${c.label} ${c.fmt(current())}`;
+      };
+      show();
+      slider.addEventListener("input", () => {
+        layer.mix = { ...layer.mix, [c.key]: Number(slider.value) };
+        show();
+        deps.onMixChange(layer);
+      });
+      slider.addEventListener("dblclick", () => {
+        // ダブルクリックで初期値に戻す
+        const next = { ...layer.mix };
+        delete next[c.key];
+        layer.mix = next;
+        slider.value = String(defaults[c.key]);
+        show();
+        deps.onMixChange(layer);
+      });
+      slider.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+      wrap.append(text, slider);
+      strip.appendChild(wrap);
+    }
+    return strip;
   }
 
   function renderSections(): void {
     syncEnergy();
+    updateSongMeta();
     sectionList.innerHTML = "";
     if (song.sections.length === 0) {
       const empty = document.createElement("div");
@@ -345,6 +481,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
           // 並べたものは触らず、複製をドラフトに戻して作り直せるようにする
           draft = duplicateSection(section);
           draft.name = section.name;
+          editingId = section.id;
           renderDraft();
         }, "layer-toggle", "複製をいまのセクションに戻す"),
         button("複製", () => {
@@ -366,6 +503,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     el: root,
     setSong(next) {
       song = next;
+      editingId = null;
       renderMaterials();
       renderSections();
     },
@@ -377,6 +515,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     },
     setPlaying(index) {
       if (previewing === "draft") index = null; // ドラフトの試聴は並べたセクションの表示に出さない
+      if (index === null && previewing === null && songPlaying) {
+        songPlaying = false; // 曲が最後まで鳴り終わった
+        playSong.textContent = "曲を再生";
+      }
       if (index === playingIndex) return;
       playingIndex = index;
       if (index === null && previewing === null) updateButtons(false);

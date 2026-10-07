@@ -39,6 +39,8 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
   let dragIndex: number | null = null;
   let stroke: EnergyPoint[] | null = null;
   let strokeBase: EnergyCurve = [];
+  /** いちばん最後に選んだ型。「型に戻す」で、描き直した線をこの形に戻す。 */
+  let lastShape: CurveShape = "jpop";
 
   const root = document.createElement("div");
   root.className = "energy-editor";
@@ -56,12 +58,24 @@ export function buildEnergyEditor(handlers: EnergyEditorHandlers): EnergyEditor 
     b.textContent = curveShapeLabels[shape];
     b.title = "型を選ぶと線がその形になる。あとから描き直せる";
     b.addEventListener("click", () => {
+      lastShape = shape;
       curve = shapeCurve(shape);
       draw();
       handlers.onCurveChange(curve);
     });
     head.appendChild(b);
   }
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "preset-button";
+  reset.textContent = "型に戻す";
+  reset.title = "描き直した線を、最後に選んだ型（まだ選んでいなければJ-POP型）の形に戻す";
+  reset.addEventListener("click", () => {
+    curve = shapeCurve(lastShape);
+    draw();
+    handlers.onCurveChange(curve);
+  });
+  head.appendChild(reset);
   const hint = document.createElement("span");
   hint.className = "mix-info";
   hint.textContent = "ドラッグでなぞって描く／点をつかんで動かす／点をダブルクリックで消す";

@@ -12,6 +12,18 @@ export interface Note {
   durationBeats: number;
 }
 
+/** 層ごとのミキサー設定。未設定の項目は、パン=中央、リバーブ・ディレイ=音色の設定どおり（ドラムは0）、コンプ=なし。 */
+export interface LayerMix {
+  /** -1（左）〜1（右）。 */
+  pan?: number;
+  /** リバーブ送り（0〜1）。 */
+  reverb?: number;
+  /** ディレイ送り（0〜1）。 */
+  delay?: number;
+  /** コンプの掛かり具合（0〜1）。 */
+  comp?: number;
+}
+
 export interface Layer {
   id: string;
   role: LayerRole;
@@ -24,6 +36,8 @@ export interface Layer {
   generated?: boolean;
   /** この層の音量（0〜1.5、未設定は1）。 */
   volume?: number;
+  /** この層のミキサー設定（MIXタブで使う）。 */
+  mix?: LayerMix;
   /** この層の音色（シンセのツマミの値）。ドラム層は使わない。未設定なら役割ごとの初期音色。 */
   synth?: SynthParams;
 }

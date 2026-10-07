@@ -240,7 +240,7 @@ const songPlayer = new SongPlayer(engine.ctx, {
   playNote: (layer, note, time, voiceKey) => {
     if (layer.role === "drums") {
       const id = noteNumberToDrum[note.pitch];
-      if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), time);
+      if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), time, synths.drumOut(layer));
     } else {
       synths.forLayer(layer).noteOn(`mix:${voiceKey}`, note.pitch, note.velocity, time);
     }
@@ -284,6 +284,7 @@ const mixPanel = buildMixPanel({
     songPlayer.start(sections, mode, shaping);
   },
   onStop: stopSongPlayer,
+  onMixChange: (layer) => synths.refresh(layer),
 });
 
 function toggleRecord(): void {

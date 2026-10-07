@@ -2,6 +2,7 @@ import type { AudioEngine } from "./context";
 import { SynthEngine } from "./synth";
 import { clone, defaultSynthParams, synthPresets, type SynthParams } from "./synthParams";
 import type { Layer, LayerRole } from "../phrase/types";
+import { DrumStrip } from "./mixStage";
 
 export const DEFAULT_VOLUME = 1;
 export const MAX_VOLUME = 1.5;
@@ -28,6 +29,7 @@ export class LayerSynths {
   private readonly engines = new Map<string, SynthEngine>();
   private readonly audio: AudioEngine;
   private filterOffset = 0;
+  private readonly drumStrips = new Map<string, DrumStrip>();
 
   constructor(audio: AudioEngine) {
     this.audio = audio;
@@ -52,7 +54,25 @@ export class LayerSynths {
       engine.updateParams(layer.synth);
     }
     engine.setVolume(layer.volume ?? DEFAULT_VOLUME);
+    engine.setMix(layer.mix);
     return engine;
+  }
+
+  /** ドラム層の出口（パン・コンプ・送り付き）。ドラムを鳴らすときの送り先にする。 */
+  drumOut(layer: Layer): AudioNode {
+    let strip = this.drumStrips.get(layer.id);
+    if (!strip) {
+      strip = new DrumStrip(this.audio.ctx, this.audio.drumOut, this.audio.synthReverbSend, this.audio.synthDelaySend);
+      this.drumStrips.set(layer.id, strip);
+    }
+    strip.setMix(layer.mix);
+    return strip.input;
+  }
+
+  /** ミキサーを動かしたとき：層の音量と設定を、鳴っている音にもすぐ反映する。 */
+  refresh(layer: Layer): void {
+    if (layer.role === "drums") this.drumOut(layer);
+    else this.forLayer(layer);
   }
 
   setParams(layer: Layer, params: SynthParams): void {
@@ -82,6 +102,11 @@ export class LayerSynths {
       if (keepIds.has(id)) continue;
       engine.dispose();
       this.engines.delete(id);
+    }
+    for (const [id, strip] of this.drumStrips) {
+      if (keepIds.has(id)) continue;
+      strip.dispose();
+      this.drumStrips.delete(id);
     }
   }
 }
