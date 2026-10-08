@@ -960,16 +960,18 @@ body[data-tab="mix"] .app-footer {
   display: none !important;
 }
 
+/* 広い画面：左（線と操作）と右（設定）を、それぞれの枠の中でスクロールする（フレーズタブの列と同じ） */
 .mix-tab.active {
   display: block;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .mix-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
-  align-items: start;
+  height: 100%;
+  min-height: 0;
 }
 
 .mix-stage-pane {
@@ -977,6 +979,17 @@ body[data-tab="mix"] .app-footer {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+/* 層の線（と再生位置）は、スクロールしても上にずっと出しておく */
+.mix-stage-pane > .lane-view {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
 }
 
 .mix-stage-pane > .mix-rule {
@@ -988,6 +1001,9 @@ body[data-tab="mix"] .app-footer {
   flex-direction: column;
   gap: 18px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .mix-rule {
@@ -1100,10 +1116,22 @@ body[data-tab="mix"] .app-footer {
   .mix-split {
     grid-template-columns: minmax(0, 1fr);
     gap: 18px;
+    height: auto;
   }
 
+  /* 狭い画面：ページごとスクロールし、層の線だけ上に貼りつける。
+     左の枠をほどいて（display: contents）、線が曲の設定の所までずっと貼りつけるようにする */
   .mix-stage-pane {
-    position: static;
+    display: contents;
+  }
+  .mix-side-pane {
+    overflow: visible;
+    padding-right: 0;
+  }
+  .mix-split > .lane-view {
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
 
 }
@@ -1137,24 +1165,140 @@ body[data-tab="mix"] .app-footer {
   font-size: 0.8rem;
 }
 
-/* 刻む：エフェクトの並び（1つずつのカード。触っているものは枠を明るく） */
-.mix-fx-list {
+/* 刻む：FXチェーンの窓（REAPER 風。浮かせるだけで、後ろの線は触れる） */
+.fx-overlay {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 50;
+  width: min(640px, calc(100vw - 32px));
+}
+.fx-window {
+  background: var(--panel-raised, #1d1f27);
+  border: 1px solid var(--border, #2a2c36);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 560px);
+}
+.fx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #2a2c36);
+}
+.fx-title {
+  font-size: 0.85rem;
+  color: var(--text);
+  font-weight: 600;
+}
+.fx-body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr);
+  min-height: 0;
+  overflow: hidden;
+  flex: 1;
+}
+.fx-list-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-right: 1px solid var(--border, #2a2c36);
+  min-height: 0;
+  overflow-y: auto;
+}
+.fx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fx-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text);
+  border: 1px solid transparent;
+}
+.fx-item.selected {
+  background: rgba(62, 230, 176, 0.14);
+  border-color: rgba(62, 230, 176, 0.5);
+}
+.fx-item.bypassed .fx-item-name {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+.fx-item.drop {
+  border-top-color: #ffc450;
+}
+.fx-item.dragging {
+  opacity: 0.4;
+}
+.fx-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-item-env {
+  color: #ffc450;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.fx-params {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 6px 0;
+  padding: 8px 10px;
+  min-height: 0;
+  overflow-y: auto;
 }
-.mix-fx-card {
-  border: 1px solid var(--border, #2a2c36);
-  border-radius: 8px;
-  padding: 6px 8px;
+.fx-params-title {
+  font-size: 0.8rem;
+  color: var(--text-dim);
 }
-.mix-fx-card.focused {
+.fx-env-button {
+  padding: 0 6px;
+  min-width: 0;
+  font-weight: 700;
+}
+.fx-env-button.on {
+  color: #0c0d12;
+  background: #ffc450;
   border-color: #ffc450;
 }
-.mix-fx-head {
-  margin-bottom: 4px;
+.fx-foot {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border, #2a2c36);
+  white-space: normal;
 }
-.mix-fx-card .mix-bpm {
-  width: 4.5em;
+.mix-hit-bar {
+  align-items: center;
+}
+.lane-canvas {
+  touch-action: none;
+}
+@media (max-width: 720px) {
+  .fx-overlay {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+  }
+  .fx-body {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+  .fx-list-pane {
+    border-right: none;
+    border-bottom: 1px solid var(--border, #2a2c36);
+  }
 }

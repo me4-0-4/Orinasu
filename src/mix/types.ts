@@ -1,6 +1,16 @@
 import type { CutMode } from "./slicer.ts";
 import type { ShapeParams } from "./sequencer.ts";
-import { chainIsOff, defaultSongFx, newSlot, sanitizeChain, type FxSlot, type SongFx } from "./fx.ts";
+import {
+  defaultSongFx,
+  newPlugin,
+  sanitizeTakes,
+  sanitizeTrack,
+  trackHasFx,
+  type LegacyContext,
+  type SongFx,
+  type TakeFx,
+  type TrackFx,
+} from "./fx.ts";
 
 /**
  * 層：刻む曲（フレーズ）1つが、1本の層。曲はまるごと1本の波形として扱い、中身（ドラム・ベースなど）には分けない。
@@ -20,8 +30,10 @@ export interface Lane {
   /** 音量（0〜1.5）。無ければ1。 */
   volume?: number;
   muted?: boolean;
-  /** この層だけに掛けるエフェクト（上から順に掛かる）。無ければ掛けない（全体のエフェクトは別に掛かる）。 */
-  fx?: FxSlot[];
+  /** この層（トラック）のエフェクト：FXチェーンとエンベロープ。無ければ掛けない（マスターのエフェクトは別に掛かる）。 */
+  fx?: TrackFx;
+  /** 断片ごとのエフェクト（テイクFX）。この層のトラックFXより先に掛かる。 */
+  takes?: TakeFx[];
 }
 
 /** 層ごとにずらせる形のつまみ。 */
@@ -99,8 +111,6 @@ export const SONG_ID = "song";
 export const MIN_BPM = 40;
 export const MAX_BPM = 240;
 export const LENGTH_OPTIONS = [8, 16, 32, 64];
-/** 刻んだ曲の、いちばん短い長さ（秒）。これより短くなる長さは選べない。 */
-export const MIN_SONG_SECONDS = 30;
 export const DEFAULT_BPM = 120;
 
 export const DEFAULT_PARAMS: SongParams = {
@@ -136,7 +146,7 @@ export function effectiveParams(global: SongParams, lane: Pick<Lane, "shift" | "
 /** 層が全体と違う設定を持っているか（ずらし・切り方・音量・ミュート）。 */
 export function laneIsCustom(lane: Lane): boolean {
   const shifted = SHAPE_KEYS.some((k) => Math.abs(lane.shift?.[k] ?? 0) > 1e-9);
-  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted || !chainIsOff(lane.fx);
+  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted || trackHasFx(lane.fx) || (lane.takes?.length ?? 0) > 0;
 }
 
 /**
@@ -171,19 +181,6 @@ export function songSeconds(song: Pick<Song, "lengthBars" | "beatsPerBar" | "bpm
   return (song.lengthBars * song.beatsPerBar * 60) / song.bpm;
 }
 
-/** そのテンポで、MIN_SONG_SECONDS 以上になる、いちばん短い長さ（小節）。どれも足りなければ、いちばん長いもの。 */
-export function minLengthBars(song: Pick<Song, "beatsPerBar" | "bpm">): number {
-  return (
-    LENGTH_OPTIONS.find((n) => songSeconds({ ...song, lengthBars: n }) >= MIN_SONG_SECONDS - 1e-9) ??
-    LENGTH_OPTIONS[LENGTH_OPTIONS.length - 1]
-  );
-}
-
-/** 長さが短すぎれば、足りる長さまで伸ばす。 */
-export function fitLength(song: Pick<Song, "lengthBars" | "beatsPerBar" | "bpm">): number {
-  return Math.max(song.lengthBars, minLengthBars(song));
-}
-
 /** 秒を「1:05」の形にする。 */
 export function formatDuration(seconds: number): string {
   const total = Math.round(seconds);
@@ -208,7 +205,6 @@ export function migrateSong(raw: unknown): Song {
   if (isNum(r.bpm) && r.bpm >= MIN_BPM && r.bpm <= MAX_BPM) song.bpm = Math.round(r.bpm);
   if (isNum(r.beatsPerBar) && r.beatsPerBar >= 1 && r.beatsPerBar <= 12) song.beatsPerBar = Math.round(r.beatsPerBar);
   if (isNum(r.lengthBars) && LENGTH_OPTIONS.includes(r.lengthBars)) song.lengthBars = r.lengthBars;
-  song.lengthBars = fitLength(song);
   if (typeof r.drumId === "string" || r.drumId === null) song.drumId = r.drumId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(
@@ -216,7 +212,8 @@ export function migrateSong(raw: unknown): Song {
         typeof l === "object" && l !== null && typeof (l as Lane).phraseId === "string" &&
         isNum((l as Lane).cutSeed) && isNum((l as Lane).rhythmSeed) && isNum((l as Lane).orderSeed),
     );
-    if (lanes.length > 0) song.lanes = lanes.map(sanitizeLane);
+    const legacy: LegacyContext = { stepsPerBar: song.beatsPerBar * 4, bars: song.lengthBars };
+    if (lanes.length > 0) song.lanes = lanes.map((l) => sanitizeLane(l, legacy));
   }
   if (typeof r.params === "object" && r.params !== null) {
     const p = r.params as Record<string, unknown>;
@@ -226,7 +223,7 @@ export function migrateSong(raw: unknown): Song {
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
     if (typeof p.dry === "boolean") song.params.dry = p.dry;
     // 前の「仕上げの響き」は、全体のリバーブの量にする
-    if (isNum(p.reverb)) song.fx.master = p.reverb > 0 ? [newSlot("reverb", { amount: Math.min(1, p.reverb) })] : [];
+    if (isNum(p.reverb)) song.fx.master = { chain: p.reverb > 0 ? [newPlugin("reverb", { amount: Math.min(1, p.reverb) })] : [], envelopes: [] };
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
     if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
     for (const key of ["bedVolume", "sfx", "pad", "pump"] as const) {
@@ -236,25 +233,29 @@ export function migrateSong(raw: unknown): Song {
   }
   if (typeof r.fx === "object" && r.fx !== null) {
     const fx = r.fx as Record<string, unknown>;
+    const legacy: LegacyContext = { stepsPerBar: song.beatsPerBar * 4, bars: song.lengthBars };
     song.fx = {
-      master: fx.master === undefined ? song.fx.master : sanitizeChain(fx.master),
-      bed: sanitizeChain(fx.bed),
-      pad: sanitizeChain(fx.pad),
+      master: fx.master === undefined ? song.fx.master : sanitizeTrack(fx.master, legacy),
+      bed: sanitizeTrack(fx.bed, legacy),
+      pad: sanitizeTrack(fx.pad, legacy),
     };
   }
   return song;
 }
 
-function sanitizeLane(raw: Lane): Lane {
+function sanitizeLane(raw: Lane, legacy: LegacyContext): Lane {
   const lane: Lane = { phraseId: raw.phraseId, cutSeed: raw.cutSeed, rhythmSeed: raw.rhythmSeed, orderSeed: raw.orderSeed };
   if (raw.locked) lane.locked = true;
   if (raw.muted) lane.muted = true;
   if (raw.mode === "transient" || raw.mode === "divide") lane.mode = raw.mode;
   if (isNum(raw.volume)) lane.volume = Math.min(MAX_LANE_VOLUME, Math.max(0, raw.volume));
+  // 前の形の「選んだ断片だけ」のエフェクトは、断片ごとのテイクFXになる
+  const takes = sanitizeTakes(raw.takes);
   if (typeof raw.fx === "object" && raw.fx !== null) {
-    const fx = sanitizeChain(raw.fx);
-    if (fx.length > 0) lane.fx = fx;
+    const fx = sanitizeTrack(raw.fx, legacy, takes);
+    if (fx.chain.length > 0) lane.fx = fx;
   }
+  if (takes.length > 0) lane.takes = takes.sort((a, b) => a.step - b.step);
   if (typeof raw.shift === "object" && raw.shift !== null) {
     const shift: Partial<Record<ShapeKey, number>> = {};
     for (const key of SHAPE_KEYS) {

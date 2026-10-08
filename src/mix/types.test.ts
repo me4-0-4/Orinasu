@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, laneIsCustom, fitLength, formatDuration, minLengthBars, migrateSong, songSeconds, type Lane } from "./types.ts";
+import { createEmptySong, laneIsCustom, formatDuration, migrateSong, songSeconds, type Lane } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
@@ -93,32 +93,39 @@ test("刻み方のモード：初期は音楽モード。保存データから�
   assert.equal(migrateSong({ params: { style: "???" } }).params.style, "music");
 });
 
-test("エフェクト：全体の初期はリバーブ15%。前の「仕上げの響き」は全体のリバーブに。並び・層のエフェクトも読める", () => {
+test("エフェクト：マスターの初期はリバーブ15%。前の「仕上げの響き」はマスターのリバーブに。層のFX・テイクFXも読める", () => {
   const s0 = createEmptySong();
-  assert.deepEqual(s0.fx.master.map((x) => [x.kind, x.amount]), [["reverb", 0.15]]);
-  assert.deepEqual(s0.fx.bed, []);
-  assert.equal(migrateSong({ params: { reverb: 0.4 } }).fx.master[0].amount, 0.4);
-  assert.deepEqual(migrateSong({ params: { reverb: 0 } }).fx.master, []);
+  assert.deepEqual(s0.fx.master.chain.map((x) => [x.kind, x.amount]), [["reverb", 0.15]]);
+  assert.deepEqual(s0.fx.bed.chain, []);
+  assert.equal(migrateSong({ params: { reverb: 0.4 } }).fx.master.chain[0].amount, 0.4);
+  assert.deepEqual(migrateSong({ params: { reverb: 0 } }).fx.master.chain, []);
   const s1 = migrateSong({
-    fx: { master: [{ kind: "delay", amount: 0.5, time: "1/4", when: "bars", from: 3, to: 2 }], bed: { lowCut: 0.5 } },
-    lanes: [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, fx: [{ kind: "drive", amount: 0.3 }] }],
+    fx: { master: { chain: [{ id: "d", kind: "delay", amount: 0.5, time: "1/4" }], envelopes: [] }, bed: { lowCut: 0.5 } },
+    lanes: [
+      {
+        phraseId: "a",
+        cutSeed: 1,
+        rhythmSeed: 2,
+        orderSeed: 3,
+        fx: { chain: [{ kind: "drive", amount: 0.3 }], envelopes: [] },
+        takes: [{ step: 4, chain: [{ kind: "crush" }] }],
+      },
+      { phraseId: "b", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, fx: [{ kind: "delay", when: "hits", steps: [2] }] },
+    ],
   });
-  assert.equal(s1.fx.master[0].kind, "delay");
-  assert.equal(s1.fx.master[0].time, "1/4");
-  assert.equal(s1.fx.master[0].to, 3); // 終わりは始まりより前にならない
-  assert.equal(s1.fx.bed[0].kind, "lowCut");
-  assert.equal(s1.lanes![0].fx![0].amount, 0.3);
+  assert.equal(s1.fx.master.chain[0].time, "1/4");
+  assert.equal(s1.fx.bed.chain[0].kind, "lowCut");
+  assert.equal(s1.lanes![0].fx!.chain[0].amount, 0.3);
+  assert.equal(s1.lanes![0].takes![0].step, 4);
   assert.ok(laneIsCustom(s1.lanes![0]));
+  assert.equal(s1.lanes![1].fx, undefined); // 選んだ断片だけのものは、テイクFXへ
+  assert.equal(s1.lanes![1].takes![0].chain[0].kind, "delay");
 });
 
-test("曲の長さは30秒より短くならない：テンポに合わせて、選べるいちばん短い長さが変わる", () => {
-  assert.equal(createEmptySong().lengthBars, 16); // 120BPMで16小節＝32秒
-  assert.equal(minLengthBars({ bpm: 120, beatsPerBar: 4 }), 16);
-  assert.equal(minLengthBars({ bpm: 60, beatsPerBar: 4 }), 8);
-  assert.equal(minLengthBars({ bpm: 200, beatsPerBar: 4 }), 32);
-  assert.equal(fitLength({ lengthBars: 8, bpm: 180, beatsPerBar: 4 }), 32);
-  assert.equal(fitLength({ lengthBars: 64, bpm: 180, beatsPerBar: 4 }), 64);
-  assert.equal(migrateSong({ bpm: 200, lengthBars: 8 }).lengthBars, 32);
+test("曲の長さ：初期は16小節。8〜64小節はテンポに関係なく選べる（短くても伸ばさない）", () => {
+  assert.equal(createEmptySong().lengthBars, 16);
+  assert.equal(migrateSong({ bpm: 200, lengthBars: 8 }).lengthBars, 8);
+  assert.equal(migrateSong({ bpm: 200, lengthBars: 7 }).lengthBars, 16);
 });
 
 test("下地・スウィング・層の組み方を引き継ぐ。決めていない下地は undefined のまま", () => {
