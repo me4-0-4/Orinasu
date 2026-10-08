@@ -4,15 +4,20 @@ import {
   applySeeds,
   buildCollage,
   collectSources,
+  hasDrums,
+  pickDrum,
   rerollLanes,
   seedSnapshot,
   syncLanes,
   type CollageResult,
+  type RenderOpts,
   type RerollPart,
   type SeedSnapshot,
 } from "../mix/collageSong";
-import type { Pcm } from "../mix/pcm";
-import { STEPS_PER_BEAT } from "../mix/sequencer";
+import { limitPeak, type Pcm } from "../mix/pcm";
+import { repeatPcm } from "../mix/loopFold";
+import { STEPS_PER_BEAT, holdFraction } from "../mix/sequencer";
+import { musicSlotSteps } from "../mix/musicChop";
 import { divisionsFor, sliceLimits, type CutMode } from "../mix/slicer";
 import {
   LENGTH_OPTIONS,
@@ -20,14 +25,18 @@ import {
   MAX_LANE_VOLUME,
   MIN_BPM,
   createEmptySong,
+  fitLength,
   formatDuration,
+  minLengthBars,
   effectiveParams,
   laneIsCustom,
   setLaneShape,
   songSeconds,
+  type ChopStyle,
   type Lane,
   type ShapeKey,
   type Song,
+  type TurnStyle,
 } from "../mix/types";
 import type { Phrase } from "../phrase/types";
 import { randomSeed } from "../theory/rng";
@@ -42,7 +51,9 @@ export interface MixPanelDeps {
   prepareAudio: () => Promise<void>;
   audio: { ctx: AudioContext; out: AudioNode };
   /** フレーズを、指定のBPMで1周ぶんの波形に書き出す。 */
-  render: (phrase: Phrase, bpm: number) => Promise<Pcm>;
+  render: (phrase: Phrase, bpm: number, opts: RenderOpts) => Promise<Pcm>;
+  /** 刻んだ曲の全体に、仕上げのリバーブを掛ける（amount 0〜1）。 */
+  reverb: (pcm: Pcm, amount: number) => Promise<Pcm>;
 }
 
 export interface MixPanel {
@@ -103,6 +114,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let bpmTouched = false;
   const undoStack: SeedSnapshot[] = [];
   const redoStack: SeedSnapshot[] = [];
+  /** 最後に作ったときの、層の曲の更新時刻（フレーズを直したら作り直すため）。 */
+  let builtStamps = "";
+  function stampsOf(lanes: Lane[]): string {
+    const phrases = deps.getPhrases();
+    const byId = new Map(phrases.map((p) => [p.id, p.updatedAt]));
+    const drum = pickDrum(song, phrases);
+    return [...lanes.map((l) => l.phraseId), ...(drum ? [drum] : [])].map((id) => `${id}:${byId.get(id) ?? 0}`).join(",");
+  }
   /** いま選んでいる層（曲のid）。選ぶと、その層だけの形を変えられる。 */
   let selectedId: string | null = null;
   const renderCache = new Map<string, Promise<Pcm>>();
@@ -149,6 +168,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       return;
     }
     song.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, v));
+    song.lengthBars = fitLength(song); // 30秒より短くならないように
     bpmInput.value = String(song.bpm);
     bpmTouched = true;
     touch();
@@ -186,6 +206,157 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     refreshSliders();
     scheduleRebuild();
   });
+  const styleSelect = document.createElement("select");
+  styleSelect.className = "quantize-select";
+  for (const [value, label] of [
+    ["music", "音楽（拍とコードを守って刻む）"],
+    ["material", "素材（phrz風。自由に切って打つ）"],
+  ] as const) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    styleSelect.appendChild(opt);
+  }
+  styleSelect.addEventListener("change", () => {
+    song.params.style = styleSelect.value as ChopStyle;
+    touch();
+    refresh();
+    scheduleRebuild();
+  });
+  const drySelect = document.createElement("select");
+  drySelect.className = "quantize-select";
+  for (const [value, label] of [
+    ["dry", "余韻なし（キレよく）"],
+    ["wet", "余韻あり（リバーブ・ディレイごと）"],
+  ] as const) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    drySelect.appendChild(opt);
+  }
+  drySelect.addEventListener("change", () => {
+    song.params.dry = drySelect.value === "dry";
+    touch();
+    scheduleRebuild();
+  });
+  // 下地：どのフレーズのドラムを、鳴らしっぱなしにするか
+  const drumSelect = document.createElement("select");
+  drumSelect.className = "quantize-select mix-drum";
+  drumSelect.addEventListener("change", () => {
+    song.drumId = drumSelect.value === "" ? null : drumSelect.value;
+    touch();
+    refresh();
+    scheduleRebuild();
+  });
+  function renderDrumOptions(): void {
+    drumSelect.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "なし（刻んだ音だけ）";
+    drumSelect.appendChild(none);
+    for (const p of deps.getPhrases().filter(hasDrums)) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = `${p.name}のドラム`;
+      drumSelect.appendChild(opt);
+    }
+  }
+  const drumHint = document.createElement("span");
+  drumHint.className = "mix-info mix-slider-hint";
+  drumHint.textContent = "選んだフレーズのドラムだけを、刻まずに最初から最後まで鳴らす（ノリの軸）。刻む材料と同じフレーズでもいい";
+  const turnsSelect = document.createElement("select");
+  turnsSelect.className = "quantize-select";
+  for (const [value, label] of [
+    ["call", "掛け合い（2拍ずつ）"],
+    ["swap", "交代（4小節ずつ）"],
+  ] as const) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    turnsSelect.appendChild(opt);
+  }
+  turnsSelect.addEventListener("change", () => {
+    song.params.turns = turnsSelect.value as TurnStyle;
+    touch();
+    scheduleRebuild();
+  });
+  const turnsHint = document.createElement("span");
+  turnsHint.className = "mix-info mix-slider-hint";
+  turnsHint.textContent = "層が2本以上のとき。掛け合い：前半2拍と後半2拍を別の層が受け持つ（4小節ごとに呼ぶ側が替わる）";
+
+  /** 層ごとにずらさない、曲全体だけのつまみ（スウィング・下地の音量）。 */
+  function paramSlider(key: "swing" | "bedVolume", label: string, hint: () => string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "mix-slider-row";
+    const name = document.createElement("span");
+    name.className = "mix-slider-name";
+    name.textContent = label;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.className = "layer-volume";
+    input.min = "0";
+    input.max = "1";
+    input.step = "0.05";
+    const value = document.createElement("span");
+    value.className = "mix-slider-value";
+    const note = document.createElement("div");
+    note.className = "mix-info mix-slider-hint";
+    paramRefreshers.push(() => {
+      input.value = String(song.params[key]);
+      value.textContent = pct(song.params[key]);
+      note.textContent = hint();
+    });
+    input.addEventListener("input", () => {
+      song.params[key] = Number(input.value);
+      note.textContent = hint();
+      value.textContent = pct(song.params[key]);
+      touch();
+      scheduleRebuild();
+    });
+    input.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+    row.append(name, input, value, note);
+    return row;
+  }
+  const paramRefreshers: (() => void)[] = [];
+  const bedVolumeRow = paramSlider("bedVolume", "下地の音量", () => `下地の音量 – ${pct(song.params.bedVolume)}`);
+  const swingRow = paramSlider("swing", "スウィング", () =>
+    song.params.swing < 0.05
+      ? "スウィング – はねない（まっすぐ）"
+      : `スウィング – 16分の裏を後ろにずらして、はねさせる（${pct(song.params.swing)}。100%で3連符のはね。下地のドラムにも掛かる）`,
+  );
+
+  // 仕上げの響き（全体のリバーブ）
+  const reverbRow = document.createElement("div");
+  reverbRow.className = "mix-slider-row";
+  const reverbName = document.createElement("span");
+  reverbName.className = "mix-slider-name";
+  reverbName.textContent = "仕上げの響き";
+  const reverbInput = document.createElement("input");
+  reverbInput.type = "range";
+  reverbInput.className = "layer-volume";
+  reverbInput.min = "0";
+  reverbInput.max = "1";
+  reverbInput.step = "0.05";
+  const reverbValue = document.createElement("span");
+  reverbValue.className = "mix-slider-value";
+  const reverbHint = document.createElement("div");
+  reverbHint.className = "mix-info mix-slider-hint";
+  const showReverb = (): void => {
+    reverbInput.value = String(song.params.reverb);
+    reverbValue.textContent = `${Math.round(song.params.reverb * 100)}%`;
+    reverbHint.textContent =
+      song.params.reverb < 0.05 ? "仕上げの響き – 掛けない" : "仕上げの響き – 刻んだあとの全体にだけリバーブを掛ける（断片はにじまず、全体がなじむ）";
+  };
+  reverbInput.addEventListener("input", () => {
+    song.params.reverb = Number(reverbInput.value);
+    showReverb();
+    touch();
+    scheduleRebuild();
+  });
+  reverbInput.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+  reverbRow.append(reverbName, reverbInput, reverbValue, reverbHint);
+  const lengthHint = document.createElement("span");
+  lengthHint.className = "mix-info mix-slider-hint";
   const fieldRow = (label: string, ...children: HTMLElement[]): HTMLElement => {
     const row = document.createElement("label");
     row.className = "mix-slider-row mix-field-row";
@@ -243,14 +414,40 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const breaksRow = slider("breaks", "休み", () => `休み – 曲の約${Math.round(song.params.breaks * 50)}%を、まとめて休みにする（最大で半分）`);
   const onBeatRow = slider("onBeat", "拍に寄せる", () => `拍に寄せる – ${pct(song.params.onBeat)}（1・2・3・4拍目に打ちやすく）`);
   const sizeRow = slider("size", "断片の長さ", () => {
+    if (song.params.style === "music") {
+      const words = { 1: "16分", 2: "8分", 4: "1拍" } as const;
+      return `断片の長さ – ${words[musicSlotSteps(song.params.size)]}ごとに刻む（元の拍の位置にそろう）`;
+    }
     const { minMs, maxMs } = sliceLimits(song.params.size);
     return song.params.mode === "divide"
       ? `断片の長さ – 曲を ${divisionsFor(song.params.size)} 等分（切るたびに少し揺れる）`
       : `断片の長さ – 最短 ${minMs}ms · 最長 ${maxMs}ms（長いほど、拾うアタックが減る）`;
   });
   const motionRow = slider("motion", "音程の動き", () =>
-    song.params.motion < 0.05 ? "音程の動き – 動かさない" : `音程の動き – ${pct(song.params.motion)}（断片の高さを、近い高さへ少しずつ動かす）`,
+    song.params.motion < 0.05
+      ? "音程の動き – 動かさない"
+      : song.params.style === "music"
+        ? `音程の動き – ${pct(song.params.motion)}（繰り返しを1オクターブ上げたり、フィルの終わりを階段状に元の高さへ戻したりする）`
+        : `音程の動き – ${pct(song.params.motion)}（断片の高さを、近い高さへ少しずつ動かす）`,
   );
+  const modeRow = fieldRow("切り方", modeSelect);
+  const holdRow = slider("hold", "音の長さ", () =>
+    `音の長さ – 次に打つ所までの ${Math.round(holdFraction(song.params.hold, song.params.style) * 100)}% で切る（短いほどブツ切れ）`,
+  );
+  const crispRow = slider("crisp", "キレ", () =>
+    `キレ – 小節の約${Math.round(song.params.crisp * 100)}%を、短い隙間でメリハリをつける（残りは「なめらか」に隙間なくつなぐ）`,
+  );
+  const panRow = slider("pan", "パン", () =>
+    song.params.pan < 0.05 ? "パン – 振らない" : `パン – 刻んだ所を左右に交互に振る（強さ ${pct(song.params.pan)}、左右は均等に）`,
+  );
+  const fxRow = slider("fx", "エフェクト", () =>
+    song.params.fx < 0.05
+      ? "エフェクト – 掛けない"
+      : `エフェクト – フィルの約${pct(song.params.fx)}に、フィルター・テープストップ・音質下げ・逆再生のどれかを掛ける`,
+  );
+  /** モードで使わないつまみは隠す（音楽モード：音の長さ。素材モード：キレ・パン・エフェクト）。 */
+  const musicOnlyRows = [crispRow, panRow, fxRow];
+  const materialOnlyRows = [holdRow];
   function refreshSliders(): void {
     for (const f of sliderRefreshers) f();
   }
@@ -311,6 +508,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       return v === "" ? rest : { ...rest, mode: v as CutMode };
     });
   });
+  const laneModeRow = fieldRow("切り方", laneMode);
+  // 層の欄も、モードで使わないつまみは隠す（下で作る）
+  let laneHoldRow!: HTMLElement;
+  let laneCrispRow!: HTMLElement;
+  let lanePanRow!: HTMLElement;
+  let laneFxRow!: HTMLElement;
   const laneSliderSync: (() => void)[] = [];
   function laneSlider(key: ShapeKey, label: string): HTMLElement {
     const row = document.createElement("div");
@@ -345,15 +548,23 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     row.append(name, input, value, note);
     return row;
   }
+  laneHoldRow = laneSlider("hold", "音の長さ");
+  laneCrispRow = laneSlider("crisp", "キレ");
+  lanePanRow = laneSlider("pan", "パン");
+  laneFxRow = laneSlider("fx", "エフェクト");
   laneBox.append(
     laneButtons,
     volumeRow,
-    fieldRow("切り方", laneMode),
+    laneModeRow,
     laneSlider("busy", "密度"),
     laneSlider("breaks", "休み"),
     laneSlider("onBeat", "拍に寄せる"),
     laneSlider("size", "断片の長さ"),
     laneSlider("motion", "音程の動き"),
+    laneHoldRow,
+    laneCrispRow,
+    lanePanRow,
+    laneFxRow,
   );
 
   function selectedLane(): Lane | undefined {
@@ -416,7 +627,17 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     button("順番だけ", () => void chop("order"), "preset-button", "どの断片を打つか（と音程）だけ変える"),
   );
   const saveButton = button("WAVで保存", () => saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
-  partRow.append(saveButton);
+  // 保存するときのくり返し回数（phrz の loops 1/2/4/8 に当たる）
+  const loopSelect = document.createElement("select");
+  loopSelect.className = "quantize-select";
+  loopSelect.title = "WAVに、刻んだ曲を何回くり返して入れるか";
+  for (const n of [1, 2, 4, 8]) {
+    const opt = document.createElement("option");
+    opt.value = String(n);
+    opt.textContent = `×${n}`;
+    loopSelect.appendChild(opt);
+  }
+  partRow.append(saveButton, loopSelect);
 
   const stagePane = document.createElement("div");
   stagePane.className = "mix-stage-pane";
@@ -429,19 +650,26 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     notice,
     rule("層", "選んだ層だけの形。全体からの差として持つので、全体を動かすと一緒に動く", laneEmpty, laneTitle, laneBox),
   );
+  const turnsRow = fieldRow("層の組み方", turnsSelect, turnsHint);
   const sidePane = document.createElement("div");
   sidePane.className = "mix-side-pane";
   sidePane.append(
-    rule("材料", "刻む曲（フレーズ）を選ぶ。曲1つが、層1本になる（中のドラム・ベースなどには分けない）。複数選ぶと重なる", materialEmpty, materialList),
+    rule("材料", "刻む曲（フレーズ）を選ぶ。曲1つが、層1本になる（中のドラム・ベースなどには分けない）。複数選ぶと、音楽モードでは掛け合いか交代、素材モードでは重なる", materialEmpty, materialList),
     rule(
       "曲",
       "刻んだあとの曲の設定",
       fieldRow("名前", nameInput),
       fieldRow("BPM", bpmInput, bpmHint),
-      fieldRow("長さ", lengthSelect),
-      fieldRow("切り方", modeSelect),
+      fieldRow("長さ", lengthSelect, lengthHint),
+      fieldRow("モード", styleSelect),
+      modeRow,
+      turnsRow,
+      fieldRow("下地", drumSelect, drumHint),
+      bedVolumeRow,
+      fieldRow("余韻", drySelect),
+      reverbRow,
     ),
-    rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, motionRow),
+    rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, holdRow, crispRow, motionRow, panRow, fxRow, swingRow),
   );
   split.append(stagePane, sidePane);
   root.append(split);
@@ -459,11 +687,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   /** フレーズを書き出す（同じ曲・同じテンポなら、書き出したものを使い回す）。 */
-  function render(phrase: Phrase, bpm: number): Promise<Pcm> {
-    const key = `${phrase.id}|${phrase.updatedAt}|${bpm}`;
+  function render(phrase: Phrase, bpm: number, opts: RenderOpts): Promise<Pcm> {
+    const key = `${phrase.id}|${phrase.updatedAt}|${bpm}|${opts.dry ? "dry" : "wet"}|${opts.drumsOnly ? `drums|${opts.swing ?? 0}` : "all"}`;
     let hit = renderCache.get(key);
     if (!hit) {
-      hit = deps.render(phrase, bpm);
+      hit = deps.render(phrase, bpm, opts);
       renderCache.set(key, hit);
       if (renderCache.size > 24) renderCache.delete(renderCache.keys().next().value as string);
     }
@@ -491,7 +719,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     try {
       const out = await buildCollage(song, deps.getPhrases(), render, sampleRate);
       if (token !== buildToken) return;
+      if (out && song.params.reverb > 0) {
+        // 仕上げの響き：刻んだあとの全体にだけ掛ける（断片同士はにじまず、全体はなじむ）
+        out.pcm = limitPeak(await deps.reverb(out.pcm, song.params.reverb));
+        if (token !== buildToken) return;
+      }
       result = out;
+      builtStamps = stampsOf(song.lanes ?? []);
       setNotice(out ? "" : "刻む曲が見つからない。材料を選び直して");
       if (player.playing) {
         if (out) player.play(out.pcm, sampleRate, player.progress() ?? 0);
@@ -528,7 +762,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       // 最初に刻むときだけ、いちばん上の層の曲のテンポから始める（このあとは曲のBPMだけで決まる）
       const top = sources.find((p) => p.id === song.lanes![0].phraseId) ?? sources[0];
       song.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(top.bpm)));
+      song.lengthBars = fitLength(song);
     }
+    // 下地をまだ決めていなければ、ドラムのある最初の材料にする（あとで選び直せる）
+    if (song.drumId === undefined) song.drumId = pickDrum(song, deps.getPhrases());
     touch();
     refresh();
     await rebuild();
@@ -566,7 +803,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   function saveWav(): void {
     if (!result) return;
-    const bytes = encodeWav(result.pcm, sampleRate);
+    const bytes = encodeWav(repeatPcm(result.pcm, Number(loopSelect.value)), sampleRate);
     const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
     const a = document.createElement("a");
     a.href = url;
@@ -578,6 +815,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   function renderMaterials(): void {
+    renderDrumOptions();
     const phrases = deps.getPhrases();
     materialList.innerHTML = "";
     materialEmpty.hidden = phrases.length > 0;
@@ -618,6 +856,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
                 events: l.events,
               };
             }),
+            bed: result.bed,
             totalSteps: result.totalSteps,
             stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT,
           }
@@ -625,8 +864,30 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     );
     if (document.activeElement !== nameInput) nameInput.value = song.name;
     if (document.activeElement !== bpmInput) bpmInput.value = String(song.bpm);
+    const minBars = minLengthBars(song);
+    for (const opt of Array.from(lengthSelect.options)) {
+      const n = Number(opt.value);
+      opt.disabled = n < minBars;
+      opt.textContent = `${n}小節（${formatDuration(songSeconds({ ...song, lengthBars: n }))}）`;
+    }
     lengthSelect.value = String(song.lengthBars);
+    lengthHint.textContent = "30秒より短くなる長さは選べない（テンポで変わる）";
+    turnsSelect.value = song.params.turns;
+    turnsRow.hidden = song.params.style !== "music";
+    const drum = pickDrum(song, deps.getPhrases());
+    drumSelect.value = drum && deps.getPhrases().some((p) => p.id === drum && hasDrums(p)) ? drum : "";
+    bedVolumeRow.hidden = drumSelect.value === "";
+    for (const f of paramRefreshers) f();
     modeSelect.value = song.params.mode;
+    styleSelect.value = song.params.style;
+    // 切り方（アタック／等分）は素材モードだけ。音楽モードは拍の格子で切る
+    modeRow.hidden = song.params.style === "music";
+    laneModeRow.hidden = song.params.style === "music";
+    const music = song.params.style === "music";
+    for (const r of [...musicOnlyRows, laneCrispRow, lanePanRow, laneFxRow]) r.hidden = !music;
+    for (const r of [...materialOnlyRows, laneHoldRow]) r.hidden = music;
+    drySelect.value = song.params.dry ? "dry" : "wet";
+    showReverb();
     const hits = result ? result.lanes.reduce((a, l) => a + l.events.length, 0) : 0;
     status.textContent = [
       `層 ${result?.lanes.length ?? 0}`,
@@ -680,9 +941,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       const alive = new Set(deps.getPhrases().map((p) => p.id));
       song.materialIds = song.materialIds.filter((id) => alive.has(id));
       if (song.lanes) song.lanes = song.lanes.filter((l) => alive.has(l.phraseId));
+      if (song.drumId && !alive.has(song.drumId)) song.drumId = null;
       renderMaterials();
       refresh();
       if (song.lanes && !result) void rebuild(); // 起動直後は、フレーズが読み込まれてから曲を作り直す
+      else if (song.lanes && stampsOf(song.lanes) !== builtStamps) scheduleRebuild(); // フレーズタブで曲を直したら、作り直す
     },
     stop() {
       if (!player.playing) return;

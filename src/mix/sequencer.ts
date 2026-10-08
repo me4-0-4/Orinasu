@@ -13,6 +13,32 @@ export interface ShapeParams {
   onBeat: number;
   /** 音程の動き：断片の高さを、近い高さへ少しずつ動かす。 */
   motion: number;
+  /** 音の長さ：次に打つ所までの、どれだけ鳴らすか（0で短く切る、1で次まで伸ばす）。素材モード用。 */
+  hold: number;
+  /** キレ：音楽モードで、短い隙間を入れてメリハリをつける小節の割合（残りは「なめらか」につなぐ）。 */
+  crisp: number;
+  /** パン：刻んだ所を左右に交互に振る強さ。 */
+  pan: number;
+  /** エフェクト：音楽モードのフィルの小節に、エフェクトを掛ける割合。 */
+  fx: number;
+}
+
+/** フィルに掛けるエフェクト。 */
+export type FxKind = "lowpass" | "highpass" | "tapestop" | "crush" | "reverse";
+
+/** 打つ1回に掛けるエフェクト。a〜b は、エフェクトの流れ（0〜1）のうち、この1回が受け持つ範囲。 */
+export interface EventFx {
+  kind: FxKind;
+  a: number;
+  b: number;
+}
+
+/**
+ * 音の長さのつまみ（0〜1）を、次に打つ所までに鳴らす割合にする。
+ * 素材モードは 0で15%〜1で100%。音楽モードは流れを切りすぎないよう、0で50%〜1で100%。
+ */
+export function holdFraction(hold: number, style: "music" | "material" = "material"): number {
+  return style === "music" ? 0.5 + 0.5 * clamp01(hold) : 0.15 + 0.85 * clamp01(hold);
 }
 
 /** 打つ1回：何ステップ目から、何ステップぶん、どの断片を、何半音ずらして。 */
@@ -21,6 +47,23 @@ export interface LaneEvent {
   len: number;
   slice: number;
   pitch: number;
+  /** 左右（-1〜1）。無ければ真ん中。 */
+  pan?: number;
+  /** 次に打つ所までの、どれだけ鳴らすか（0〜1）。無ければ層の「音の長さ」に従う。 */
+  gate?: number;
+  fx?: EventFx;
+  /** 強さ（0〜1）。無ければ1。 */
+  vel?: number;
+}
+
+/**
+ * 打つ位置で決まる強さ：小節の頭がいちばん強く、拍の頭、8分の裏、16分の裏の順に弱くする（ノリが出る）。
+ */
+export function accentOf(step: number, stepsPerBar: number): number {
+  if (step % stepsPerBar === 0) return 1;
+  if (step % STEPS_PER_BEAT === 0) return 0.9;
+  if (step % 2 === 0) return 0.8;
+  return 0.7;
 }
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -81,7 +124,7 @@ export function planRhythm(
 
 /**
  * どの断片を打つか・どの高さで打つか。
- * 前と同じ断片をもう一度（連打）、前の続きの断片、どれでも、の3つから偶然で選ぶ。
+ * 前と同じ断片をもう一度（連打、45%）、前の続きの断片（15%）、どれでも、の3つから偶然で選ぶ。
  */
 export function planOrder(
   hits: { step: number; len: number }[],
@@ -99,7 +142,7 @@ export function planOrder(
     const any = randInt(sliceCount, rng);
     const m = rng();
     const move = moves[randInt(moves.length, rng)];
-    const slice = prev < 0 ? any : r < 0.3 ? prev : r < 0.45 ? (prev + 1) % sliceCount : any;
+    const slice = prev < 0 ? any : r < 0.45 ? prev : r < 0.6 ? (prev + 1) % sliceCount : any;
     if (m < clamp01(motion)) rung = Math.min(PITCH_LADDER.length - 1, Math.max(0, rung + move));
     prev = slice;
     return { step, len, slice, pitch: PITCH_LADDER[rung] };

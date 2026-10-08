@@ -12,13 +12,14 @@ export function createNoiseBuffer(ctx: BaseAudioContext, seconds = 2): AudioBuff
   return buffer;
 }
 
-function createReverbImpulse(ctx: BaseAudioContext, seconds = 2.2, decay = 3.2): AudioBuffer {
+/** リバーブの響き（減っていくノイズ）。rand を渡すと、毎回同じ響きになる。 */
+export function createReverbImpulse(ctx: BaseAudioContext, seconds = 2.2, decay = 3.2, rand: () => number = Math.random): AudioBuffer {
   const length = Math.ceil(ctx.sampleRate * seconds);
   const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
   for (let ch = 0; ch < 2; ch++) {
     const data = buffer.getChannelData(ch);
     for (let i = 0; i < length; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+      data[i] = (rand() * 2 - 1) * Math.pow(1 - i / length, decay);
     }
   }
   return buffer;

@@ -4,15 +4,31 @@ import { DEFAULT_VOLUME, LayerSynths } from "./layerSynths";
 import { quantizeBeat } from "../phrase/quantize";
 import { totalBeats, type Phrase } from "../phrase/types";
 import type { Pcm } from "../mix/pcm";
+import { foldTail } from "../mix/loopFold";
 
 /** リバーブ・ディレイの余韻を取っておく長さ（秒）。余韻は曲の頭に重ねて、繰り返してもつながるようにする。 */
 const TAIL_SECONDS = 2.5;
 
+export interface RenderOptions {
+  /** 余韻なし（リバーブ・ディレイを外す）。 */
+  dry?: boolean;
+  /** ドラムだけを書き出す（下地用）。 */
+  drumsOnly?: boolean;
+  /** スウィング（0〜1）：16分の裏の音を後ろにずらす（1で3連符のはね）。 */
+  swing?: number;
+}
+
 /**
  * フレーズ（1曲）を、指定のBPMで1周ぶんの波形に書き出す。
  * 層（ドラム・ベース…）は、ここで1本に混ぜてしまう。刻むときは、この波形だけを扱う。
+ * drumsOnly なら、ドラムの層だけを書き出す（刻まずに鳴らしっぱなしにする下地）。
  */
-export async function renderPhrase(phrase: Phrase, bpm: number, sampleRate: number): Promise<Pcm> {
+export async function renderPhrase(
+  phrase: Phrase,
+  bpm: number,
+  sampleRate: number,
+  opts: RenderOptions = {},
+): Promise<Pcm> {
   const secondsPerBeat = 60 / bpm;
   const loopFrames = Math.max(1, Math.round(totalBeats(phrase) * secondsPerBeat * sampleRate));
   const totalFrames = loopFrames + Math.ceil(TAIL_SECONDS * sampleRate);
@@ -22,11 +38,13 @@ export async function renderPhrase(phrase: Phrase, bpm: number, sampleRate: numb
   master.gain.value = 0.8; // ライブの出力と同じ音量
   master.connect(ctx.destination);
   const buses = new AudioBuses(ctx, master);
+  // 余韻なし：リバーブ・ディレイの送り先を、どこにもつながっていない行き止まりにする（刻んだ断片がにじまない）
+  const deadEnd = ctx.createGain();
   const synths = new LayerSynths({
     ctx,
     synthDry: buses.synthDry,
-    synthReverbSend: buses.synthReverbSend,
-    synthDelaySend: buses.synthDelaySend,
+    synthReverbSend: opts.dry ? deadEnd : buses.synthReverbSend,
+    synthDelaySend: opts.dry ? deadEnd : buses.synthDelaySend,
     drumOut: buses.drumOut,
   });
   const drums = new DrumMachine(ctx, createNoiseBuffer(ctx), buses.drumOut);
@@ -35,10 +53,10 @@ export async function renderPhrase(phrase: Phrase, bpm: number, sampleRate: numb
   const layers = structuredClone(phrase.layers);
   const hasSolo = layers.some((l) => l.solo);
   for (const layer of layers) {
-    if (layer.muted || (hasSolo && !layer.solo)) continue;
+    if (opts.drumsOnly ? layer.role !== "drums" || layer.muted : layer.muted || (hasSolo && !layer.solo)) continue;
     for (const note of layer.notes) {
       const beat = layer.quantizeGrid ? quantizeBeat(note.startBeats, layer.quantizeGrid) : note.startBeats;
-      const start = beat * secondsPerBeat;
+      const start = (beat + swingDelay(beat, opts.swing ?? 0)) * secondsPerBeat;
       if (layer.role === "drums") {
         const id = noteNumberToDrum[note.pitch];
         if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), start, synths.drumOut(layer));
@@ -51,17 +69,15 @@ export async function renderPhrase(phrase: Phrase, bpm: number, sampleRate: numb
   }
 
   const rendered = await ctx.startRendering();
-  const out: Pcm = { l: new Float32Array(loopFrames), r: new Float32Array(loopFrames) };
-  const left = rendered.getChannelData(0);
-  const right = rendered.getChannelData(1);
-  for (let i = 0; i < loopFrames; i++) {
-    out.l[i] = left[i];
-    out.r[i] = right[i];
-  }
-  // 余韻を曲の頭に重ねる（繰り返したとき、つなぎ目で余韻が途切れない）
-  for (let i = 0; i < totalFrames - loopFrames && i < loopFrames; i++) {
-    out.l[i] += left[loopFrames + i];
-    out.r[i] += right[loopFrames + i];
-  }
-  return out;
+  // 余韻を曲の頭に重ねる（繰り返したとき、つなぎ目で余韻が途切れない。1周より長い余韻も、何周ぶんでも重ねる）
+  return foldTail(rendered.getChannelData(0), rendered.getChannelData(1), loopFrames);
+}
+
+/** 16分の裏（拍の 1/4・3/4 の所）にある音を、どれだけ遅らせるか（拍）。1で16分の1/3。 */
+function swingDelay(beat: number, swing: number): number {
+  if (swing <= 0) return 0;
+  const sixteenth = beat * 4;
+  const nearest = Math.round(sixteenth);
+  if (Math.abs(sixteenth - nearest) > 0.05 || nearest % 2 === 0) return 0;
+  return (Math.min(1, swing) * 0.25) / 3;
 }

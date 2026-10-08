@@ -10,10 +10,20 @@ export interface CollageLane {
   /** 層全体を半音いくつずらすか（調をそろえるため）。 */
   keyShift: number;
   gain?: number;
+  /** 次に打つ所までに鳴らす割合（0〜1。無ければ1＝次まで伸ばす）。 */
+  holdFraction?: number;
 }
 
 /** 断片の継ぎ目のプチ音を消す、短いフェード（秒）。 */
 const FADE_SECONDS = 0.003;
+
+/**
+ * ステップの位置（サンプル）。スウィング（0〜1）があれば、16分の裏を後ろにずらす（1で16分の1/3＝3連符のはね）。
+ */
+export function stepPosition(step: number, stepSamples: number, swing = 0): number {
+  const late = step % 2 === 1 ? (Math.min(1, Math.max(0, swing)) * stepSamples) / 3 : 0;
+  return Math.round(step * stepSamples + late);
+}
 
 /**
  * 全部の層の予定どおりに断片を打って、1本の波形にする。
@@ -21,7 +31,7 @@ const FADE_SECONDS = 0.003;
  */
 export function renderCollage(
   lanes: CollageLane[],
-  opts: { totalSteps: number; stepSamples: number; sampleRate: number },
+  opts: { totalSteps: number; stepSamples: number; sampleRate: number; swing?: number },
 ): Pcm {
   const total = Math.max(1, Math.round(opts.totalSteps * opts.stepSamples));
   const out: Pcm = { l: new Float32Array(total), r: new Float32Array(total) };
@@ -33,27 +43,86 @@ export function renderCollage(
     for (const ev of lane.events) {
       const slice = lane.slices[ev.slice];
       if (!slice) continue;
-      const start = Math.round(ev.step * opts.stepSamples);
+      const start = stepPosition(ev.step, opts.stepSamples, opts.swing);
       if (start >= total) continue;
-      const gate = Math.round((ev.step + ev.len) * opts.stepSamples) - start;
+      const fullGate = stepPosition(ev.step + ev.len, opts.stepSamples, opts.swing) - start;
+      const gateFrac = Math.min(1, Math.max(0, ev.gate ?? lane.holdFraction ?? 1));
+      const gate = Math.max(1, Math.round(fullGate * gateFrac));
       const ratio = Math.pow(2, (ev.pitch + lane.keyShift) / 12);
       const available = Math.floor((slice.end - slice.start - 1) / ratio);
       const len = Math.min(gate, available, total - start);
       if (len <= 0) continue;
       const fade = Math.min(fadeMax, Math.floor(len / 2));
+      // パン：真ん中は左右とも1。振ると反対側が下がる
+      const pan = Math.min(1, Math.max(-1, ev.pan ?? 0));
+      const gl = Math.min(1, 1 - pan);
+      const gr = Math.min(1, 1 + pan);
+      const fx = ev.fx;
+      const progress = (k: number): number => (fx ? fx.a + ((fx.b - fx.a) * k) / len : 0);
+      let pos = slice.start; // テープストップ用：だんだん遅くなる読み位置
+      let yl = 0;
+      let yr = 0;
+      let held = { l: 0, r: 0 };
       for (let k = 0; k < len; k++) {
-        const x = slice.start + k * ratio;
+        let x: number;
+        if (fx?.kind === "tapestop") {
+          x = pos;
+          pos += ratio * Math.max(0.08, 1 - 0.92 * progress(k));
+          if (x >= slice.end - 1) break;
+        } else if (fx?.kind === "reverse") {
+          x = slice.start + (len - 1 - k) * ratio;
+        } else {
+          x = slice.start + k * ratio;
+        }
         const i0 = Math.floor(x);
         const f = x - i0;
-        let g = gain;
+        let vl = sl[i0] * (1 - f) + sl[i0 + 1] * f;
+        let vr = sr[i0] * (1 - f) + sr[i0 + 1] * f;
+        if (fx?.kind === "crush") {
+          // 音質を下げる：6サンプルごとに値を止め、5bitに丸める
+          if (k % 6 === 0) held = { l: Math.round(vl * 16) / 16, r: Math.round(vr * 16) / 16 };
+          vl = held.l;
+          vr = held.r;
+        } else if (fx?.kind === "lowpass" || fx?.kind === "highpass") {
+          // フィルター：ローパスは閉じていき（こもる）、ハイパスは低音が戻ってくる
+          const p = progress(k);
+          const fc = fx.kind === "lowpass" ? 9000 * Math.pow(250 / 9000, p) : 3000 * Math.pow(30 / 3000, p);
+          const alpha = 1 - Math.exp((-2 * Math.PI * fc) / opts.sampleRate);
+          if (k === 0) {
+            yl = vl;
+            yr = vr;
+          }
+          yl += alpha * (vl - yl);
+          yr += alpha * (vr - yr);
+          if (fx.kind === "lowpass") {
+            vl = yl;
+            vr = yr;
+          } else {
+            vl -= yl;
+            vr -= yr;
+          }
+        }
+        let g = gain * (ev.vel ?? 1);
         if (fade > 0) {
           if (k < fade) g *= k / fade;
           if (len - 1 - k < fade) g *= (len - 1 - k) / fade;
         }
-        out.l[start + k] += (sl[i0] * (1 - f) + sl[i0 + 1] * f) * g;
-        out.r[start + k] += (sr[i0] * (1 - f) + sr[i0 + 1] * f) * g;
+        out.l[start + k] += vl * g * gl;
+        out.r[start + k] += vr * g * gr;
       }
     }
   }
   return out;
+}
+
+/**
+ * 下地：波形 bed を、曲の頭から最後まで、くり返して重ねる（刻まずに鳴らしっぱなし）。
+ */
+export function layBed(out: Pcm, bed: Pcm, gain: number): void {
+  const n = bed.l.length;
+  if (n === 0 || gain <= 0) return;
+  for (let i = 0; i < out.l.length; i++) {
+    out.l[i] += bed.l[i % n] * gain;
+    out.r[i] += bed.r[i % n] * gain;
+  }
 }

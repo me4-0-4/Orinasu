@@ -1,11 +1,12 @@
 import { createRng } from "../theory/rng.ts";
 import { keyShortName } from "../theory/key.ts";
-import type { Phrase } from "../phrase/types.ts";
-import { renderCollage, type CollageLane } from "./collage.ts";
+import { totalBeats, type Phrase } from "../phrase/types.ts";
+import { layBed, renderCollage, type CollageLane } from "./collage.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
-import { STEPS_PER_BEAT, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
-import { cutSlices } from "./slicer.ts";
+import { STEPS_PER_BEAT, holdFraction, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
+import { cutSlices, type Slice } from "./slicer.ts";
+import { musicSlices, musicSlotSteps, planMusicLane } from "./musicChop.ts";
 import { effectiveParams, type Lane, type Song } from "./types.ts";
 
 /** 刻む曲：音符のある曲だけ。選んだ順。 */
@@ -14,6 +15,35 @@ export function collectSources(song: Pick<Song, "materialIds">, phrases: Phrase[
   return song.materialIds
     .map((id) => byId.get(id))
     .filter((p): p is Phrase => !!p && p.layers.some((l) => l.notes.length > 0));
+}
+
+/** ドラムの音符がある曲か（下地に使える）。 */
+export function hasDrums(phrase: Phrase): boolean {
+  return phrase.layers.some((l) => l.role === "drums" && !l.muted && l.notes.length > 0);
+}
+
+/**
+ * 下地に使う曲のid。決めていなければ（undefined）、ドラムのある最初の材料。無ければ null（下地なし）。
+ */
+export function pickDrum(song: Pick<Song, "drumId" | "materialIds">, phrases: Phrase[]): string | null {
+  if (song.drumId !== undefined) return song.drumId;
+  const byId = new Map(phrases.map((p) => [p.id, p]));
+  return song.materialIds.find((id) => { const p = byId.get(id); return !!p && hasDrums(p); }) ?? null;
+}
+
+/** 下地を線に描くための、ドラムの打つ所（曲の長さぶん、くり返す）。 */
+export function bedEvents(phrase: Phrase, totalSteps: number): LaneEvent[] {
+  const loop = Math.max(1, Math.round(totalBeats(phrase) * STEPS_PER_BEAT));
+  const steps = new Set<number>();
+  for (const l of phrase.layers) {
+    if (l.role !== "drums" || l.muted) continue;
+    for (const n of l.notes) steps.add(((Math.round(n.startBeats * STEPS_PER_BEAT) % loop) + loop) % loop);
+  }
+  const out: LaneEvent[] = [];
+  for (let base = 0; base < totalSteps; base += loop) {
+    for (const s of [...steps].sort((a, b) => a - b)) if (base + s < totalSteps) out.push({ step: base + s, len: 1, slice: 0, pitch: 0 });
+  }
+  return out;
 }
 
 /** 新しい層（種は seed から）。 */
@@ -70,19 +100,31 @@ export interface LaneView {
 export interface CollageResult {
   pcm: Pcm;
   lanes: LaneView[];
+  /** 下地（鳴らしっぱなしのドラム）。無ければ null。 */
+  bed: { phraseId: string; name: string; events: LaneEvent[] } | null;
   totalSteps: number;
   /** 曲の調（いちばん上の層の曲の調）。分からなければ null。 */
   keyName: string | null;
 }
 
+export interface RenderOpts {
+  dry: boolean;
+  drumsOnly?: boolean;
+  swing?: number;
+}
+
+/** 下地の音量の基準（刻んだ層の 0.9 より少し控えめ）。 */
+const BED_GAIN = 0.75;
+
 /**
- * 曲を作る：層ごとに、曲を曲のBPMで1本の波形に書き出し、断片に切り、格子に打って、全部の層を重ねる。
+ * 曲を作る：層ごとに、曲を曲のBPMで1本の波形に書き出し（余韻なしなら、リバーブ・ディレイを外して）、断片に切り、格子に打って、全部の層を重ねる。
+ * 下地があれば、その曲のドラムだけを書き出して、刻まずに頭から最後まで鳴らしっぱなしにする。
  * フレーズ自身のBPMは関係ない。ほかの層の調は、いちばん上の層の調に寄せる。
  */
 export async function buildCollage(
   song: Song,
   phrases: Phrase[],
-  render: (phrase: Phrase, bpm: number) => Promise<Pcm>,
+  render: (phrase: Phrase, bpm: number, opts: RenderOpts) => Promise<Pcm>,
   sampleRate: number,
 ): Promise<CollageResult | null> {
   const sources = collectSources(song, phrases);
@@ -93,19 +135,45 @@ export async function buildCollage(
   const stepSamples = (sampleRate * 60) / song.bpm / STEPS_PER_BEAT;
   const baseKey = phraseKey(byId.get(lanes[0].phraseId)!);
 
+  // 音楽モードの交代は、ミュートしていない層だけで回す（ミュートした層の番で、無音の4小節ができないように）
+  const playing = lanes.filter((l) => !l.muted);
   const built = await Promise.all(
-    lanes.map(async (lane) => {
+    lanes.map(async (lane, i) => {
+      const turn = lane.muted ? { laneIndex: i, laneCount: lanes.length } : { laneIndex: playing.indexOf(lane), laneCount: playing.length };
       const phrase = byId.get(lane.phraseId)!;
-      const pcm = await render(phrase, song.bpm);
+      const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし
       const params = effectiveParams(song.params, lane);
-      const slices = cutSlices(pcm, sampleRate, { mode: params.mode, size: params.size }, createRng(lane.cutSeed));
-      const hits = planRhythm(totalSteps, song.beatsPerBar, params, createRng(lane.rhythmSeed));
-      const events = planOrder(hits, slices.length, params.motion, createRng(lane.orderSeed));
+      let slices: Slice[];
+      let events: LaneEvent[];
+      if (song.params.style === "music") {
+        // 音楽モード：拍の格子で切り、元の同じ小節（コード）から取り、パターンをくり返す。層は交代で鳴らす
+        const stepsPerBar = song.beatsPerBar * STEPS_PER_BEAT;
+        const slotSteps = musicSlotSteps(params.size);
+        const srcBars = Math.max(1, Math.floor((totalBeats(phrase) * STEPS_PER_BEAT) / stepsPerBar));
+        slices = musicSlices({ srcBars, stepsPerBar, slotSteps, stepSamples, length: pcm.l.length });
+        events = planMusicLane({
+          totalSteps,
+          stepsPerBar,
+          srcBars,
+          slotSteps,
+          laneIndex: turn.laneIndex,
+          laneCount: turn.laneCount,
+          turns: song.params.turns,
+          params,
+          cutRng: createRng(lane.cutSeed),
+          rhythmRng: createRng(lane.rhythmSeed),
+          orderRng: createRng(lane.orderSeed),
+        });
+      } else {
+        slices = cutSlices(pcm, sampleRate, { mode: params.mode, size: params.size }, createRng(lane.cutSeed));
+        const hits = planRhythm(totalSteps, song.beatsPerBar, params, createRng(lane.rhythmSeed));
+        events = planOrder(hits, slices.length, params.motion, createRng(lane.orderSeed));
+      }
       const key = phraseKey(phrase);
       const keyShift = key && baseKey ? transposeSemitones(key, baseKey) : 0;
       const gain = lane.muted ? 0 : 0.9 * (lane.volume ?? 1);
-      const collage: CollageLane = { pcm, slices, events, keyShift, gain };
+      const collage: CollageLane = { pcm, slices, events, keyShift, gain, holdFraction: holdFraction(params.hold, song.params.style) };
       const view: LaneView = {
         phraseId: phrase.id,
         name: phrase.name,
@@ -117,6 +185,17 @@ export async function buildCollage(
       return { collage, view };
     }),
   );
-  const pcm = limitPeak(renderCollage(built.map((b) => b.collage), { totalSteps, stepSamples, sampleRate }));
-  return { pcm, lanes: built.map((b) => b.view), totalSteps, keyName: baseKey ? keyShortName(baseKey) : null };
+  const swing = song.params.swing;
+  const mixed = renderCollage(built.map((b) => b.collage), { totalSteps, stepSamples, sampleRate, swing });
+  // 下地：選んだ曲のドラムだけを、刻まずに鳴らしっぱなし（ノリの軸になる）
+  const drumId = pickDrum(song, phrases);
+  const drumPhrase = drumId ? phrases.find((p) => p.id === drumId && hasDrums(p)) : undefined;
+  let bed: CollageResult["bed"] = null;
+  if (drumPhrase) {
+    const bedPcm = await render(drumPhrase, song.bpm, { dry: song.params.dry, drumsOnly: true, swing });
+    layBed(mixed, bedPcm, BED_GAIN * song.params.bedVolume);
+    bed = { phraseId: drumPhrase.id, name: `${drumPhrase.name}のドラム`, events: bedEvents(drumPhrase, totalSteps) };
+  }
+  const pcm = limitPeak(mixed);
+  return { pcm, lanes: built.map((b) => b.view), bed, totalSteps, keyName: baseKey ? keyShortName(baseKey) : null };
 }

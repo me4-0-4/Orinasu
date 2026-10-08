@@ -22,16 +22,41 @@ export interface Lane {
 }
 
 /** 層ごとにずらせる形のつまみ。 */
-export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion";
-export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion"];
+export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold" | "crisp" | "pan" | "fx";
+export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold", "crisp", "pan", "fx"];
 export const MAX_LANE_VOLUME = 1.5;
+
+/**
+ * 刻み方のモード。
+ * music：音楽モード（拍の格子で切り、コードの流れと1拍目を守り、パターンをくり返す）。
+ * material：素材モード（phrz風。アタックや等分で自由に切って、偶然で打つ）。
+ */
+export type ChopStyle = "music" | "material";
+
+/**
+ * 層が複数のときの組み方（音楽モード）。
+ * call：掛け合い（小節の前半2拍と後半2拍を、別の層が受け持つ。4小節ごとに呼ぶ側が替わる）。
+ * swap：交代（4小節ごとに、鳴らす層が替わる）。
+ */
+export type TurnStyle = "call" | "swap";
 
 /** 形と切り方の設定。 */
 export interface SongParams extends ShapeParams {
+  style: ChopStyle;
   /** 切り方：アタックで切るか、等分に切るか。 */
   mode: CutMode;
+  /** 余韻なし：刻む前の書き出しで、リバーブ・ディレイを外す（断片同士がにじまない）。 */
+  dry: boolean;
+  /** 仕上げの響き（0〜1）：刻んだあとの曲全体に掛けるリバーブの量。 */
+  reverb: number;
   /** 断片の長さ（0〜1）。 */
   size: number;
+  /** スウィング（0〜1）：16分の裏を後ろにずらす。1で3連符のはね。下地のドラムにも掛かる。 */
+  swing: number;
+  /** 層が複数のときの組み方（音楽モード）。 */
+  turns: TurnStyle;
+  /** 下地（鳴らしっぱなしのドラム）の音量（0〜1）。 */
+  bedVolume: number;
 }
 
 /**
@@ -48,6 +73,11 @@ export interface Song {
   beatsPerBar: number;
   /** 曲の長さ（小節）。 */
   lengthBars: number;
+  /**
+   * 下地：どのフレーズのドラムを、刻まずに鳴らしっぱなしにするか（そのフレーズのドラムだけを書き出して、くり返す）。
+   * null は下地なし。無い（undefined）ときは、刻むときに、ドラムのある最初の材料を選ぶ。
+   */
+  drumId?: string | null;
   /** 層。まだ刻んでいなければ無い。 */
   lanes?: Lane[];
   params: SongParams;
@@ -58,16 +88,28 @@ export const SONG_ID = "song";
 
 export const MIN_BPM = 40;
 export const MAX_BPM = 240;
-export const LENGTH_OPTIONS = [4, 8, 16, 32];
+export const LENGTH_OPTIONS = [8, 16, 32, 64];
+/** 刻んだ曲の、いちばん短い長さ（秒）。これより短くなる長さは選べない。 */
+export const MIN_SONG_SECONDS = 30;
 export const DEFAULT_BPM = 120;
 
 export const DEFAULT_PARAMS: SongParams = {
+  style: "music",
   mode: "transient",
   busy: 0.5,
   breaks: 0,
   onBeat: 0,
   size: 0.5,
-  motion: 0,
+  motion: 0.3,
+  hold: 0.6,
+  crisp: 0.5,
+  pan: 0.5,
+  fx: 0.7,
+  dry: true,
+  reverb: 0.15,
+  swing: 0,
+  turns: "call",
+  bedVolume: 0.8,
 };
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -105,7 +147,7 @@ export function createEmptySong(): Song {
     materialIds: [],
     bpm: DEFAULT_BPM,
     beatsPerBar: 4,
-    lengthBars: 4,
+    lengthBars: 16,
     params: { ...DEFAULT_PARAMS },
     updatedAt: Date.now(),
   };
@@ -114,6 +156,19 @@ export function createEmptySong(): Song {
 /** 曲の長さ（秒）。 */
 export function songSeconds(song: Pick<Song, "lengthBars" | "beatsPerBar" | "bpm">): number {
   return (song.lengthBars * song.beatsPerBar * 60) / song.bpm;
+}
+
+/** そのテンポで、MIN_SONG_SECONDS 以上になる、いちばん短い長さ（小節）。どれも足りなければ、いちばん長いもの。 */
+export function minLengthBars(song: Pick<Song, "beatsPerBar" | "bpm">): number {
+  return (
+    LENGTH_OPTIONS.find((n) => songSeconds({ ...song, lengthBars: n }) >= MIN_SONG_SECONDS - 1e-9) ??
+    LENGTH_OPTIONS[LENGTH_OPTIONS.length - 1]
+  );
+}
+
+/** 長さが短すぎれば、足りる長さまで伸ばす。 */
+export function fitLength(song: Pick<Song, "lengthBars" | "beatsPerBar" | "bpm">): number {
+  return Math.max(song.lengthBars, minLengthBars(song));
 }
 
 /** 秒を「1:05」の形にする。 */
@@ -140,6 +195,8 @@ export function migrateSong(raw: unknown): Song {
   if (isNum(r.bpm) && r.bpm >= MIN_BPM && r.bpm <= MAX_BPM) song.bpm = Math.round(r.bpm);
   if (isNum(r.beatsPerBar) && r.beatsPerBar >= 1 && r.beatsPerBar <= 12) song.beatsPerBar = Math.round(r.beatsPerBar);
   if (isNum(r.lengthBars) && LENGTH_OPTIONS.includes(r.lengthBars)) song.lengthBars = r.lengthBars;
+  song.lengthBars = fitLength(song);
+  if (typeof r.drumId === "string" || r.drumId === null) song.drumId = r.drumId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(
       (l): l is Lane =>
@@ -150,10 +207,16 @@ export function migrateSong(raw: unknown): Song {
   }
   if (typeof r.params === "object" && r.params !== null) {
     const p = r.params as Record<string, unknown>;
-    for (const key of ["busy", "breaks", "onBeat", "size", "motion"] as const) {
+    for (const key of SHAPE_KEYS) {
       if (isNum(p[key])) song.params[key] = Math.min(1, Math.max(0, p[key]));
     }
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
+    if (typeof p.dry === "boolean") song.params.dry = p.dry;
+    if (isNum(p.reverb)) song.params.reverb = Math.min(1, Math.max(0, p.reverb));
+    if (p.style === "music" || p.style === "material") song.params.style = p.style;
+    if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
+    if (isNum(p.bedVolume)) song.params.bedVolume = Math.min(1, Math.max(0, p.bedVolume));
+    if (p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
   }
   return song;
 }
