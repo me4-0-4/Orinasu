@@ -290,7 +290,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   };
 
   /** 層ごとにずらさない、曲全体だけのつまみ（スウィング・下地の音量）。 */
-  function paramSlider(key: "swing" | "bedVolume", label: string, hint: () => string): HTMLElement {
+  function paramSlider(key: "swing" | "bedVolume" | "sfx" | "pad" | "pump", label: string, hint: () => string): HTMLElement {
     const row = document.createElement("div");
     row.className = "mix-slider-row";
     const name = document.createElement("span");
@@ -324,6 +324,21 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
   const paramRefreshers: (() => void)[] = [];
   const bedVolumeRow = paramSlider("bedVolume", "下地の音量", () => `下地の音量 – ${pct(song.params.bedVolume)}`);
+  const sfxRow = paramSlider("sfx", "SFX", () =>
+    song.params.sfx < 0.05
+      ? "SFX – 入れない"
+      : `SFX – 8小節ごとにライザー（上がっていく音）とインパクト・クラッシュ、4小節ごとにリバースシンバル（音量 ${pct(song.params.sfx)}）`,
+  );
+  const padRow = paramSlider("pad", "伸ばし", () =>
+    song.params.pad < 0.05
+      ? "伸ばし – 鳴らさない"
+      : `伸ばし – 元の曲の和音を引き伸ばして、うしろでうっすら鳴らし続ける（断片の間をつなぐ。音量 ${pct(song.params.pad)}）`,
+  );
+  const pumpRow = paramSlider("pump", "ポンピング", () =>
+    song.params.pump < 0.05
+      ? "ポンピング – 掛けない"
+      : `ポンピング – 下地のキックに合わせて、刻んだ音を少し沈ませる（下地が無ければ4つ打ちで。深さ ${pct(song.params.pump)}）`,
+  );
   const swingRow = paramSlider("swing", "スウィング", () =>
     song.params.swing < 0.05
       ? "スウィング – はねない（まっすぐ）"
@@ -674,6 +689,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       fieldRow("余韻", drySelect),
       reverbRow,
     ),
+    rule("つなぎ", "刻んだ音を、曲としてまとめる仕上げ。区切りを聞かせるSFX、和音でつなぐ伸ばし、キックでまとめるポンピング", sfxRow, padRow, pumpRow),
     rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, holdRow, crispRow, motionRow, panRow, fxRow, swingRow),
   );
   split.append(stagePane, sidePane);

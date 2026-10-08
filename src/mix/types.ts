@@ -58,6 +58,12 @@ export interface SongParams extends ShapeParams {
   turns: TurnStyle;
   /** 下地（鳴らしっぱなしのドラム）の音量（0〜1）。 */
   bedVolume: number;
+  /** SFX（0〜1）：区切りに、ライザー・インパクトとクラッシュ・リバースシンバルを入れる量。 */
+  sfx: number;
+  /** 伸ばし（0〜1）：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす量。 */
+  pad: number;
+  /** ポンピング（0〜1）：下地のキックに合わせて、刻んだ音を沈ませる深さ。 */
+  pump: number;
 }
 
 /**
@@ -111,6 +117,9 @@ export const DEFAULT_PARAMS: SongParams = {
   swing: 0,
   turns: "mix",
   bedVolume: 0.8,
+  sfx: 0.6,
+  pad: 0.5,
+  pump: 0.5,
 };
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -216,7 +225,9 @@ export function migrateSong(raw: unknown): Song {
     if (isNum(p.reverb)) song.params.reverb = Math.min(1, Math.max(0, p.reverb));
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
     if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
-    if (isNum(p.bedVolume)) song.params.bedVolume = Math.min(1, Math.max(0, p.bedVolume));
+    for (const key of ["bedVolume", "sfx", "pad", "pump"] as const) {
+      if (isNum(p[key])) song.params[key] = Math.min(1, Math.max(0, p[key]));
+    }
     if (p.turns === "mix" || p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
   }
   return song;

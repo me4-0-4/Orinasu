@@ -100,6 +100,7 @@ test("層ごとのずらし：密度を上げた層だけ、打つ数が増え�
 test("ミュートした層は鳴らない（線には出る）", async () => {
   const phrases = [phrase("a", 100)];
   const song: Song = { ...createEmptySong(), materialIds: ["a"] };
+  song.params = { ...song.params, sfx: 0 }; // SFXは層と関係なく鳴るので、ここでは外す
   song.lanes = syncLanes(song, seq);
   song.lanes[0].muted = true;
   const out = (await buildCollage(song, phrases, steadyRender, 1000))!;
