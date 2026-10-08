@@ -57,6 +57,8 @@ export interface LaneView {
   setData: (data: LaneViewData | null) => void;
   /** 再生位置（0〜1）。鳴っていないときは null。 */
   setProgress: (t: number | null) => void;
+  /** タッチで四角選びをするか（複数選択モード）。 */
+  setTouchSelect: (on: boolean) => void;
 }
 
 /** トラック名などの見出しは、となりの DOM（トラックヘッダー）が描く。ここは線だけ。 */
@@ -92,6 +94,13 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
   let rect: { x0: number; y0: number; x1: number; y1: number; add: boolean; active: boolean } | null = null;
   /** 四角で選んだ直後の click を無視する。 */
   let swallowClick = false;
+  /** タッチで四角選びをするか（複数選択のとき）。 */
+  let touchSelect = false;
+  /** タッチでページをスクロールさせるか：四角選びやエンベロープを描くときは止める。 */
+  const updateTouchAction = (): void => {
+    const hasEnv = !!data?.rows.some((r) => r.type === "env");
+    canvas.style.touchAction = touchSelect || hasEnv ? "none" : "pan-y";
+  };
 
   const css = (name: string, fallback: string): string =>
     getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
@@ -316,9 +325,11 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
   // エンベロープの行：点を足す・動かす
   canvas.addEventListener("pointerdown", (e) => {
     if (!data) return;
+    swallowClick = false; // 前の四角選びで click が来なかった（タッチ）ときも、次のタップは効かせる
     const { x, y } = local(e);
     const hit = rowAt(y);
-    if (hit && hit.row.type === "track" && e.button === 0) {
+    // タッチでは、複数選択のときだけ四角で選ぶ（ふだんはページをスクロールできるように）
+    if (hit && hit.row.type === "track" && e.button === 0 && (e.pointerType !== "touch" || touchSelect)) {
       rect = { x0: x, y0: y, x1: x, y1: y, add: e.shiftKey || e.ctrlKey || e.metaKey, active: false };
       canvas.setPointerCapture(e.pointerId);
       return;
@@ -330,9 +341,12 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     const added = index < 0;
     if (added) {
       const t = Math.round(Math.min(data.totalSteps, Math.max(0, stepOf(x))));
-      points.push({ t, v: envV(hit.top, y) });
-      points.sort((a, b) => a.t - b.t || 0);
-      index = points.findIndex((p) => p.t === t);
+      const point = { t, v: envV(hit.top, y) };
+      // 同じ位置の点があれば、そのあとに入れる（足した点そのものを動かす）
+      const at = points.findIndex((p) => p.t > t);
+      if (at < 0) points.push(point);
+      else points.splice(at, 0, point);
+      index = points.indexOf(point);
     }
     drag = { id: row.key, points, index, moved: false, added };
     canvas.setPointerCapture(e.pointerId);
@@ -367,7 +381,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     drag.moved = true;
     draw();
   });
-  const finish = (): void => {
+  const finish = (e: PointerEvent): void => {
     if (rect) {
       const r = rect;
       rect = null;
@@ -387,7 +401,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
           }
           top += h;
         }
-        swallowClick = true;
+        swallowClick = e.pointerType === "mouse"; // マウスは、離したあとに click が来る
         handlers.onRect(hits, r.add);
         draw();
       }
@@ -436,7 +450,12 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     el: root,
     setData(next) {
       data = next;
+      updateTouchAction();
       if (!drag) draw();
+    },
+    setTouchSelect(on) {
+      touchSelect = on;
+      updateTouchAction();
     },
     setProgress(t) {
       if (t === progress) return;

@@ -905,6 +905,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     const id = sel.id;
     song.groups = song.groups?.map((g) => (g.id === id ? { ...g, name: groupNameInput.value } : g));
     touch();
+    refresh(); // パンくず・FXの窓の題も新しい名前に（入力欄は書き換えない）
   });
   const groupNameRow = el("label", "ins-row ins-choice");
   groupNameRow.append(el("span", "ins-label", "名前"), groupNameInput);
@@ -1237,6 +1238,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     hitsPanel.hidden = sel.type !== "hits";
     groupPanel.hidden = sel.type !== "group";
     multiToggle.classList.toggle("on", multiMode);
+    laneView.setTouchSelect(multiMode);
     multiToggle.hidden = !result;
     crumbs.innerHTML = "";
     const crumb = (label: string, onClick?: () => void): void => {
@@ -1371,6 +1373,16 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       takeClear.disabled = take.chain.length === 0;
     }
     for (const c of controls) if (!c.el.hidden) c.refresh();
+    // FXの窓の相手（トラック・断片・グループ）が無くなったら閉じる
+    const open = fxWindow.target();
+    if (
+      open &&
+      ((open.type === "track" && !allTrackKeys().includes(open.key)) ||
+        (open.type === "take" && !laneOfKey(open.track)) ||
+        (open.type === "group" && !groupById(open.id)))
+    ) {
+      fxWindow.close();
+    }
     fxWindow.refresh();
   }
 

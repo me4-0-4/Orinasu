@@ -1287,9 +1287,7 @@ body[data-tab="mix"] .app-footer {
 .mix-hit-bar {
   align-items: center;
 }
-.lane-canvas {
-  touch-action: none;
-}
+/* タッチの扱い（スクロールさせるか）は laneView が、場面に合わせて決める */
 @media (max-width: 720px) {
   .fx-overlay {
     left: 8px;

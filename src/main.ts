@@ -1048,10 +1048,29 @@ updateKeyLabels();
 
 const heldKeys = new Map<string, number>();
 
+/** 文字を打つ所か（テキスト・数値・検索の入力欄、テキストエリア、編集できる要素）。 */
+function isTextEntry(el: HTMLElement | null): boolean {
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+  if (el.tagName !== "INPUT") return false;
+  const type = (el as HTMLInputElement).type;
+  return ["text", "number", "search", "email", "password", "url", "tel"].includes(type);
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) return;
+  // 文字を打つ所（名前・BPMなど）では、キーをそのまま使わせる
+  if (isTextEntry(target)) return;
+  // チェックボックス・スライダー・選択はクリックのあともフォーカスが残る。スペースで切り替わらないよう、再生⇔停止だけにする
+  if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) {
+    if (e.code === "Space") {
+      e.preventDefault();
+      if (currentTab === "mix") mixPanel.togglePlay();
+      else togglePlay();
+    }
+    return;
+  }
   if (currentTab === "mix") {
     // 刻むタブ：鍵盤は隠しているので音符は鳴らさない。スペースは刻んだ曲の再生⇔停止
     if (e.code === "Space") {
