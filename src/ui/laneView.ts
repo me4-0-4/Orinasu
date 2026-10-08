@@ -42,11 +42,7 @@ export interface LaneViewData {
 }
 
 export interface LaneViewHandlers {
-  /** トラック名をタップ。 */
-  onName: (track: string) => void;
-  /** FXボタンをタップ。 */
-  onFx: (track: string) => void;
-  /** 層の線の上の断片をタップ（無い所なら step は null）。 */
+  /** トラックの線の上をタップ：断片の上なら step、空いた所なら null。 */
   onHit: (track: string, step: number | null) => void;
   /** エンベロープを描き変えた（点を足す・動かす・消す）。 */
   onEnvEdit: (id: string, points: EnvPoint[]) => void;
@@ -59,19 +55,19 @@ export interface LaneView {
   setProgress: (t: number | null) => void;
 }
 
-const GUTTER = 128;
-const HEAD_H = 16;
-const ROW_H = 30;
-const ENV_H = 40;
+/** トラック名などの見出しは、となりの DOM（トラックヘッダー）が描く。ここは線だけ。 */
+const GUTTER = 0;
+export const HEAD_H = 18;
+export const ROW_H = 34;
+export const ENV_H = 40;
 const EMPTY_H = 72;
-const FX_W = 26;
 const POINT_R = 4;
 const ENV_PAD = 5;
 
 /**
- * トラックの表示（REAPER 風）。1行が1トラック：層（刻む曲）・下地・伸ばし・マスター。
- * 左の名前をタップで層を選び、[FX] でそのトラックのFXチェーンを開く。
- * 層の線の上の小さな棒が「打った断片」（色は断片の番号、上下は音程）。断片をタップすると選べる（テイクFXを開ける）。
+ * トラックの表示（DAW 風のアレンジ画面の、線の部分）。1行が1トラック：刻む曲・ドラムループ・パッド・マスター。
+ * 名前・ミュート・音量・FX は、となりのトラックヘッダー（DOM）に置く。行の高さは ROW_H／ENV_H でそろえる。
+ * 線の上の小さな棒が「打った断片」（色は断片の番号、上下は音程）。断片をタップすると選べる（テイクFXを開ける）。
  * トラックの下には、エンベロープ（つまみを時間で動かす折れ線）が出る：
  * 空いた所をタップで点を足し、点をドラッグで動かし、点をダブルタップ（右クリック）で消す。
  */
@@ -122,16 +118,14 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, width, height);
     const dim = css("--text-dim", "#9a9ba6");
-    const text = css("--text", "#e8e8ee");
     const border = css("--border", "#2a2c36");
-    const blue = css("--accent-blue", "#5eb4ff");
     const green = css("--accent-green", "#3ee6b0");
     g.font = "11px sans-serif";
     g.textBaseline = "middle";
 
     if (!data || data.rows.length === 0) {
       g.fillStyle = dim;
-      g.fillText("「刻む」を押すと、ここに層（選んだ曲）ごとの線が出る", 8, height / 2);
+      g.fillText("右の「素材」でフレーズを選んで、上の「刻む」を押すと、ここにトラックが並ぶ", 8, height / 2);
       return;
     }
 
@@ -167,16 +161,6 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
           g.fillStyle = "rgba(94,180,255,0.10)";
           g.fillRect(0, top, width, h);
         }
-        g.fillStyle = row.muted || row.kind !== "lane" ? dim : row.locked ? blue : text;
-        g.fillText(`${row.locked ? "● " : ""}${row.name}${row.custom ? " ＊" : ""}`, 8, mid, GUTTER - FX_W - 14);
-        // FXボタン（鳴っているFXがあれば光る）
-        const bx = GUTTER - FX_W - 6;
-        g.fillStyle = row.fx ? green : "rgba(255,255,255,0.06)";
-        g.fillRect(bx, mid - 8, FX_W, 16);
-        g.strokeStyle = row.fx ? green : border;
-        g.strokeRect(bx + 0.5, mid - 7.5, FX_W - 1, 15);
-        g.fillStyle = row.fx ? "#0c0d12" : dim;
-        g.fillText("FX", bx + 6, mid + 0.5);
         if (row.kind === "lane" || row.kind === "bed") {
           g.strokeStyle = "rgba(255,255,255,0.18)";
           g.beginPath();
@@ -212,15 +196,13 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
           g.globalAlpha = 1;
         } else {
           g.fillStyle = dim;
-          g.fillText(row.kind === "master" ? "曲のぜんぶ" : "和音を伸ばした音", GUTTER + 6, mid);
+          g.fillText(row.kind === "master" ? "曲のぜんぶ（最後にFX）" : "和音を伸ばした音（うしろでうっすら）", GUTTER + 6, mid);
         }
       } else {
         // エンベロープ：折れ線と点
         const points = drag?.id === row.key ? drag.points : row.points;
         g.fillStyle = "rgba(255,196,80,0.05)";
         g.fillRect(0, top, width, h);
-        g.fillStyle = row.active ? "#ffc450" : dim;
-        g.fillText(row.label, 16, mid, GUTTER - 22);
         g.strokeStyle = row.active ? "#ffc450" : "rgba(255,255,255,0.3)";
         g.lineWidth = 1.5;
         g.beginPath();
@@ -282,15 +264,10 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     const hit = rowAt(y);
     if (!hit || hit.row.type !== "track") return;
     const row = hit.row;
-    if (x >= GUTTER - FX_W - 8 && x <= GUTTER - 2) {
-      handlers.onFx(row.key);
+    if (row.kind !== "lane") {
+      handlers.onHit(row.key, null);
       return;
     }
-    if (x < GUTTER) {
-      handlers.onName(row.key);
-      return;
-    }
-    if (row.kind !== "lane") return;
     const step = stepOf(x);
     let best: LaneEvent | undefined;
     let bestD = Infinity;
