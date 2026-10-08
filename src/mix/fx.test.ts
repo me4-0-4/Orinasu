@@ -138,3 +138,18 @@ test("読み込み：いまの形、少し前の形（いつ掛けるか つき�
   const pcm = { l: Float32Array.from([0.1]), r: Float32Array.from([0.1]) };
   assert.equal(applyDrive(pcm, 0, 0), pcm);
 });
+
+test("フィルター：くり返しのつなぎ目で、音が途切れない（プチッとしない）", async () => {
+  const n = 1000; // 100Hzがちょうど100周
+  const l = Float32Array.from({ length: n }, (_, i) => Math.sin((2 * Math.PI * 100 * i) / SR));
+  const out = await applyTrack({ l, r: l.slice() }, { chain: [newPlugin("highCut", { amount: 0.9 })], envelopes: [] }, env());
+  let steady = 0;
+  for (let i = 300; i < n; i++) steady = Math.max(steady, Math.abs(out.l[i] - out.l[i - 1]));
+  assert.ok(Math.abs(out.l[0] - out.l[n - 1]) < steady * 2, `つなぎ目 ${Math.abs(out.l[0] - out.l[n - 1])} / ふだん ${steady}`);
+});
+
+test("エンベロープの曲線：点を順にたどっても、1点ずつ計算したのと同じ", () => {
+  const pts = [{ t: 0, v: 0 }, { t: 3, v: 1 }, { t: 3, v: 0.2 }, { t: 7, v: 0.6 }];
+  const c = envCurve(pts, 100, 10);
+  for (let i = 0; i < 100; i += 7) assert.ok(Math.abs(c[i] - envValueAt(pts, i / 10)) < 1e-6, `i=${i}`);
+});

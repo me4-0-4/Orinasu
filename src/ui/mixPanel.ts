@@ -103,6 +103,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let sel: Selection = { type: "song" };
   let busy = "";
   const renderCache = new Map<string, Promise<Pcm>>();
+  /** 素材から外したトラック（また選んだら、設定ごと戻す）。この画面を開いているあいだだけ覚える。 */
+  const removedLanes = new Map<string, Lane>();
   const player = new LoopPlayer(deps.audio.ctx, deps.audio.out);
   const sampleRate = deps.audio.ctx.sampleRate;
 
@@ -523,8 +525,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       check.type = "checkbox";
       check.checked = song.materialIds.includes(p.id);
       check.addEventListener("change", () => {
+        // 外したトラックの設定（種・FX・テイクFX・ずらし・音量）は取っておき、また選んだら戻す
+        const old = song.lanes?.find((l) => l.phraseId === p.id);
+        if (!check.checked && old) removedLanes.set(p.id, old);
         song.materialIds = check.checked ? [...song.materialIds, p.id] : song.materialIds.filter((id) => id !== p.id);
-        if (song.lanes) song.lanes = syncLanes(song, randomSeed); // トラックを足す・消す（ほかのトラックはそのまま）
+        if (song.lanes) {
+          const kept = check.checked ? removedLanes.get(p.id) : undefined;
+          song.lanes = syncLanes(song, randomSeed).map((l) => (kept && l.phraseId === p.id ? kept : l)); // トラックを足す・消す（ほかのトラックはそのまま）
+        }
         changed();
       });
       row.append(check, el("span", "layer-role-label", `${p.name}（${p.lengthBars}小節・元${p.bpm}BPM）`));
@@ -897,6 +905,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     const id = sel.id;
     song.groups = song.groups?.map((g) => (g.id === id ? { ...g, name: groupNameInput.value } : g));
     touch();
+    refresh(); // パンくず・FXの窓の題も新しい名前に（入力欄は書き換えない）
   });
   const groupNameRow = el("label", "ins-row ins-choice");
   groupNameRow.append(el("span", "ins-label", "名前"), groupNameInput);
@@ -1229,6 +1238,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     hitsPanel.hidden = sel.type !== "hits";
     groupPanel.hidden = sel.type !== "group";
     multiToggle.classList.toggle("on", multiMode);
+    laneView.setTouchSelect(multiMode);
     multiToggle.hidden = !result;
     crumbs.innerHTML = "";
     const crumb = (label: string, onClick?: () => void): void => {
@@ -1363,6 +1373,16 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       takeClear.disabled = take.chain.length === 0;
     }
     for (const c of controls) if (!c.el.hidden) c.refresh();
+    // FXの窓の相手（トラック・断片・グループ）が無くなったら閉じる
+    const open = fxWindow.target();
+    if (
+      open &&
+      ((open.type === "track" && !allTrackKeys().includes(open.key)) ||
+        (open.type === "take" && !laneOfKey(open.track)) ||
+        (open.type === "group" && !groupById(open.id)))
+    ) {
+      fxWindow.close();
+    }
     fxWindow.refresh();
   }
 
@@ -1388,6 +1408,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;
+      removedLanes.clear();
       sel = { type: "song" };
       setNotice("");
       renderMaterials();
@@ -1398,8 +1419,19 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       // 消えたフレーズは素材から外す
       const alive = new Set(deps.getPhrases().map((p) => p.id));
       song.materialIds = song.materialIds.filter((id) => alive.has(id));
-      if (song.lanes) song.lanes = song.lanes.filter((l) => alive.has(l.phraseId));
-      if (song.drumId && !alive.has(song.drumId)) song.drumId = null;
+      if (song.lanes) {
+        song.lanes = song.lanes.filter((l) => alive.has(l.phraseId));
+        if (song.lanes.length === 0) delete song.lanes; // 刻む前と同じ状態に（読み込み直したときと同じふるまい）
+      }
+      // ドラムループの曲が消えたら、「なし」ではなく「自動」（ドラムのある最初の素材）に戻す
+      if (song.drumId && !alive.has(song.drumId)) delete song.drumId;
+      // 消えたフレーズの断片はグループから外し、空になったグループは消す
+      if (song.groups) {
+        song.groups = song.groups
+          .map((g) => ({ ...g, members: g.members.filter((m) => alive.has(m.phraseId)) }))
+          .filter((g) => g.members.length > 0);
+        if (song.groups.length === 0) delete song.groups;
+      }
       renderMaterials();
       refresh();
       if (song.lanes && !result) void rebuild(); // 起動直後は、フレーズが読み込まれてから曲を作り直す

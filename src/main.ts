@@ -238,13 +238,29 @@ const recorder = new Recorder(transport, activeLayer);
 // --- 刻む（選んだ曲を1本の波形にして、切り貼りして鳴らす） ---------------------
 
 let persistSongTimer: number | null = null;
+let pendingSong: Song | null = null;
 function persistSongSoon(song: Song): void {
   if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
+  pendingSong = song;
   persistSongTimer = window.setTimeout(() => {
     persistSongTimer = null;
+    pendingSong = null;
     void saveSong(song);
   }, 400);
 }
+// タブを閉じる・隠すときは、待っている保存をすぐ書く（直前の変更を落とさない）
+const flushSong = (): void => {
+  if (persistSongTimer === null || !pendingSong) return;
+  window.clearTimeout(persistSongTimer);
+  persistSongTimer = null;
+  const song = pendingSong;
+  pendingSong = null;
+  void saveSong(song);
+};
+window.addEventListener("pagehide", flushSong);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushSong();
+});
 
 const mixPanel = buildMixPanel({
   getPhrases: () => savedPhrases,
@@ -1032,10 +1048,29 @@ updateKeyLabels();
 
 const heldKeys = new Map<string, number>();
 
+/** 文字を打つ所か（テキスト・数値・検索の入力欄、テキストエリア、編集できる要素）。 */
+function isTextEntry(el: HTMLElement | null): boolean {
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+  if (el.tagName !== "INPUT") return false;
+  const type = (el as HTMLInputElement).type;
+  return ["text", "number", "search", "email", "password", "url", "tel"].includes(type);
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) return;
+  // 文字を打つ所（名前・BPMなど）では、キーをそのまま使わせる
+  if (isTextEntry(target)) return;
+  // チェックボックス・スライダー・選択はクリックのあともフォーカスが残る。スペースで切り替わらないよう、再生⇔停止だけにする
+  if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) {
+    if (e.code === "Space") {
+      e.preventDefault();
+      if (currentTab === "mix") mixPanel.togglePlay();
+      else togglePlay();
+    }
+    return;
+  }
   if (currentTab === "mix") {
     // 刻むタブ：鍵盤は隠しているので音符は鳴らさない。スペースは刻んだ曲の再生⇔停止
     if (e.code === "Space") {
@@ -1116,12 +1151,23 @@ function playheadLoop(): void {
 }
 playheadLoop();
 
-void reloadPhraseList();
 mixPanel.setSong(createEmptySong());
-void loadSong(SONG_ID).then((song) => {
+// フレーズ一覧を読み終えてから曲を読む（先に曲を読むと、空の一覧で素材やトラックを消してしまい、次の保存で失われる）
+void (async () => {
+  try {
+    await reloadPhraseList();
+  } catch (err) {
+    // 一覧を読めなかったときは、曲を読まない（空の一覧で素材を消して保存しないように）
+    console.error("フレーズ一覧を読み込めませんでした", err);
+    return;
+  }
+  const song = await loadSong(SONG_ID).catch((err) => {
+    console.error("曲を読み込めませんでした", err);
+    return null;
+  });
   if (song) mixPanel.setSong(migrateSong(song));
   mixPanel.refreshMaterials();
-});
+})();
 refreshPhraseUI();
 
 // クラウドから新しいデータを取り込んだら、一覧を読み直す（編集中のフレーズは触らない）。
@@ -1129,5 +1175,12 @@ initCloud({
   onSynced: () => {
     void reloadPhraseList();
     void reloadUserPresets();
+  },
+  // 別のアカウントに切り替えて端末のデータを消したら、刻む曲も空にする（前の人の曲を新しい人の所に保存しない）
+  onCleared: () => {
+    if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
+    persistSongTimer = null;
+    pendingSong = null;
+    mixPanel.setSong(createEmptySong());
   },
 });

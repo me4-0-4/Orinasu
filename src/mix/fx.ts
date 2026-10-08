@@ -135,6 +135,20 @@ export const delayFeedbackGain = (feedback: number): number => 0.85 * clamp01(fe
 export const lowCutHz = (v: number): number => 20 * Math.pow(100, clamp01(v));
 export const highCutHz = (v: number): number => 20000 * Math.pow(300 / 20000, clamp01(v));
 
+/** FXチェーンの余韻の長さ（秒）：リバーブの長さと、ディレイが 1/1000 まで小さくなる時間の長いほう。 */
+export function chainTailSeconds(chain: FxPlugin[], bpm: number): number {
+  let tail = 0.05;
+  for (const p of live(chain)) {
+    if (p.kind === "reverb") tail = Math.max(tail, reverbSeconds(p.size) + 0.05);
+    if (p.kind === "delay") {
+      const fb = delayFeedbackGain(p.feedback);
+      const repeats = fb <= 0 ? 1 : Math.ceil(Math.log(0.001) / Math.log(fb)) + 1;
+      tail = Math.max(tail, delaySeconds(p.time, bpm) * repeats);
+    }
+  }
+  return tail;
+}
+
 /** プラグインのつまみの値を、人が読める形にする。 */
 export function describeAmount(p: Pick<FxPlugin, "kind">, v: number): string {
   if (p.kind === "lowCut") return `${Math.round(lowCutHz(v))} Hz`;
@@ -252,7 +266,8 @@ export function sanitizeTakes(raw: unknown): TakeFx[] {
   for (const t of raw as Record<string, unknown>[]) {
     if (typeof t !== "object" || t === null || !isNum(t.step) || !Array.isArray(t.chain)) continue;
     const chain = t.chain.map(sanitizePlugin).filter((p): p is FxPlugin => p !== null);
-    if (chain.length > 0 && !out.some((o) => o.step === t.step)) out.push({ step: Math.max(0, Math.round(t.step)), chain });
+    const step = Math.max(0, Math.round(t.step));
+    if (chain.length > 0 && !out.some((o) => o.step === step)) out.push({ step, chain });
   }
   return out.sort((a, b) => a.step - b.step);
 }
@@ -287,7 +302,20 @@ export function envValueAt(points: EnvPoint[], t: number): number {
 /** 折れ線を、サンプルごとの値にする。 */
 export function envCurve(points: EnvPoint[], n: number, stepSamples: number): Float32Array {
   const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) out[i] = envValueAt(points, i / stepSamples);
+  if (points.length === 0) return out;
+  // 点を前から順にたどる（サンプルごとに全部の点を見直さない）
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / stepSamples;
+    while (k < points.length && points[k].t <= t) k++;
+    if (k === 0) out[i] = points[0].v;
+    else if (k === points.length) out[i] = points[points.length - 1].v;
+    else {
+      const a = points[k - 1];
+      const b = points[k];
+      out[i] = b.t === a.t ? b.v : a.v + ((b.v - a.v) * (t - a.t)) / (b.t - a.t);
+    }
+  }
   return out;
 }
 
@@ -425,6 +453,17 @@ export function biquad(pcm: Pcm, type: "lowpass" | "highpass", freq: (i: number)
     let y1 = 0;
     let y2 = 0;
     let c = coef(freq(0));
+    // くり返しのつなぎ目でプチッとしないよう、曲の終わりの少しを先に通して、フィルターを温めておく
+    const pre = Math.min(src.length, Math.round(sampleRate * 0.2));
+    const cEnd = coef(freq(Math.max(0, src.length - 1)));
+    for (let i = src.length - pre; i < src.length; i++) {
+      const x0 = src[i];
+      const y0 = cEnd[0] * x0 + cEnd[1] * x1 + cEnd[2] * x2 - cEnd[3] * y1 - cEnd[4] * y2;
+      x2 = x1;
+      x1 = x0;
+      y2 = y1;
+      y1 = y0;
+    }
     for (let i = 0; i < src.length; i++) {
       if (i % COEF_BLOCK === 0 && i > 0) c = coef(freq(i));
       const x0 = src[i];

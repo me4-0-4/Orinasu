@@ -222,3 +222,10 @@ test("混ぜる：全部の層で1つのリズム。打つ所は層どうしで�
     assert.ok(steps.length <= solo.length + 8 * SPB); // 念のため（リズムは1本ぶん）
   }
 });
+
+test("交代：曲が短くても、どのトラックにも番が回る（8小節で3トラック）", () => {
+  for (let i = 0; i < 3; i++) {
+    const ev = planMusicLane(input({ laneIndex: i, laneCount: 3, turns: "swap" }, 4));
+    assert.ok(ev.length > 0, `トラック${i}が鳴らない`);
+  }
+});
