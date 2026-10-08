@@ -960,16 +960,18 @@ body[data-tab="mix"] .app-footer {
   display: none !important;
 }
 
+/* 広い画面：左（線と操作）と右（設定）を、それぞれの枠の中でスクロールする（フレーズタブの列と同じ） */
 .mix-tab.active {
   display: block;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .mix-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
-  align-items: start;
+  height: 100%;
+  min-height: 0;
 }
 
 .mix-stage-pane {
@@ -977,6 +979,17 @@ body[data-tab="mix"] .app-footer {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+/* 層の線（と再生位置）は、スクロールしても上にずっと出しておく */
+.mix-stage-pane > .lane-view {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
 }
 
 .mix-stage-pane > .mix-rule {
@@ -988,6 +1001,9 @@ body[data-tab="mix"] .app-footer {
   flex-direction: column;
   gap: 18px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .mix-rule {
@@ -1100,10 +1116,22 @@ body[data-tab="mix"] .app-footer {
   .mix-split {
     grid-template-columns: minmax(0, 1fr);
     gap: 18px;
+    height: auto;
   }
 
+  /* 狭い画面：ページごとスクロールし、層の線だけ上に貼りつける。
+     左の枠をほどいて（display: contents）、線が曲の設定の所までずっと貼りつけるようにする */
   .mix-stage-pane {
-    position: static;
+    display: contents;
+  }
+  .mix-side-pane {
+    overflow: visible;
+    padding-right: 0;
+  }
+  .mix-split > .lane-view {
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
 
 }
