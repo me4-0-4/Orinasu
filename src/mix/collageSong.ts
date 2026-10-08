@@ -137,13 +137,21 @@ export async function buildCollage(
 
   // 音楽モードの交代は、ミュートしていない層だけで回す（ミュートした層の番で、無音の4小節ができないように）
   const playing = lanes.filter((l) => !l.muted);
+  // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種と形は、いちばん上の鳴っている層のもの（形は全体のつまみ）
+  const mixing = song.params.style === "music" && song.params.turns === "mix" && playing.length > 1;
+  const lead = playing[0];
   const built = await Promise.all(
     lanes.map(async (lane, i) => {
-      const turn = lane.muted ? { laneIndex: i, laneCount: lanes.length } : { laneIndex: playing.indexOf(lane), laneCount: playing.length };
+      const turn = lane.muted
+        ? mixing
+          ? { laneIndex: -1, laneCount: playing.length } // 混ぜるとき、ミュートした層には番を回さない
+          : { laneIndex: i, laneCount: lanes.length }
+        : { laneIndex: playing.indexOf(lane), laneCount: playing.length };
       const phrase = byId.get(lane.phraseId)!;
       const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
-      // 層に効く形＝全体＋その層のずらし
-      const params = effectiveParams(song.params, lane);
+      // 層に効く形＝全体＋その層のずらし（混ぜるときは、1つのリズムなので全体の形）
+      const params = mixing ? effectiveParams(song.params, {}) : effectiveParams(song.params, lane);
+      const seeds = mixing ? lead : lane;
       let slices: Slice[];
       let events: LaneEvent[];
       if (song.params.style === "music") {
@@ -160,10 +168,11 @@ export async function buildCollage(
           laneIndex: turn.laneIndex,
           laneCount: turn.laneCount,
           turns: song.params.turns,
+          srcRng: mixing ? createRng(lead.orderSeed ^ 0x2545f491) : undefined,
           params,
-          cutRng: createRng(lane.cutSeed),
-          rhythmRng: createRng(lane.rhythmSeed),
-          orderRng: createRng(lane.orderSeed),
+          cutRng: createRng(seeds.cutSeed),
+          rhythmRng: createRng(seeds.rhythmSeed),
+          orderRng: createRng(seeds.orderSeed),
         });
       } else {
         slices = cutSlices(pcm, sampleRate, { mode: params.mode, size: params.size }, createRng(lane.cutSeed));

@@ -267,6 +267,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const turnsSelect = document.createElement("select");
   turnsSelect.className = "quantize-select";
   for (const [value, label] of [
+    ["mix", "混ぜる（1つのリズムに）"],
     ["call", "掛け合い（2拍ずつ）"],
     ["swap", "交代（4小節ずつ）"],
   ] as const) {
@@ -282,7 +283,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   });
   const turnsHint = document.createElement("span");
   turnsHint.className = "mix-info mix-slider-hint";
-  turnsHint.textContent = "層が2本以上のとき。掛け合い：前半2拍と後半2拍を別の層が受け持つ（4小節ごとに呼ぶ側が替わる）";
+  const turnsHints: Record<TurnStyle, string> = {
+    mix: "層が2本以上のとき。1つのリズムの中で、打つ1回ごとにどの曲の断片を使うかを偶然で決める（形は全体のつまみ。層ごとのずらしは効かず、音量・ミュートだけ効く）",
+    call: "層が2本以上のとき。前半2拍と後半2拍を別の層が受け持つ（4小節ごとに呼ぶ側が替わる）",
+    swap: "層が2本以上のとき。4小節ごとに、鳴らす層が替わる",
+  };
 
   /** 層ごとにずらさない、曲全体だけのつまみ（スウィング・下地の音量）。 */
   function paramSlider(key: "swing" | "bedVolume", label: string, hint: () => string): HTMLElement {
@@ -654,7 +659,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const sidePane = document.createElement("div");
   sidePane.className = "mix-side-pane";
   sidePane.append(
-    rule("材料", "刻む曲（フレーズ）を選ぶ。曲1つが、層1本になる（中のドラム・ベースなどには分けない）。複数選ぶと、音楽モードでは掛け合いか交代、素材モードでは重なる", materialEmpty, materialList),
+    rule("材料", "刻む曲（フレーズ）を選ぶ。曲1つが、層1本になる（中のドラム・ベースなどには分けない）。複数選ぶと、音楽モードでは混ぜる・掛け合い・交代のどれか、素材モードでは重なる", materialEmpty, materialList),
     rule(
       "曲",
       "刻んだあとの曲の設定",
@@ -873,6 +878,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     lengthSelect.value = String(song.lengthBars);
     lengthHint.textContent = "30秒より短くなる長さは選べない（テンポで変わる）";
     turnsSelect.value = song.params.turns;
+    turnsHint.textContent = turnsHints[song.params.turns];
     turnsRow.hidden = song.params.style !== "music";
     const drum = pickDrum(song, deps.getPhrases());
     drumSelect.value = drum && deps.getPhrases().some((p) => p.id === drum && hasDrums(p)) ? drum : "";

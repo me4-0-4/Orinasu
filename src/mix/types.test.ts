@@ -117,5 +117,11 @@ test("下地・スウィング・層の組み方を引き継ぐ。決めてい�
   assert.equal(s.params.bedVolume, 1);
   assert.equal(migrateSong({ drumId: null }).drumId, null);
   assert.equal(migrateSong({}).drumId, undefined);
-  assert.equal(migrateSong({}).params.turns, "call");
+  assert.equal(migrateSong({}).params.turns, "mix");
+});
+
+test("層の組み方：初期は「混ぜる」。古い掛け合い・交代もそのまま", () => {
+  assert.equal(createEmptySong().params.turns, "mix");
+  assert.equal(migrateSong({ params: { turns: "call" } }).params.turns, "call");
+  assert.equal(migrateSong({ params: { turns: "mix" } }).params.turns, "mix");
 });

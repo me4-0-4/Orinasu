@@ -35,10 +35,11 @@ export type ChopStyle = "music" | "material";
 
 /**
  * 層が複数のときの組み方（音楽モード）。
+ * mix：混ぜる（1つのリズムを全部の層で作る。打つ1回ごとに、どの曲の断片を使うかを偶然で決める。決めた割り当てもパターンと一緒にくり返す）。
  * call：掛け合い（小節の前半2拍と後半2拍を、別の層が受け持つ。4小節ごとに呼ぶ側が替わる）。
  * swap：交代（4小節ごとに、鳴らす層が替わる）。
  */
-export type TurnStyle = "call" | "swap";
+export type TurnStyle = "mix" | "call" | "swap";
 
 /** 形と切り方の設定。 */
 export interface SongParams extends ShapeParams {
@@ -108,7 +109,7 @@ export const DEFAULT_PARAMS: SongParams = {
   dry: true,
   reverb: 0.15,
   swing: 0,
-  turns: "call",
+  turns: "mix",
   bedVolume: 0.8,
 };
 
@@ -216,7 +217,7 @@ export function migrateSong(raw: unknown): Song {
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
     if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
     if (isNum(p.bedVolume)) song.params.bedVolume = Math.min(1, Math.max(0, p.bedVolume));
-    if (p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
+    if (p.turns === "mix" || p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
   }
   return song;
 }
