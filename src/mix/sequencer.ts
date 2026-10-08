@@ -13,8 +13,24 @@ export interface ShapeParams {
   onBeat: number;
   /** 音程の動き：断片の高さを、近い高さへ少しずつ動かす。 */
   motion: number;
-  /** 音の長さ：次に打つ所までの、どれだけ鳴らすか（0で短く切る、1で次まで伸ばす）。 */
+  /** 音の長さ：次に打つ所までの、どれだけ鳴らすか（0で短く切る、1で次まで伸ばす）。素材モード用。 */
   hold: number;
+  /** キレ：音楽モードで、短い隙間を入れてメリハリをつける小節の割合（残りは「なめらか」につなぐ）。 */
+  crisp: number;
+  /** パン：刻んだ所を左右に交互に振る強さ。 */
+  pan: number;
+  /** エフェクト：音楽モードのフィルの小節に、エフェクトを掛ける割合。 */
+  fx: number;
+}
+
+/** フィルに掛けるエフェクト。 */
+export type FxKind = "lowpass" | "highpass" | "tapestop" | "crush" | "reverse";
+
+/** 打つ1回に掛けるエフェクト。a〜b は、エフェクトの流れ（0〜1）のうち、この1回が受け持つ範囲。 */
+export interface EventFx {
+  kind: FxKind;
+  a: number;
+  b: number;
 }
 
 /**
@@ -31,6 +47,11 @@ export interface LaneEvent {
   len: number;
   slice: number;
   pitch: number;
+  /** 左右（-1〜1）。無ければ真ん中。 */
+  pan?: number;
+  /** 次に打つ所までの、どれだけ鳴らすか（0〜1）。無ければ層の「音の長さ」に従う。 */
+  gate?: number;
+  fx?: EventFx;
 }
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));

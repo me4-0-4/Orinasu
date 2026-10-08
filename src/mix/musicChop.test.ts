@@ -4,7 +4,7 @@ import { createRng } from "../theory/rng.ts";
 import { musicSlices, musicSlotSteps, planMusicLane, type MusicLaneInput } from "./musicChop.ts";
 
 const SPB = 16; // 1小節＝16分×16
-const shape = { busy: 0.6, breaks: 0, onBeat: 0, size: 0.5, motion: 0, hold: 1 };
+const shape = { busy: 0.6, breaks: 0, onBeat: 0, size: 0.5, motion: 0, hold: 1, crisp: 0, pan: 0, fx: 0 };
 const input = (over: Partial<MusicLaneInput> = {}, seed = 1): MusicLaneInput => ({
   totalSteps: 8 * SPB,
   stepsPerBar: SPB,
@@ -63,7 +63,9 @@ test("格子に乗る・重ならない・小節をまたいで伸ばさない",
   for (let seed = 1; seed <= 20; seed++) {
     const ev = planMusicLane(input({ params: { ...shape, breaks: 0.4 } }, seed));
     ev.forEach((e, i) => {
-      assert.equal(e.step % 2, 0);
+      const bar = Math.floor(e.step / SPB);
+      if (bar % 4 !== 3 && bar !== 7) assert.equal(e.step % 2, 0); // フィルの「ちりばめ」は16分ごと
+
       assert.ok(e.len >= 1);
       if (ev[i + 1]) assert.ok(e.step + e.len <= ev[i + 1].step);
       assert.ok(Math.floor(e.step / SPB) === Math.floor((e.step + e.len - 1) / SPB));
@@ -79,13 +81,66 @@ test("層が複数なら、4小節ごとに交代で鳴らす", () => {
   assert.ok(a.length > 0 && b.length > 0);
 });
 
-test("音程：動き0なら変えない。上げても、1オクターブだけ（コードを崩さない）", () => {
+test("音程：動き0なら変えない。上げても、オクターブか、フィルの終わりの階段（-4〜-1）だけ", () => {
   assert.ok(planMusicLane(input()).every((e) => e.pitch === 0));
   const pitches = new Set<number>();
-  for (let seed = 1; seed <= 30; seed++) {
-    for (const e of planMusicLane(input({ params: { ...shape, motion: 1, busy: 1 } }, seed))) pitches.add(e.pitch);
+  let stairs = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const ev = planMusicLane(input({ params: { ...shape, motion: 1, busy: 1 } }, seed));
+    for (const e of ev) pitches.add(e.pitch);
+    // 階段：-n, ..., -1 と1つずつ上がって小節の終わりへ
+    for (let i = 1; i < ev.length; i++) if (ev[i - 1].pitch === -2 && ev[i].pitch === -1) stairs++;
   }
-  assert.deepEqual([...pitches].sort((x, y) => x - y), [0, 12]);
+  for (const p of pitches) assert.ok([-4, -3, -2, -1, 0, 12].includes(p), String(p));
+  assert.ok(stairs > 0);
+});
+
+test("並べ方は「切ったまま」か「繰り返す」だけ（フィル以外）", () => {
+  for (let seed = 1; seed <= 30; seed++) {
+    const ev = planMusicLane(input({ totalSteps: 4 * SPB, params: { ...shape, busy: 1 } }, seed));
+    const body = ev.filter((e) => Math.floor(e.step / SPB) < 3);
+    body.forEach((e, i) => {
+      const asCut = e.slice % slots(2) === (e.step % SPB) / 2;
+      const repeat = i > 0 && body[i - 1].slice === e.slice;
+      assert.ok(asCut || repeat, `seed ${seed} step ${e.step}`);
+    });
+  }
+});
+
+test("なめらか／キレ：キレ0なら本体の小節は隙間なし（鳴らす割合1）。キレ1なら隙間を入れて左右に振る", () => {
+  const smooth = planMusicLane(input({ totalSteps: 4 * SPB }, 3)).filter((e) => e.step < 3 * SPB);
+  assert.ok(smooth.every((e) => e.gate === 1 && !e.pan));
+  const crisp = planMusicLane(input({ totalSteps: 4 * SPB, params: { ...shape, crisp: 1, pan: 1 } }, 3)).filter((e) => e.step < 3 * SPB);
+  assert.ok(crisp.every((e) => (e.gate ?? 1) < 1));
+  assert.ok(crisp.some((e) => (e.pan ?? 0) > 0) && crisp.some((e) => (e.pan ?? 0) < 0));
+});
+
+test("パン：左右はなるべく均等（1小節の中で、片側に偏らない）", () => {
+  for (let seed = 1; seed <= 20; seed++) {
+    const ev = planMusicLane(input({ params: { ...shape, crisp: 1, pan: 0.8, busy: 1 } }, seed));
+    for (let b = 0; b < 8; b++) {
+      const sum = ev.filter((e) => Math.floor(e.step / SPB) === b).reduce((a, e) => a + (e.pan ?? 0), 0);
+      assert.ok(Math.abs(sum) <= 0.8 * 2 + 1e-9, `seed ${seed} bar ${b} sum ${sum}`);
+    }
+  }
+});
+
+test("フィル：後ろ半分を同じ断片で埋める（連打かちりばめ）。エフェクト1なら、フィルにエフェクトが掛かる。0なら無い", () => {
+  const kinds = new Set<string>();
+  for (let seed = 1; seed <= 40; seed++) {
+    const ev = planMusicLane(input({ totalSteps: 4 * SPB, params: { ...shape, fx: 1 } }, seed));
+    const tail = ev.filter((e) => e.step >= 3 * SPB + SPB / 2);
+    assert.ok(tail.length > 0);
+    assert.equal(new Set(tail.map((e) => e.slice)).size, 1, "同じ断片");
+    for (const e of tail) {
+      assert.ok(e.fx, "エフェクトが付く");
+      kinds.add(e.fx!.kind);
+      assert.ok(e.fx!.a >= 0 && e.fx!.b <= 1 && e.fx!.a < e.fx!.b);
+    }
+    assert.ok(ev.filter((e) => e.step < 3 * SPB).every((e) => !e.fx), "フィル以外には掛けない");
+  }
+  assert.ok(kinds.size >= 4, [...kinds].join(","));
+  for (let seed = 1; seed <= 20; seed++) assert.ok(planMusicLane(input({}, seed)).every((e) => !e.fx));
 });
 
 test("密度を上げると打つ数が増える。同じ種なら同じ", () => {

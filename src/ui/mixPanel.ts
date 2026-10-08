@@ -330,13 +330,27 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     song.params.motion < 0.05
       ? "音程の動き – 動かさない"
       : song.params.style === "music"
-        ? `音程の動き – ${pct(song.params.motion)}（連打やフィルで、ときどき1オクターブ上げる）`
+        ? `音程の動き – ${pct(song.params.motion)}（繰り返しを1オクターブ上げたり、フィルの終わりを階段状に元の高さへ戻したりする）`
         : `音程の動き – ${pct(song.params.motion)}（断片の高さを、近い高さへ少しずつ動かす）`,
   );
   const modeRow = fieldRow("切り方", modeSelect);
   const holdRow = slider("hold", "音の長さ", () =>
     `音の長さ – 次に打つ所までの ${Math.round(holdFraction(song.params.hold, song.params.style) * 100)}% で切る（短いほどブツ切れ）`,
   );
+  const crispRow = slider("crisp", "キレ", () =>
+    `キレ – 小節の約${Math.round(song.params.crisp * 100)}%を、短い隙間でメリハリをつける（残りは「なめらか」に隙間なくつなぐ）`,
+  );
+  const panRow = slider("pan", "パン", () =>
+    song.params.pan < 0.05 ? "パン – 振らない" : `パン – 刻んだ所を左右に交互に振る（強さ ${pct(song.params.pan)}、左右は均等に）`,
+  );
+  const fxRow = slider("fx", "エフェクト", () =>
+    song.params.fx < 0.05
+      ? "エフェクト – 掛けない"
+      : `エフェクト – フィルの約${pct(song.params.fx)}に、フィルター・テープストップ・音質下げ・逆再生のどれかを掛ける`,
+  );
+  /** モードで使わないつまみは隠す（音楽モード：音の長さ。素材モード：キレ・パン・エフェクト）。 */
+  const musicOnlyRows = [crispRow, panRow, fxRow];
+  const materialOnlyRows = [holdRow];
   function refreshSliders(): void {
     for (const f of sliderRefreshers) f();
   }
@@ -398,6 +412,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     });
   });
   const laneModeRow = fieldRow("切り方", laneMode);
+  // 層の欄も、モードで使わないつまみは隠す（下で作る）
+  let laneHoldRow!: HTMLElement;
+  let laneCrispRow!: HTMLElement;
+  let lanePanRow!: HTMLElement;
+  let laneFxRow!: HTMLElement;
   const laneSliderSync: (() => void)[] = [];
   function laneSlider(key: ShapeKey, label: string): HTMLElement {
     const row = document.createElement("div");
@@ -432,6 +451,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     row.append(name, input, value, note);
     return row;
   }
+  laneHoldRow = laneSlider("hold", "音の長さ");
+  laneCrispRow = laneSlider("crisp", "キレ");
+  lanePanRow = laneSlider("pan", "パン");
+  laneFxRow = laneSlider("fx", "エフェクト");
   laneBox.append(
     laneButtons,
     volumeRow,
@@ -441,7 +464,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     laneSlider("onBeat", "拍に寄せる"),
     laneSlider("size", "断片の長さ"),
     laneSlider("motion", "音程の動き"),
-    laneSlider("hold", "音の長さ"),
+    laneHoldRow,
+    laneCrispRow,
+    lanePanRow,
+    laneFxRow,
   );
 
   function selectedLane(): Lane | undefined {
@@ -542,7 +568,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       fieldRow("余韻", drySelect),
       reverbRow,
     ),
-    rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, holdRow, motionRow),
+    rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, holdRow, crispRow, motionRow, panRow, fxRow),
   );
   split.append(stagePane, sidePane);
   root.append(split);
@@ -738,6 +764,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     // 切り方（アタック／等分）は素材モードだけ。音楽モードは拍の格子で切る
     modeRow.hidden = song.params.style === "music";
     laneModeRow.hidden = song.params.style === "music";
+    const music = song.params.style === "music";
+    for (const r of [...musicOnlyRows, laneCrispRow, lanePanRow, laneFxRow]) r.hidden = !music;
+    for (const r of [...materialOnlyRows, laneHoldRow]) r.hidden = music;
     drySelect.value = song.params.dry ? "dry" : "wet";
     showReverb();
     const hits = result ? result.lanes.reduce((a, l) => a + l.events.length, 0) : 0;

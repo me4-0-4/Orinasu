@@ -57,3 +57,44 @@ test("音の長さ：次に打つ所までの一部だけ鳴らして、残り�
   assert.ok(half.l.slice(200).every((x) => x === 0)); // 半分なら2ステップで切れる
   assert.ok(half.l[100] !== 0);
 });
+
+const one = (ev: Partial<import("./sequencer.ts").LaneEvent>, pcm = ramp(4000)) =>
+  renderCollage([{ pcm, slices: [{ start: 0, end: 4000 }], events: [{ step: 0, len: 4, slice: 0, pitch: 0, ...ev }], keyShift: 0, gain: 1 }], opts);
+
+test("パン：右いっぱいなら左は無音。真ん中は左右同じ", () => {
+  const right = one({ pan: 1 });
+  assert.ok(right.l.every((x) => x === 0));
+  assert.ok(right.r[100] !== 0);
+  const center = one({});
+  assert.equal(center.l[100], center.r[100]);
+});
+
+test("打つ1回ごとの鳴らす割合（gate）は、層の音の長さより優先", () => {
+  const pcm = ramp(4000);
+  const out = renderCollage(
+    [{ pcm, slices: [{ start: 0, end: 4000 }], events: [{ step: 0, len: 4, slice: 0, pitch: 0, gate: 0.25 }], keyShift: 0, gain: 1, holdFraction: 1 }],
+    opts,
+  );
+  assert.ok(out.l.slice(100).every((x) => x === 0));
+});
+
+test("エフェクト：逆再生は逆向き、音質下げは値が段々になる、テープストップは読む速さが落ちる", () => {
+  const pcm = ramp(4000);
+  const rev = one({ fx: { kind: "reverse", a: 0, b: 1 } }, pcm);
+  assert.ok(Math.abs(rev.l[100] - pcm.l[399 - 100]) < 1e-6);
+  const crush = one({ fx: { kind: "crush", a: 0, b: 1 } }, pcm);
+  assert.equal(crush.l[50], crush.l[51]); // 6サンプルごとに止まる
+  const tape = one({ fx: { kind: "tapestop", a: 0, b: 1 } }, pcm);
+  // 等速なら300番目は pcm[300]。遅くなるので、もっと手前の値（小さい値）
+  assert.ok(tape.l[300] < pcm.l[300] * 0.9);
+});
+
+test("エフェクト：ローパスは高い音（細かい揺れ）を削る", () => {
+  const n = 4000;
+  const l = new Float32Array(n).map((_, i) => (i % 2 === 0 ? 0.5 : -0.5)); // いちばん高い音
+  const pcm = { l, r: l.slice() };
+  const dry = one({}, pcm);
+  const lp = one({ fx: { kind: "lowpass", a: 0.9, b: 1 } }, pcm);
+  const energy = (x: Float32Array) => x.slice(50, 350).reduce((a, v) => a + v * v, 0);
+  assert.ok(energy(lp.l) < energy(dry.l) * 0.2);
+});

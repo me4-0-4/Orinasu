@@ -22,8 +22,8 @@ export interface Lane {
 }
 
 /** 層ごとにずらせる形のつまみ。 */
-export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold";
-export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold"];
+export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold" | "crisp" | "pan" | "fx";
+export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold", "crisp", "pan", "fx"];
 export const MAX_LANE_VOLUME = 1.5;
 
 /**
@@ -82,6 +82,9 @@ export const DEFAULT_PARAMS: SongParams = {
   size: 0.5,
   motion: 0,
   hold: 0.6,
+  crisp: 0.3,
+  pan: 0.3,
+  fx: 0.5,
   dry: true,
   reverb: 0.15,
 };
