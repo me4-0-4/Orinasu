@@ -197,3 +197,28 @@ test("掛け合い：2本の層は同じ所で鳴らない。前半2拍と後半
     assert.ok(b.some((e) => e.step >= SPB / 2 && e.step < SPB));
   }
 });
+
+test("混ぜる：全部の層で1つのリズム。打つ所は層どうしで重ならず、ほとんどの小節で2つの曲が両方鳴る", () => {
+  for (let seed = 1; seed <= 10; seed++) {
+    const lane = (i: number) =>
+      planMusicLane(input({ laneIndex: i, laneCount: 2, turns: "mix", srcRng: createRng(seed + 99) }, seed));
+    const solo = planMusicLane(input({}, seed)); // 層1本のときと同じリズム（種が同じ）
+    const a = lane(0);
+    const b = lane(1);
+    const steps = [...a, ...b].map((e) => e.step).sort((x, y) => x - y);
+    assert.equal(new Set(steps).size, steps.length, "同じ所で2つ鳴った");
+    assert.ok(a.length > 0 && b.length > 0);
+    let both = 0;
+    for (let bar = 0; bar < 8; bar++) {
+      const inBar = (ev: typeof a) => ev.some((e) => Math.floor(e.step / SPB) === bar);
+      if (inBar(a) && inBar(b)) both++;
+    }
+    assert.ok(both >= 4, `両方鳴る小節 ${both}/8`);
+    // 次に打つ所（ほかの層でも）を越えて伸ばさない
+    for (const e of [...a, ...b]) {
+      const next = steps.find((s) => s > e.step);
+      if (next !== undefined) assert.ok(e.step + e.len <= next);
+    }
+    assert.ok(steps.length <= solo.length + 8 * SPB); // 念のため（リズムは1本ぶん）
+  }
+});

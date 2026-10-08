@@ -4,6 +4,7 @@ import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
 import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
+import { newSlot, type FxSlot } from "./fx.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
 
@@ -88,6 +89,7 @@ const steadyRender = async (): Promise<Pcm> => {
 test("層ごとのずらし：密度を上げた層だけ、打つ数が増える。ほかの層はそのまま", async () => {
   const phrases = [phrase("a", 100), phrase("b", 100, 62)];
   const song: Song = { ...createEmptySong(), materialIds: ["a", "b"] };
+  song.params = { ...song.params, turns: "swap" }; // 混ぜるときは1つのリズムなので、層ごとのずらしは効かない
   song.lanes = syncLanes(song, seq);
   const before = (await buildCollage(song, phrases, steadyRender, 1000))!;
   song.lanes[0] = { ...song.lanes[0], shift: { busy: 0.4 } };
@@ -99,6 +101,7 @@ test("層ごとのずらし：密度を上げた層だけ、打つ数が増え�
 test("ミュートした層は鳴らない（線には出る）", async () => {
   const phrases = [phrase("a", 100)];
   const song: Song = { ...createEmptySong(), materialIds: ["a"] };
+  song.params = { ...song.params, sfx: 0 }; // SFXは層と関係なく鳴るので、ここでは外す
   song.lanes = syncLanes(song, seq);
   song.lanes[0].muted = true;
   const out = (await buildCollage(song, phrases, steadyRender, 1000))!;
@@ -164,4 +167,39 @@ test("下地：選んだ曲のドラムだけを書き出して、刻まずに�
   assert.equal(result.bed?.phraseId, "a");
   assert.equal(result.bed?.events.length, 4 * 2); // 4小節のフレーズを2回
   assert.deepEqual(bedEvents(phrases[0], 16).map((e) => e.step), [0, 4, 8, 12]);
+});
+
+test("混ぜる：2つの曲で1つのリズム。同じ所で両方は鳴らず、ミュートした層には番を回さない", async () => {
+  const phrases = [phrase("a", 100), phrase("b", 100, 62), phrase("c", 100, 64)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b", "c"], lengthBars: 16 };
+  song.lanes = syncLanes(song, seq);
+  song.lanes[2].muted = true;
+  const r = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  const steps = r.lanes.slice(0, 2).flatMap((l) => l.events.map((e) => e.step));
+  assert.equal(new Set(steps).size, steps.length);
+  assert.ok(r.lanes[0].events.length > 0 && r.lanes[1].events.length > 0);
+  assert.equal(r.lanes[2].events.length, 0);
+});
+
+test("エフェクト：掛けた所（層・下地・全体）にだけ掛ける。掛けていない所では、リバーブは呼ばない", async () => {
+  const phrases = [drumPhrase("a"), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], drumId: "a" };
+  song.params = { ...song.params, pad: 0, sfx: 0 };
+  song.lanes = syncLanes(song, seq);
+  const tagged = (tag: number): FxSlot => newSlot("reverb", { amount: 1, size: tag });
+  song.lanes[1].fx = [tagged(0.1)];
+  song.fx = { master: [tagged(0.3)], bed: [tagged(0.2)], pad: [] };
+  const called: number[] = [];
+  const reverb = async (pcm: Pcm, seconds: number): Promise<Pcm> => {
+    called.push(Math.round(seconds * 100) / 100);
+    return pcm;
+  };
+  await buildCollage(song, phrases, steadyRender, 1000, reverb);
+  // 0.3·20^size 秒：層0.1→0.40、下地0.2→0.55、全体0.3→0.74
+  assert.deepEqual(called.sort(), [0.4, 0.55, 0.74]);
+  called.length = 0;
+  song.fx = { master: [], bed: [], pad: [] };
+  delete song.lanes[1].fx;
+  await buildCollage(song, phrases, steadyRender, 1000, reverb);
+  assert.deepEqual(called, []);
 });

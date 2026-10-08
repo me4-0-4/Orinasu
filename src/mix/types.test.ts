@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, fitLength, formatDuration, minLengthBars, migrateSong, songSeconds, type Lane } from "./types.ts";
+import { createEmptySong, laneIsCustom, fitLength, formatDuration, minLengthBars, migrateSong, songSeconds, type Lane } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
@@ -93,10 +93,22 @@ test("刻み方のモード：初期は音楽モード。保存データから�
   assert.equal(migrateSong({ params: { style: "???" } }).params.style, "music");
 });
 
-test("仕上げの響き：初期15%。保存データから読める", () => {
-  assert.equal(createEmptySong().params.reverb, 0.15);
-  assert.equal(migrateSong({ params: { reverb: 0.4 } }).params.reverb, 0.4);
-  assert.equal(migrateSong({ params: { reverb: 7 } }).params.reverb, 1);
+test("エフェクト：全体の初期はリバーブ15%。前の「仕上げの響き」は全体のリバーブに。並び・層のエフェクトも読める", () => {
+  const s0 = createEmptySong();
+  assert.deepEqual(s0.fx.master.map((x) => [x.kind, x.amount]), [["reverb", 0.15]]);
+  assert.deepEqual(s0.fx.bed, []);
+  assert.equal(migrateSong({ params: { reverb: 0.4 } }).fx.master[0].amount, 0.4);
+  assert.deepEqual(migrateSong({ params: { reverb: 0 } }).fx.master, []);
+  const s1 = migrateSong({
+    fx: { master: [{ kind: "delay", amount: 0.5, time: "1/4", when: "bars", from: 3, to: 2 }], bed: { lowCut: 0.5 } },
+    lanes: [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, fx: [{ kind: "drive", amount: 0.3 }] }],
+  });
+  assert.equal(s1.fx.master[0].kind, "delay");
+  assert.equal(s1.fx.master[0].time, "1/4");
+  assert.equal(s1.fx.master[0].to, 3); // 終わりは始まりより前にならない
+  assert.equal(s1.fx.bed[0].kind, "lowCut");
+  assert.equal(s1.lanes![0].fx![0].amount, 0.3);
+  assert.ok(laneIsCustom(s1.lanes![0]));
 });
 
 test("曲の長さは30秒より短くならない：テンポに合わせて、選べるいちばん短い長さが変わる", () => {
@@ -117,5 +129,11 @@ test("下地・スウィング・層の組み方を引き継ぐ。決めてい�
   assert.equal(s.params.bedVolume, 1);
   assert.equal(migrateSong({ drumId: null }).drumId, null);
   assert.equal(migrateSong({}).drumId, undefined);
-  assert.equal(migrateSong({}).params.turns, "call");
+  assert.equal(migrateSong({}).params.turns, "mix");
+});
+
+test("層の組み方：初期は「混ぜる」。古い掛け合い・交代もそのまま", () => {
+  assert.equal(createEmptySong().params.turns, "mix");
+  assert.equal(migrateSong({ params: { turns: "call" } }).params.turns, "call");
+  assert.equal(migrateSong({ params: { turns: "mix" } }).params.turns, "mix");
 });
