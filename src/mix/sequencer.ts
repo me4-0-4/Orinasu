@@ -101,7 +101,7 @@ export function planRhythm(
 ): { step: number; len: number }[] {
   const stepsPerBar = beatsPerBar * STEPS_PER_BEAT;
   const rest = restMask(steps, stepsPerBar, params.breaks, rng);
-  const p = 0.08 + 0.72 * clamp01(params.busy);
+  const p = 0.08 + 0.92 * clamp01(params.busy);
   const o = clamp01(params.onBeat);
   const hits: number[] = [];
   for (let s = 0; s < steps; s++) {

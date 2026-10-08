@@ -78,7 +78,7 @@ interface Hit {
  * 繰り返した所は、左右に交互に振る（パン）。音程の動きがあれば、繰り返しを1オクターブ上げることがある。
  */
 function barPattern(slots: number, slotSteps: number, params: ShapeParams, rhythm: Rng, order: Rng): Hit[] {
-  const p = 0.2 + 0.75 * clamp01(params.busy);
+  const p = 0.2 + 0.8 * clamp01(params.busy);
   const o = clamp01(params.onBeat);
   const hits: Hit[] = [];
   let prevK = -1;
