@@ -4,6 +4,7 @@ import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
 import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
+import { NO_FX, type FxSettings } from "./fx.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
 
@@ -178,4 +179,25 @@ test("混ぜる：2つの曲で1つのリズム。同じ所で両方は鳴らず
   assert.equal(new Set(steps).size, steps.length);
   assert.ok(r.lanes[0].events.length > 0 && r.lanes[1].events.length > 0);
   assert.equal(r.lanes[2].events.length, 0);
+});
+
+test("エフェクト：掛けた所（層・下地・全体）にだけ掛ける。掛けていない所は呼ばない", async () => {
+  const phrases = [drumPhrase("a"), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], drumId: "a" };
+  song.params = { ...song.params, pad: 0 };
+  song.lanes = syncLanes(song, seq);
+  song.lanes[1].fx = { ...NO_FX, delay: 0.5 };
+  song.fx = { ...song.fx, bed: { ...NO_FX, lowCut: 0.5 } };
+  const called: string[] = [];
+  const fx = async (pcm: Pcm, settings: FxSettings): Promise<Pcm> => {
+    called.push(settings.delay > 0 ? "lane" : settings.lowCut > 0 ? "bed" : settings.reverb > 0 ? "master" : "?");
+    return pcm;
+  };
+  await buildCollage(song, phrases, steadyRender, 1000, fx);
+  assert.deepEqual(called.sort(), ["bed", "lane", "master"]);
+  called.length = 0;
+  song.fx = { master: { ...NO_FX }, bed: { ...NO_FX }, pad: { ...NO_FX } };
+  delete song.lanes[1].fx;
+  await buildCollage(song, phrases, steadyRender, 1000, fx);
+  assert.deepEqual(called, []);
 });

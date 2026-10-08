@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, fitLength, formatDuration, minLengthBars, migrateSong, songSeconds, type Lane } from "./types.ts";
+import { createEmptySong, laneIsCustom, fitLength, formatDuration, minLengthBars, migrateSong, songSeconds, type Lane } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
@@ -93,10 +93,23 @@ test("刻み方のモード：初期は音楽モード。保存データから�
   assert.equal(migrateSong({ params: { style: "???" } }).params.style, "music");
 });
 
-test("仕上げの響き：初期15%。保存データから読める", () => {
-  assert.equal(createEmptySong().params.reverb, 0.15);
-  assert.equal(migrateSong({ params: { reverb: 0.4 } }).params.reverb, 0.4);
-  assert.equal(migrateSong({ params: { reverb: 7 } }).params.reverb, 1);
+test("エフェクト：全体の初期はリバーブ15%。前の「仕上げの響き」は全体のリバーブに。層・下地のエフェクトも読める", () => {
+  const s0 = createEmptySong();
+  assert.equal(s0.fx.master.reverb, 0.15);
+  assert.equal(s0.fx.bed.reverb, 0);
+  assert.equal(migrateSong({ params: { reverb: 0.4 } }).fx.master.reverb, 0.4);
+  assert.equal(migrateSong({ params: { reverb: 7 } }).fx.master.reverb, 1);
+  const s1 = migrateSong({
+    fx: { master: { delay: 0.5, delayTime: "1/4" }, bed: { lowCut: 2 } },
+    lanes: [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, fx: { drive: 0.3, delayTime: "???" } }],
+  });
+  assert.equal(s1.fx.master.delay, 0.5);
+  assert.equal(s1.fx.master.delayTime, "1/4");
+  assert.equal(s1.fx.master.reverb, 0.15);
+  assert.equal(s1.fx.bed.lowCut, 1);
+  assert.equal(s1.lanes![0].fx!.drive, 0.3);
+  assert.equal(s1.lanes![0].fx!.delayTime, "1/8d");
+  assert.ok(laneIsCustom(s1.lanes![0]));
 });
 
 test("曲の長さは30秒より短くならない：テンポに合わせて、選べるいちばん短い長さが変わる", () => {

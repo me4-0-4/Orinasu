@@ -1,5 +1,6 @@
 import type { CutMode } from "./slicer.ts";
 import type { ShapeParams } from "./sequencer.ts";
+import { defaultSongFx, fxIsOff, sanitizeFx, DEFAULT_MASTER_FX, type FxSettings, type SongFx } from "./fx.ts";
 
 /**
  * 層：刻む曲（フレーズ）1つが、1本の層。曲はまるごと1本の波形として扱い、中身（ドラム・ベースなど）には分けない。
@@ -19,6 +20,8 @@ export interface Lane {
   /** 音量（0〜1.5）。無ければ1。 */
   volume?: number;
   muted?: boolean;
+  /** この層だけに掛けるエフェクト。無ければ掛けない（全体のエフェクトは別に掛かる）。 */
+  fx?: FxSettings;
 }
 
 /** 層ごとにずらせる形のつまみ。 */
@@ -48,8 +51,6 @@ export interface SongParams extends ShapeParams {
   mode: CutMode;
   /** 余韻なし：刻む前の書き出しで、リバーブ・ディレイを外す（断片同士がにじまない）。 */
   dry: boolean;
-  /** 仕上げの響き（0〜1）：刻んだあとの曲全体に掛けるリバーブの量。 */
-  reverb: number;
   /** 断片の長さ（0〜1）。 */
   size: number;
   /** スウィング（0〜1）：16分の裏を後ろにずらす。1で3連符のはね。下地のドラムにも掛かる。 */
@@ -85,6 +86,8 @@ export interface Song {
    * null は下地なし。無い（undefined）ときは、刻むときに、ドラムのある最初の材料を選ぶ。
    */
   drumId?: string | null;
+  /** エフェクト：全体・下地・伸ばし（層ごとのものは層が持つ）。 */
+  fx: SongFx;
   /** 層。まだ刻んでいなければ無い。 */
   lanes?: Lane[];
   params: SongParams;
@@ -113,7 +116,6 @@ export const DEFAULT_PARAMS: SongParams = {
   pan: 0.5,
   fx: 0.7,
   dry: true,
-  reverb: 0.15,
   swing: 0,
   turns: "mix",
   bedVolume: 0.8,
@@ -134,7 +136,7 @@ export function effectiveParams(global: SongParams, lane: Pick<Lane, "shift" | "
 /** 層が全体と違う設定を持っているか（ずらし・切り方・音量・ミュート）。 */
 export function laneIsCustom(lane: Lane): boolean {
   const shifted = SHAPE_KEYS.some((k) => Math.abs(lane.shift?.[k] ?? 0) > 1e-9);
-  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted;
+  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted || !fxIsOff(lane.fx);
 }
 
 /**
@@ -159,6 +161,7 @@ export function createEmptySong(): Song {
     beatsPerBar: 4,
     lengthBars: 16,
     params: { ...DEFAULT_PARAMS },
+    fx: defaultSongFx(),
     updatedAt: Date.now(),
   };
 }
@@ -222,13 +225,22 @@ export function migrateSong(raw: unknown): Song {
     }
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
     if (typeof p.dry === "boolean") song.params.dry = p.dry;
-    if (isNum(p.reverb)) song.params.reverb = Math.min(1, Math.max(0, p.reverb));
+    // 前の「仕上げの響き」は、全体のリバーブの量にする
+    if (isNum(p.reverb)) song.fx.master.reverb = Math.min(1, Math.max(0, p.reverb));
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
     if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
     for (const key of ["bedVolume", "sfx", "pad", "pump"] as const) {
       if (isNum(p[key])) song.params[key] = Math.min(1, Math.max(0, p[key]));
     }
     if (p.turns === "mix" || p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
+  }
+  if (typeof r.fx === "object" && r.fx !== null) {
+    const fx = r.fx as Record<string, unknown>;
+    song.fx = {
+      master: sanitizeFx(fx.master, DEFAULT_MASTER_FX),
+      bed: sanitizeFx(fx.bed),
+      pad: sanitizeFx(fx.pad),
+    };
   }
   return song;
 }
@@ -239,6 +251,10 @@ function sanitizeLane(raw: Lane): Lane {
   if (raw.muted) lane.muted = true;
   if (raw.mode === "transient" || raw.mode === "divide") lane.mode = raw.mode;
   if (isNum(raw.volume)) lane.volume = Math.min(MAX_LANE_VOLUME, Math.max(0, raw.volume));
+  if (typeof raw.fx === "object" && raw.fx !== null) {
+    const fx = sanitizeFx(raw.fx);
+    if (!fxIsOff(fx)) lane.fx = fx;
+  }
   if (typeof raw.shift === "object" && raw.shift !== null) {
     const shift: Partial<Record<ShapeKey, number>> = {};
     for (const key of SHAPE_KEYS) {
