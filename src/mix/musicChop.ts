@@ -237,7 +237,9 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
     // 掛け合い：前半2拍は「呼ぶ層」、後半2拍は「応える層」。4小節ごとに呼ぶ層が替わる
     const caller = unit % Math.max(1, input.laneCount);
     const responder = (unit + 1) % Math.max(1, input.laneCount);
-    if (!mix && !call && input.laneCount > 1 && caller !== input.laneIndex) continue;
+    // 交代：ふつうは4小節ごと。曲が短くて全部のトラックに番が回らないときは、交代を短くする
+    const swapBars = Math.floor(bars / UNIT_BARS) < input.laneCount ? Math.max(1, Math.floor(bars / input.laneCount)) : UNIT_BARS;
+    if (!mix && !call && input.laneCount > 1 && Math.floor(b / swapBars) % input.laneCount !== input.laneIndex) continue;
     if (call && caller !== input.laneIndex && responder !== input.laneIndex) continue;
     const { motif, fills, dense, bigFills } = blocks[Math.floor(b / BLOCK_BARS)];
     const m = b % motif.length;

@@ -2,7 +2,7 @@ import { createRng } from "../theory/rng.ts";
 import { keyShortName } from "../theory/key.ts";
 import { totalBeats, type Phrase } from "../phrase/types.ts";
 import { layBed, renderCollage, type CollageLane } from "./collage.ts";
-import { applyTrack, trackIsOff, type FxEnv, type FxPlugin, type TrackFx } from "./fx.ts";
+import { applyTrack, chainTailSeconds, trackIsOff, type FxEnv, type FxPlugin, type TrackFx } from "./fx.ts";
 import { applyGroups, groupOf } from "./groups.ts";
 import { addSfx, fourOnFloor, kickSteps, pump, renderPad, type Grid, type PadSource } from "./glue.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
@@ -127,6 +127,16 @@ const BED_GAIN = 0.75;
 /** リバーブの響きだけ（元の音を含まない）を作る。 */
 export type ReverbFn = FxEnv["reverb"];
 
+/** 波形を、out の offset の位置から重ねる（曲の終わりを越えたら頭に回す）。 */
+function mixAt(out: Pcm, add: Pcm, offset: number): void {
+  const n = out.l.length;
+  for (let i = 0; i < add.l.length; i++) {
+    const j = (offset + i) % n;
+    out.l[j] += add.l[i];
+    out.r[j] += add.r[i];
+  }
+}
+
 /** 波形を足す（out に add を重ねる）。 */
 function mixInto(out: Pcm, add: Pcm): void {
   for (let i = 0; i < out.l.length && i < add.l.length; i++) {
@@ -239,27 +249,52 @@ export async function buildCollage(
   for (const b of built) {
     if (plain.includes(b)) continue;
     const takes = new Map(b.takes.filter((t) => chainOn(t.chain)).map((t) => [t.step, t.chain]));
-    const special = (e: LaneEvent): boolean => takes.has(e.step) || !!groupFxOf(b.view.phraseId, e.step);
-    const lanePcm = renderCollage([{ ...b.collage, events: b.collage.events.filter((e) => !special(e)) }], collageOpts);
-    // テイクFX・グループFXのある断片：断片ごとにテイクFXを掛け、グループごとに集めてグループFXを掛ける
-    const groupBus = new Map<string, { chain: FxPlugin[]; pcm: Pcm }>();
+    const groupIdOf = (e: LaneEvent): string | null => groupFxOf(b.view.phraseId, e.step)?.id ?? null;
+    const plainEvents = b.collage.events.filter((e) => !takes.has(e.step) && !groupIdOf(e));
+    const lanePcm = renderCollage([{ ...b.collage, events: plainEvents }], collageOpts);
+    // グループFX：グループの断片をまとめて1回で作る（断片ごとに曲全体の長さを作ると、とても重くなる）
+    const groupBus = new Map<string, Pcm>();
+    const groupEvents = new Map<string, LaneEvent[]>();
     for (const ev of b.collage.events) {
-      if (!special(ev)) continue;
-      let one = renderCollage([{ ...b.collage, events: [ev] }], collageOpts);
-      const take = takes.get(ev.step);
-      if (take) one = await applyTrack(one, { chain: take, envelopes: [] }, fxEnv!);
-      const g = groupFxOf(b.view.phraseId, ev.step);
-      if (!g) {
-        mixInto(lanePcm, one);
-        continue;
-      }
-      const bus = groupBus.get(g.id) ?? { chain: g.chain, pcm: { l: new Float32Array(lanePcm.l.length), r: new Float32Array(lanePcm.r.length) } };
-      mixInto(bus.pcm, one);
-      groupBus.set(g.id, bus);
+      const gid = groupIdOf(ev);
+      if (!gid || takes.has(ev.step)) continue;
+      groupEvents.set(gid, [...(groupEvents.get(gid) ?? []), ev]);
     }
-    for (const bus of groupBus.values()) mixInto(lanePcm, await applyTrack(bus.pcm, { chain: bus.chain, envelopes: [] }, fxEnv!));
+    for (const [gid, events] of groupEvents) groupBus.set(gid, renderCollage([{ ...b.collage, events }], collageOpts));
+    // テイクFX：断片1つぶんと、FXの余韻が収まる短い長さだけ作って掛け、その位置に重ねる
+    for (const ev of b.collage.events) {
+      const take = takes.get(ev.step);
+      if (!take) continue;
+      const one = await renderTake(b.collage, ev, take);
+      const gid = groupIdOf(ev);
+      let target = lanePcm;
+      if (gid) {
+        if (!groupBus.has(gid)) groupBus.set(gid, { l: new Float32Array(lanePcm.l.length), r: new Float32Array(lanePcm.r.length) });
+        target = groupBus.get(gid)!;
+      }
+      mixAt(target, one.pcm, one.offset);
+    }
+    for (const [gid, pcm] of groupBus) {
+      const chain = song.groups?.find((g) => g.id === gid)?.fx ?? [];
+      mixInto(lanePcm, await applyTrack(pcm, { chain, envelopes: [] }, fxEnv!));
+    }
     mixInto(mixed, fxOn(b.fx) ? await applyTrack(lanePcm, b.fx, fxEnv!) : lanePcm);
   }
+
+  /** テイクFXの断片：断片の位置から、FXの余韻が収まるまでの短い波形を作って、FXを掛ける（曲より長くなるなら曲の長さで）。 */
+  async function renderTake(lane: CollageLane, ev: LaneEvent, chain: FxPlugin[]): Promise<{ pcm: Pcm; offset: number }> {
+    const tail = chainTailSeconds(chain, song.bpm);
+    // スウィングの位置が変わらないよう、偶数ステップから始める
+    const startStep = ev.step - (ev.step % 2);
+    const steps = ev.step - startStep + ev.len + Math.ceil((tail * sampleRate) / stepSamples) + 1;
+    if (steps >= totalSteps) {
+      const full = renderCollage([{ ...lane, events: [ev] }], collageOpts);
+      return { pcm: await applyTrack(full, { chain, envelopes: [] }, fxEnv!), offset: 0 };
+    }
+    const short = renderCollage([{ ...lane, events: [{ ...ev, step: ev.step - startStep }] }], { ...collageOpts, totalSteps: steps });
+    return { pcm: await applyTrack(short, { chain, envelopes: [] }, fxEnv!), offset: Math.round(startStep * stepSamples) };
+  }
+
   // 仕上げ（つなぎ）の偶然は、いちばん上の層の種から（刻み直すと変わり、形のつまみでは変わらない）
   const glueSeed = (lanes.find((l) => !l.muted) ?? lanes[0]).cutSeed;
   // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）

@@ -231,3 +231,19 @@ test("グループ：ミュートしたグループの断片は鳴らない。�
   await buildCollage(song, phrases, steadyRender, 1000, async (pcm) => (calls++, pcm));
   assert.equal(calls, 2);
 });
+
+test("テイクFX：短く作っても、曲全体で作ったのと同じ位置・同じ音になる", async () => {
+  const phrases = [phrase("a", 100)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a"], lengthBars: 8 };
+  song.params = { ...song.params, pad: 0, sfx: 0, pump: 0 };
+  song.fx = { master: { chain: [], envelopes: [] }, bed: { chain: [], envelopes: [] }, pad: { chain: [], envelopes: [] } };
+  song.lanes = syncLanes(song, seq);
+  const base = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  const ev = base.lanes[0].events[3];
+  // ほとんど何もしないFX（ごく弱い音質下げ）なら、テイクFXを付けても音はほぼ変わらない（位置がずれていれば大きく違う）
+  song.lanes[0].takes = [{ step: ev.step, chain: [newPlugin("crush", { amount: 0.02 })] }];
+  const withTake = (await buildCollage(song, phrases, steadyRender, 1000, async (p) => p))!;
+  let diff = 0;
+  for (let i = 0; i < base.pcm.l.length; i++) diff = Math.max(diff, Math.abs(base.pcm.l[i] - withTake.pcm.l[i]));
+  assert.ok(diff < 1e-3, `違い ${diff}`);
+});
