@@ -47,13 +47,15 @@ test("コードを守る：b小節目の断片は、元の (b % 元の小節数)
   }
 });
 
-test("型をくり返す：4小節のまとまりの1〜3小節目は同じパターン（1小節パターンのとき）、4小節目はフィル", () => {
+test("型をくり返す：4小節のまとまりの1・2小節目は同じパターン（1小節パターンのとき）、3小節目は同じ打ちを残して詰め、4小節目はフィル", () => {
   let checked = 0;
   for (let seed = 1; seed <= 30; seed++) {
     const ev = planMusicLane(input({ totalSteps: 4 * SPB, srcBars: 1 }, seed));
     const pat = (b: number) => JSON.stringify(ev.filter((e) => Math.floor(e.step / SPB) === b).map((e) => [e.step - b * SPB, e.slice]));
     assert.equal(pat(0), pat(1));
-    assert.equal(pat(1), pat(2));
+    const hits = (b: number) => ev.filter((e) => Math.floor(e.step / SPB) === b).map((e) => [e.step - b * SPB, e.slice].join());
+    for (const h of hits(0)) assert.ok(hits(2).includes(h), `詰めても元の打ちは残る: ${h}`);
+    assert.ok(hits(2).length >= hits(0).length);
     if (pat(3) !== pat(0)) checked++;
   }
   assert.ok(checked > 20, String(checked));
@@ -161,13 +163,13 @@ test("強さ：小節の頭がいちばん強く、裏ほど弱い。フィル�
   }
 });
 
-test("盛り上げ：8小節の後ろ4小節は前の4小節より打つ数が多く、8小節目のフィルは長い（前から始まる）", () => {
+test("盛り上げ：8小節の後ろ4小節は前の4小節（の頭2小節）より打つ数が多く、8小節目のフィルは長い（前から始まる）", () => {
   let denser = 0;
   let longer = 0;
   for (let seed = 1; seed <= 20; seed++) {
     const ev = planMusicLane(input({ slotSteps: 1 }, seed));
     const count = (from: number, to: number) => ev.filter((e) => e.step >= from * SPB && e.step < to * SPB).length;
-    if (count(4, 7) > count(0, 3)) denser++;
+    if (count(4, 7) > count(0, 2)) denser++;
     // フィルの所（gate 0.9 か ちりばめ）の始まり
     const fillStart = (bar: number) => {
       const f = ev.filter((e) => Math.floor(e.step / SPB) === bar && e.gate !== undefined && e.gate !== 1 && e.gate !== 0.65);

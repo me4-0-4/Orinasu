@@ -12,7 +12,7 @@ type Rng = () => number;
  * - 出力の b 小節目には、元の曲の (b % 元の小節数) 小節目からだけ断片を取る（コードの流れが残る）
  * - 小節の頭（1拍目）は、元の1拍目のまま
  * - 1〜2小節のパターンを、4小節のまとまりでくり返し、4小節目だけフィルで崩す。8小節ごとに新しいパターン
- * - 8小節の後ろの4小節は、パターンを少し詰めて（隙間を繰り返しで埋めて）、8小節目は長いフィルにする（盛り上げる）
+ * - 8小節の後ろの4小節と、前半の各4小節の3つ目は、パターンを少し詰めて（隙間を繰り返しで埋めて）、8小節目は長いフィルにする（盛り上げる）
  * - 強さ：小節の頭がいちばん強く、裏ほど弱い。フィルはだんだん強く
  * - 曲（層）が複数なら、同時には鳴らさない。混ぜる（1つのリズムの打つ1回ごとに、どの曲から取るかを偶然で決める）、
  *   掛け合い（前半2拍と後半2拍を別の層が受け持つ）、4小節ごとの交代、のどれか
@@ -78,7 +78,7 @@ interface Hit {
  * 繰り返した所は、左右に交互に振る（パン）。音程の動きがあれば、繰り返しを1オクターブ上げることがある。
  */
 function barPattern(slots: number, slotSteps: number, params: ShapeParams, rhythm: Rng, order: Rng): Hit[] {
-  const p = 0.2 + 0.75 * clamp01(params.busy);
+  const p = 0.2 + 0.8 * clamp01(params.busy);
   const o = clamp01(params.onBeat);
   const hits: Hit[] = [];
   let prevK = -1;
@@ -243,7 +243,8 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
     if (call && caller !== input.laneIndex && responder !== input.laneIndex) continue;
     const { motif, fills, dense, bigFills } = blocks[Math.floor(b / BLOCK_BARS)];
     const m = b % motif.length;
-    const late = b % BLOCK_BARS >= UNIT_BARS; // 8小節の後ろ半分：詰めて盛り上げる
+    // 詰める小節：8小節の後ろ半分と、前半でも各4小節の3つ目（フィルの1つ前）
+    const late = b % BLOCK_BARS >= UNIT_BARS || b % UNIT_BARS === UNIT_BARS - 2;
     const isFill = (b % UNIT_BARS === UNIT_BARS - 1 || b === bars - 1) && bars > 1;
     const isBig = isFill && (b % BLOCK_BARS === BLOCK_BARS - 1 || b === bars - 1) && bars >= BLOCK_BARS;
     const pattern = isBig ? bigFills[m] : isFill ? fills[m] : late ? dense[m] : motif[m];
