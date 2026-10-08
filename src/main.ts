@@ -238,13 +238,29 @@ const recorder = new Recorder(transport, activeLayer);
 // --- 刻む（選んだ曲を1本の波形にして、切り貼りして鳴らす） ---------------------
 
 let persistSongTimer: number | null = null;
+let pendingSong: Song | null = null;
 function persistSongSoon(song: Song): void {
   if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
+  pendingSong = song;
   persistSongTimer = window.setTimeout(() => {
     persistSongTimer = null;
+    pendingSong = null;
     void saveSong(song);
   }, 400);
 }
+// タブを閉じる・隠すときは、待っている保存をすぐ書く（直前の変更を落とさない）
+const flushSong = (): void => {
+  if (persistSongTimer === null || !pendingSong) return;
+  window.clearTimeout(persistSongTimer);
+  persistSongTimer = null;
+  const song = pendingSong;
+  pendingSong = null;
+  void saveSong(song);
+};
+window.addEventListener("pagehide", flushSong);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushSong();
+});
 
 const mixPanel = buildMixPanel({
   getPhrases: () => savedPhrases,
@@ -1116,12 +1132,23 @@ function playheadLoop(): void {
 }
 playheadLoop();
 
-void reloadPhraseList();
 mixPanel.setSong(createEmptySong());
-void loadSong(SONG_ID).then((song) => {
+// フレーズ一覧を読み終えてから曲を読む（先に曲を読むと、空の一覧で素材やトラックを消してしまい、次の保存で失われる）
+void (async () => {
+  try {
+    await reloadPhraseList();
+  } catch (err) {
+    // 一覧を読めなかったときは、曲を読まない（空の一覧で素材を消して保存しないように）
+    console.error("フレーズ一覧を読み込めませんでした", err);
+    return;
+  }
+  const song = await loadSong(SONG_ID).catch((err) => {
+    console.error("曲を読み込めませんでした", err);
+    return null;
+  });
   if (song) mixPanel.setSong(migrateSong(song));
   mixPanel.refreshMaterials();
-});
+})();
 refreshPhraseUI();
 
 // クラウドから新しいデータを取り込んだら、一覧を読み直す（編集中のフレーズは触らない）。
@@ -1129,5 +1156,12 @@ initCloud({
   onSynced: () => {
     void reloadPhraseList();
     void reloadUserPresets();
+  },
+  // 別のアカウントに切り替えて端末のデータを消したら、刻む曲も空にする（前の人の曲を新しい人の所に保存しない）
+  onCleared: () => {
+    if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
+    persistSongTimer = null;
+    pendingSong = null;
+    mixPanel.setSong(createEmptySong());
   },
 });

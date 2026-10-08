@@ -27,6 +27,7 @@ const LAST_USER_KEY = "orinasu.cloudUserId";
 let state: CloudState = { status: "signedOut", email: null };
 let session: Session | null = null;
 let onSynced: (() => void) | null = null;
+let onCleared: (() => void) | null = null;
 const listeners = new Set<(s: CloudState) => void>();
 
 function setState(next: CloudState): void {
@@ -223,6 +224,7 @@ async function handleSession(next: Session | null): Promise<void> {
   // 前にこの端末を使った人と別のアカウントなら、前の人のデータを新しい人のアカウントに混ぜない。
   const last = readLastUser();
   if (last && last !== next.user.id) {
+    onCleared?.();
     await clearLocalData();
     onSynced?.();
   }
@@ -230,8 +232,9 @@ async function handleSession(next: Session | null): Promise<void> {
   await syncAll();
 }
 
-export function initCloud(handlers: { onSynced: () => void }): void {
+export function initCloud(handlers: { onSynced: () => void; onCleared?: () => void }): void {
   onSynced = handlers.onSynced;
+  onCleared = handlers.onCleared ?? null;
   supabase.auth.onAuthStateChange((_event, next) => {
     // コールバックの中でSupabaseを呼ぶと止まることがあるので、一拍置く。
     window.setTimeout(() => void handleSession(next), 0);
