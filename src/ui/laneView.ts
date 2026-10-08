@@ -14,6 +14,8 @@ export interface LaneRow {
 
 export interface LaneViewData {
   lanes: LaneRow[];
+  /** 下地（鳴らしっぱなしのドラム）。いちばん下に灰色で描く。 */
+  bed?: { name: string; events: LaneEvent[] } | null;
   totalSteps: number;
   stepsPerBar: number;
 }
@@ -49,7 +51,8 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
 
   const css = (name: string, fallback: string): string =>
     getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-  const heightNow = (): number => (data && data.lanes.length > 0 ? HEAD_H + data.lanes.length * ROW_H + 6 : EMPTY_H);
+  const rowCount = (): number => (data ? data.lanes.length + (data.bed ? 1 : 0) : 0);
+  const heightNow = (): number => (data && data.lanes.length > 0 ? HEAD_H + rowCount() * ROW_H + 6 : EMPTY_H);
 
   function draw(): void {
     const height = heightNow();
@@ -120,6 +123,18 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
       }
       g.globalAlpha = 1;
     });
+
+    if (data.bed) {
+      // 下地：刻まずに鳴らしっぱなしのドラム（打つ所を灰色の細い棒で）
+      const top = HEAD_H + data.lanes.length * ROW_H;
+      const mid = top + ROW_H / 2;
+      g.fillStyle = "rgba(255,255,255,0.04)";
+      g.fillRect(0, top, width, ROW_H);
+      g.fillStyle = dim;
+      g.fillText(`下地 ${data.bed.name}`, 8, mid, GUTTER - 12);
+      g.fillStyle = "rgba(200,200,210,0.55)";
+      for (const ev of data.bed.events) g.fillRect(GUTTER + ev.step * sx, mid - 5, Math.max(1.5, sx * 0.6), 10);
+    }
 
     if (progress !== null) {
       const x = GUTTER + progress * plotW;

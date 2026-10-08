@@ -18,12 +18,20 @@ export interface CollageLane {
 const FADE_SECONDS = 0.003;
 
 /**
+ * ステップの位置（サンプル）。スウィング（0〜1）があれば、16分の裏を後ろにずらす（1で16分の1/3＝3連符のはね）。
+ */
+export function stepPosition(step: number, stepSamples: number, swing = 0): number {
+  const late = step % 2 === 1 ? (Math.min(1, Math.max(0, swing)) * stepSamples) / 3 : 0;
+  return Math.round(step * stepSamples + late);
+}
+
+/**
  * 全部の層の予定どおりに断片を打って、1本の波形にする。
  * 音程はサンプラーと同じく、再生の速さごと変える（高いほど速く・短く）。
  */
 export function renderCollage(
   lanes: CollageLane[],
-  opts: { totalSteps: number; stepSamples: number; sampleRate: number },
+  opts: { totalSteps: number; stepSamples: number; sampleRate: number; swing?: number },
 ): Pcm {
   const total = Math.max(1, Math.round(opts.totalSteps * opts.stepSamples));
   const out: Pcm = { l: new Float32Array(total), r: new Float32Array(total) };
@@ -35,9 +43,9 @@ export function renderCollage(
     for (const ev of lane.events) {
       const slice = lane.slices[ev.slice];
       if (!slice) continue;
-      const start = Math.round(ev.step * opts.stepSamples);
+      const start = stepPosition(ev.step, opts.stepSamples, opts.swing);
       if (start >= total) continue;
-      const fullGate = Math.round((ev.step + ev.len) * opts.stepSamples) - start;
+      const fullGate = stepPosition(ev.step + ev.len, opts.stepSamples, opts.swing) - start;
       const gateFrac = Math.min(1, Math.max(0, ev.gate ?? lane.holdFraction ?? 1));
       const gate = Math.max(1, Math.round(fullGate * gateFrac));
       const ratio = Math.pow(2, (ev.pitch + lane.keyShift) / 12);
@@ -94,7 +102,7 @@ export function renderCollage(
             vr -= yr;
           }
         }
-        let g = gain;
+        let g = gain * (ev.vel ?? 1);
         if (fade > 0) {
           if (k < fade) g *= k / fade;
           if (len - 1 - k < fade) g *= (len - 1 - k) / fade;
@@ -105,4 +113,16 @@ export function renderCollage(
     }
   }
   return out;
+}
+
+/**
+ * 下地：波形 bed を、曲の頭から最後まで、くり返して重ねる（刻まずに鳴らしっぱなし）。
+ */
+export function layBed(out: Pcm, bed: Pcm, gain: number): void {
+  const n = bed.l.length;
+  if (n === 0 || gain <= 0) return;
+  for (let i = 0; i < out.l.length; i++) {
+    out.l[i] += bed.l[i % n] * gain;
+    out.r[i] += bed.r[i % n] * gain;
+  }
 }

@@ -152,3 +152,48 @@ test("密度を上げると打つ数が増える。同じ種なら同じ", () =>
   assert.ok(count(1) > count(0));
   assert.deepEqual(planMusicLane(input({}, 7)), planMusicLane(input({}, 7)));
 });
+
+test("強さ：小節の頭がいちばん強く、裏ほど弱い。フィルの終わりに向けて強くなる", () => {
+  const ev = planMusicLane(input({ totalSteps: 8 * SPB, slotSteps: 1 }, 3));
+  for (const e of ev.filter((e) => e.step % SPB === 0)) assert.equal(e.vel ?? 1, 1);
+  for (const e of ev.filter((e) => e.gate === undefined || e.gate === 1)) {
+    if (e.step % 2 === 1) assert.ok((e.vel ?? 1) < 0.9);
+  }
+});
+
+test("盛り上げ：8小節の後ろ4小節は前の4小節より打つ数が多く、8小節目のフィルは長い（前から始まる）", () => {
+  let denser = 0;
+  let longer = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    const ev = planMusicLane(input({ slotSteps: 1 }, seed));
+    const count = (from: number, to: number) => ev.filter((e) => e.step >= from * SPB && e.step < to * SPB).length;
+    if (count(4, 7) > count(0, 3)) denser++;
+    // フィルの所（gate 0.9 か ちりばめ）の始まり
+    const fillStart = (bar: number) => {
+      const f = ev.filter((e) => Math.floor(e.step / SPB) === bar && e.gate !== undefined && e.gate !== 1 && e.gate !== 0.65);
+      return f.length ? Math.min(...f.map((e) => e.step % SPB)) : SPB;
+    };
+    if (fillStart(7) < fillStart(3)) longer++;
+  }
+  assert.ok(denser >= 15, `詰めた: ${denser}/20`);
+  assert.ok(longer >= 15, `長いフィル: ${longer}/20`);
+});
+
+test("掛け合い：2本の層は同じ所で鳴らない。前半2拍と後半2拍を分け合い、前半の音は後半に食い込まない", () => {
+  for (let seed = 1; seed <= 10; seed++) {
+    const a = planMusicLane(input({ laneIndex: 0, laneCount: 2, turns: "call" }, seed));
+    const b = planMusicLane(input({ laneIndex: 1, laneCount: 2, turns: "call" }, seed + 50));
+    const owner = new Map<number, string>();
+    for (const [name, ev] of [["a", a], ["b", b]] as const) {
+      for (const e of ev) {
+        const half = Math.floor(e.step / (SPB / 2));
+        assert.ok(!owner.has(half) || owner.get(half) === name, `半小節 ${half} を両方が鳴らした`);
+        owner.set(half, name);
+        assert.ok(Math.floor((e.step + e.len - 1) / (SPB / 2)) === half, "前半から後半へ伸びた");
+      }
+    }
+    // 1小節目：前半はa、後半はb
+    assert.ok(a.some((e) => e.step < SPB / 2));
+    assert.ok(b.some((e) => e.step >= SPB / 2 && e.step < SPB));
+  }
+});

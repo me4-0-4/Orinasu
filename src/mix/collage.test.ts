@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderCollage } from "./collage.ts";
+import { layBed, renderCollage, stepPosition } from "./collage.ts";
 import type { Pcm } from "./pcm.ts";
 
 const ramp = (n: number): Pcm => {
@@ -97,4 +97,21 @@ test("エフェクト：ローパスは高い音（細かい揺れ）を削る",
   const lp = one({ fx: { kind: "lowpass", a: 0.9, b: 1 } }, pcm);
   const energy = (x: Float32Array) => x.slice(50, 350).reduce((a, v) => a + v * v, 0);
   assert.ok(energy(lp.l) < energy(dry.l) * 0.2);
+});
+
+test("スウィング：16分の裏だけ後ろにずれる（1で16分の1/3）", () => {
+  assert.equal(stepPosition(2, 300, 1), 600);
+  assert.equal(stepPosition(3, 300, 1), 1000);
+  assert.equal(stepPosition(3, 300, 0), 900);
+});
+
+test("強さ（vel）で音量が変わり、下地はくり返して最後まで重なる", () => {
+  const pcm = { l: new Float32Array(400).fill(0.5), r: new Float32Array(400).fill(0.5) };
+  const lane = (vel?: number) => ({ pcm, slices: [{ start: 0, end: 400 }], events: [{ step: 0, len: 1, slice: 0, pitch: 0, vel }], keyShift: 0, gain: 1 });
+  const loud = renderCollage([lane()], { totalSteps: 1, stepSamples: 200, sampleRate: 44100 });
+  const soft = renderCollage([lane(0.5)], { totalSteps: 1, stepSamples: 200, sampleRate: 44100 });
+  assert.ok(Math.abs(soft.l[100] - loud.l[100] / 2) < 1e-6);
+  const out = { l: new Float32Array(10), r: new Float32Array(10) };
+  layBed(out, { l: Float32Array.from([1, 2, 3]), r: Float32Array.from([1, 2, 3]) }, 0.5);
+  assert.deepEqual([...out.l], [0.5, 1, 1.5, 0.5, 1, 1.5, 0.5, 1, 1.5, 0.5]);
 });

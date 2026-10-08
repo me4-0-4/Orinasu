@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
-import { applySeeds, buildCollage, collectSources, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
+import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
@@ -125,4 +125,43 @@ test("音楽モード：ミュートした層があっても、交代はミュ�
   const out = (await buildCollage(song, phrases, steadyRender, 1000))!;
   const a = out.lanes[0].events;
   assert.ok(a.some((e) => e.step < 64) && a.some((e) => e.step >= 64), "鳴っている層が、前半も後半も打つ");
+});
+
+function drumPhrase(id: string): Phrase {
+  const p = phrase(id, 100);
+  const d = createEmptyLayer("drums");
+  d.notes = [0, 1, 2, 3].map((b, i) => ({ id: `${id}d${i}`, pitch: 36, velocity: 0.8, startBeats: b, durationBeats: 0.25 }));
+  p.layers.push(d);
+  return p;
+}
+
+test("下地：決めていなければ、ドラムのある最初の材料。null なら無し", () => {
+  const phrases = [phrase("a", 100), drumPhrase("b"), drumPhrase("c")];
+  assert.equal(pickDrum({ materialIds: ["a", "c", "b"] }, phrases), "c");
+  assert.equal(pickDrum({ materialIds: ["a"] }, phrases), null);
+  assert.equal(pickDrum({ materialIds: ["c"], drumId: "b" }, phrases), "b"); // 材料でない曲のドラムも選べる
+  assert.equal(pickDrum({ materialIds: ["c"], drumId: null }, phrases), null);
+  assert.ok(hasDrums(phrases[1]) && !hasDrums(phrases[0]));
+});
+
+test("下地：選んだ曲のドラムだけを書き出して、刻まずに最後まで重ねる。刻む材料と同じ曲でもいい", async () => {
+  const phrases = [drumPhrase("a")];
+  const song: Song = { ...createEmptySong(), materialIds: ["a"], bpm: 120, lengthBars: 8, drumId: "a" };
+  song.lanes = syncLanes(song, seq);
+  song.lanes[0].muted = true; // 刻んだ音を消して、下地だけを聞く
+  const sr = 2000;
+  const asked: { drumsOnly?: boolean }[] = [];
+  const render = async (_p: Phrase, bpm: number, opts: { drumsOnly?: boolean }): Promise<Pcm> => {
+    asked.push(opts);
+    const len = Math.round((16 * 60 * sr) / bpm);
+    const l = new Float32Array(len).fill(opts.drumsOnly ? 0.2 : 0.5);
+    return { l, r: l.slice() };
+  };
+  const result = (await buildCollage(song, phrases, render, sr))!;
+  assert.ok(asked.some((o) => o.drumsOnly) && asked.some((o) => !o.drumsOnly));
+  const last = result.pcm.l[result.pcm.l.length - 1];
+  assert.ok(last > 0.05, "最後まで下地が鳴る");
+  assert.equal(result.bed?.phraseId, "a");
+  assert.equal(result.bed?.events.length, 4 * 2); // 4小節のフレーズを2回
+  assert.deepEqual(bedEvents(phrases[0], 16).map((e) => e.step), [0, 4, 8, 12]);
 });

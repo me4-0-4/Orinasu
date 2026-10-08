@@ -52,6 +52,18 @@ export interface LaneEvent {
   /** 次に打つ所までの、どれだけ鳴らすか（0〜1）。無ければ層の「音の長さ」に従う。 */
   gate?: number;
   fx?: EventFx;
+  /** 強さ（0〜1）。無ければ1。 */
+  vel?: number;
+}
+
+/**
+ * 打つ位置で決まる強さ：小節の頭がいちばん強く、拍の頭、8分の裏、16分の裏の順に弱くする（ノリが出る）。
+ */
+export function accentOf(step: number, stepsPerBar: number): number {
+  if (step % stepsPerBar === 0) return 1;
+  if (step % STEPS_PER_BEAT === 0) return 0.9;
+  if (step % 2 === 0) return 0.8;
+  return 0.7;
 }
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));

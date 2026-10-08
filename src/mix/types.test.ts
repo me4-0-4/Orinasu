@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, formatDuration, migrateSong, songSeconds, type Lane } from "./types.ts";
+import { createEmptySong, fitLength, formatDuration, minLengthBars, migrateSong, songSeconds, type Lane } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
-  const s = createEmptySong(); // 4小節・4拍・120BPM
+  const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
   assert.equal(songSeconds(s), 8);
   assert.equal(songSeconds({ ...s, bpm: 60 }), 16);
   assert.equal(formatDuration(65), "1:05");
@@ -41,7 +41,7 @@ test("いまの形はそのまま読める。壊れた値は初期値に戻す",
   assert.equal(s.params.mode, "divide");
   assert.equal(s.params.size, 0.5);
   assert.equal(migrateSong(null).bpm, 120);
-  assert.equal(migrateSong({ bpm: 9999, lengthBars: 7 }).lengthBars, 4);
+  assert.equal(migrateSong({ bpm: 9999, lengthBars: 7 }).lengthBars, 16);
 });
 
 test("ずらし：層に効く値＝全体＋ずらし（0〜1に収める）。切り方は層の指定があればそれ", async () => {
@@ -97,4 +97,25 @@ test("仕上げの響き：初期15%。保存データから読める", () => {
   assert.equal(createEmptySong().params.reverb, 0.15);
   assert.equal(migrateSong({ params: { reverb: 0.4 } }).params.reverb, 0.4);
   assert.equal(migrateSong({ params: { reverb: 7 } }).params.reverb, 1);
+});
+
+test("曲の長さは30秒より短くならない：テンポに合わせて、選べるいちばん短い長さが変わる", () => {
+  assert.equal(createEmptySong().lengthBars, 16); // 120BPMで16小節＝32秒
+  assert.equal(minLengthBars({ bpm: 120, beatsPerBar: 4 }), 16);
+  assert.equal(minLengthBars({ bpm: 60, beatsPerBar: 4 }), 8);
+  assert.equal(minLengthBars({ bpm: 200, beatsPerBar: 4 }), 32);
+  assert.equal(fitLength({ lengthBars: 8, bpm: 180, beatsPerBar: 4 }), 32);
+  assert.equal(fitLength({ lengthBars: 64, bpm: 180, beatsPerBar: 4 }), 64);
+  assert.equal(migrateSong({ bpm: 200, lengthBars: 8 }).lengthBars, 32);
+});
+
+test("下地・スウィング・層の組み方を引き継ぐ。決めていない下地は undefined のまま", () => {
+  const s = migrateSong({ drumId: "a", params: { swing: 0.4, turns: "swap", bedVolume: 2 } });
+  assert.equal(s.drumId, "a");
+  assert.equal(s.params.swing, 0.4);
+  assert.equal(s.params.turns, "swap");
+  assert.equal(s.params.bedVolume, 1);
+  assert.equal(migrateSong({ drumId: null }).drumId, null);
+  assert.equal(migrateSong({}).drumId, undefined);
+  assert.equal(migrateSong({}).params.turns, "call");
 });

@@ -1,5 +1,6 @@
 import type { Slice } from "./slicer.ts";
-import { STEPS_PER_BEAT, restMask, type EventFx, type FxKind, type LaneEvent, type ShapeParams } from "./sequencer.ts";
+import { STEPS_PER_BEAT, accentOf, restMask, type EventFx, type FxKind, type LaneEvent, type ShapeParams } from "./sequencer.ts";
+import type { TurnStyle } from "./types.ts";
 
 type Rng = () => number;
 
@@ -11,7 +12,9 @@ type Rng = () => number;
  * - 出力の b 小節目には、元の曲の (b % 元の小節数) 小節目からだけ断片を取る（コードの流れが残る）
  * - 小節の頭（1拍目）は、元の1拍目のまま
  * - 1〜2小節のパターンを、4小節のまとまりでくり返し、4小節目だけフィルで崩す。8小節ごとに新しいパターン
- * - 曲（層）が複数なら、同時には鳴らさず、4小節ごとに交代で鳴らす
+ * - 8小節の後ろの4小節は、パターンを少し詰めて（隙間を繰り返しで埋めて）、8小節目は長いフィルにする（盛り上げる）
+ * - 強さ：小節の頭がいちばん強く、裏ほど弱い。フィルはだんだん強く
+ * - 曲（層）が複数なら、同時には鳴らさない。掛け合い（前半2拍と後半2拍を別の層が受け持つ）か、4小節ごとの交代
  */
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -63,6 +66,8 @@ interface Hit {
   pan: number;
   gate?: number;
   fx?: EventFx;
+  /** 強さ。無ければ位置で決まる強さ（accentOf）。 */
+  vel?: number;
 }
 
 /**
@@ -96,16 +101,23 @@ function barPattern(slots: number, slotSteps: number, params: ShapeParams, rhyth
 }
 
 /**
- * フィル：小節の後ろ半分を、同じ断片で埋める。
+ * フィル：小節の後ろ（startSlot から終わりまで。ふつうは後ろ半分）を、同じ断片で埋める。だんだん強くする。
  * 「連打」（断片の長さごと）か「ちりばめ」（16分ごとに、ごく短く）。左右に交互に振る。
  * 音程の動きがあれば、終わりを階段状（-4, -3, -2, -1 → 次の小節の頭で元の高さ）にするか、1オクターブ上げる。
  * エフェクトの割合に応じて、フィルター・テープストップ・音質下げ・逆再生のどれかを掛ける。
  */
-function fillOf(base: Hit[], slots: number, slotSteps: number, stepsPerBar: number, params: ShapeParams, rng: Rng): Hit[] {
-  const halfSlot = Math.floor(slots / 2);
-  const start = halfSlot * slotSteps;
+function fillOf(
+  base: Hit[],
+  slots: number,
+  slotSteps: number,
+  stepsPerBar: number,
+  params: ShapeParams,
+  rng: Rng,
+  startSlot = Math.floor(slots / 2),
+): Hit[] {
+  const start = startSlot * slotSteps;
   const span = stepsPerBar - start;
-  const k = halfSlot + randInt(Math.max(1, slots - halfSlot), rng);
+  const k = startSlot + randInt(Math.max(1, slots - startSlot), rng);
   const sprinkle = rng() < 0.5;
   const every = sprinkle ? 1 : slotSteps;
   const pitchStyle = rng() < clamp01(params.motion) ? (rng() < 0.6 ? "stairs" : "octave") : "none";
@@ -114,7 +126,14 @@ function fillOf(base: Hit[], slots: number, slotSteps: number, stepsPerBar: numb
   let side = 1;
   for (let at = start; at < stepsPerBar; at += every) {
     side = -side;
-    const hit: Hit = { at, k, pitch: 0, pan: side * clamp01(params.pan), gate: sprinkle ? SPRINKLE_GATE : 0.9 };
+    const hit: Hit = {
+      at,
+      k,
+      pitch: 0,
+      pan: side * clamp01(params.pan),
+      gate: sprinkle ? SPRINKLE_GATE : 0.9,
+      vel: 0.6 + (0.4 * (at - start + every)) / span,
+    };
     if (fxKind) hit.fx = { kind: fxKind, a: (at - start) / span, b: Math.min(1, (at - start + every) / span) };
     tail.push(hit);
   }
@@ -127,6 +146,27 @@ function fillOf(base: Hit[], slots: number, slotSteps: number, stepsPerBar: numb
   return [...base.filter((h) => h.at < start), ...tail];
 }
 
+/** 詰めたパターン：打っていない所を、半分くらい、前の断片の繰り返しで埋める（左右に振る）。 */
+function denser(base: Hit[], slots: number, slotSteps: number, params: ShapeParams, rng: Rng): Hit[] {
+  const byAt = new Map(base.map((h) => [h.at, h]));
+  const out: Hit[] = [];
+  let prev: Hit | undefined;
+  let side = 1;
+  for (let i = 0; i < slots; i++) {
+    const at = i * slotSteps;
+    const own = byAt.get(at);
+    const fill = rng() < 0.5;
+    if (own) {
+      out.push(own);
+      prev = own;
+    } else if (prev && fill) {
+      side = -side;
+      out.push({ at, k: prev.k, pitch: 0, pan: side * clamp01(params.pan) });
+    }
+  }
+  return out;
+}
+
 export interface MusicLaneInput {
   totalSteps: number;
   stepsPerBar: number;
@@ -136,6 +176,8 @@ export interface MusicLaneInput {
   /** 何番目の層か、層が全部で何本か（交代で鳴らすため）。 */
   laneIndex: number;
   laneCount: number;
+  /** 層が複数のときの組み方。無ければ交代（swap）。 */
+  turns?: TurnStyle;
   params: ShapeParams;
   cutRng: Rng;
   rhythmRng: Rng;
@@ -150,31 +192,47 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
   const srcBars = Math.max(1, input.srcBars);
   const rest = restMask(totalSteps, stepsPerBar, params.breaks, input.rhythmRng);
 
-  // 8小節ごとに、新しいパターン（1小節か2小節）とフィル
-  const blocks: { motif: Hit[][]; fills: Hit[][] }[] = [];
+  // 8小節ごとに、新しいパターン（1小節か2小節）とフィル。後ろの4小節は詰めたパターンと、長いフィル
+  const bigStart = Math.max(0, Math.floor(slots / 4));
+  const blocks: { motif: Hit[][]; fills: Hit[][]; dense: Hit[][]; bigFills: Hit[][] }[] = [];
   for (let blk = 0; blk * BLOCK_BARS < bars; blk++) {
     const motifLen = bars >= 8 && input.cutRng() < 0.5 ? 2 : 1;
     const motif = Array.from({ length: motifLen }, () => barPattern(slots, slotSteps, params, input.rhythmRng, input.orderRng));
     const fills = motif.map((m) => fillOf(m, slots, slotSteps, stepsPerBar, params, input.cutRng));
-    blocks.push({ motif, fills });
+    const dense = motif.map((m) => denser(m, slots, slotSteps, params, input.rhythmRng));
+    const bigFills = dense.map((m) => fillOf(m, slots, slotSteps, stepsPerBar, params, input.cutRng, bigStart));
+    blocks.push({ motif, fills, dense, bigFills });
   }
 
-  const starts: { step: number; slice: number; pitch: number; pan: number; gate: number; fx?: EventFx }[] = [];
+  const call = input.turns === "call" && input.laneCount > 1;
+  const half = Math.floor(stepsPerBar / 2);
+  const starts: { step: number; until: number; slice: number; pitch: number; pan: number; gate: number; vel: number; fx?: EventFx }[] = [];
   for (let b = 0; b < bars; b++) {
     // 小節の質感：キレ（短い隙間でメリハリ、左右に振る）か、なめらか（隙間なくつなぐ）
     const crisp = input.cutRng() < clamp01(params.crisp);
     const unit = Math.floor(b / UNIT_BARS);
-    if (input.laneCount > 1 && unit % input.laneCount !== input.laneIndex) continue;
-    const { motif, fills } = blocks[Math.floor(b / BLOCK_BARS)];
+    // 掛け合い：前半2拍は「呼ぶ層」、後半2拍は「応える層」。4小節ごとに呼ぶ層が替わる
+    const caller = unit % Math.max(1, input.laneCount);
+    const responder = (unit + 1) % Math.max(1, input.laneCount);
+    if (!call && input.laneCount > 1 && caller !== input.laneIndex) continue;
+    if (call && caller !== input.laneIndex && responder !== input.laneIndex) continue;
+    const { motif, fills, dense, bigFills } = blocks[Math.floor(b / BLOCK_BARS)];
     const m = b % motif.length;
+    const late = b % BLOCK_BARS >= UNIT_BARS; // 8小節の後ろ半分：詰めて盛り上げる
     const isFill = (b % UNIT_BARS === UNIT_BARS - 1 || b === bars - 1) && bars > 1;
-    const pattern = isFill ? fills[m] : motif[m];
+    const isBig = isFill && (b % BLOCK_BARS === BLOCK_BARS - 1 || b === bars - 1) && bars >= BLOCK_BARS;
+    const pattern = isBig ? bigFills[m] : isFill ? fills[m] : late ? dense[m] : motif[m];
     const sb = b % srcBars;
+    const barStart = b * stepsPerBar;
     // 左右は、1小節の中で1つの数え方で交互に振る（片側に偏らないように）
     let side = 1;
     for (const h of pattern) {
-      const step = b * stepsPerBar + h.at;
+      const step = barStart + h.at;
       if (step >= totalSteps || rest[step]) continue;
+      if (call) {
+        const owner = h.at < half ? caller : responder;
+        if (owner !== input.laneIndex) continue;
+      }
       const chopped = crisp && h.gate === undefined;
       const gate = chopped ? CRISP_GATE : (h.gate ?? 1);
       let pan = 0;
@@ -182,7 +240,9 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
         side = -side;
         pan = side * clamp01(params.pan);
       }
-      starts.push({ step, slice: sb * slots + h.k, pitch: h.pitch, pan, gate, fx: h.fx });
+      const until = call && h.at < half ? barStart + half : barStart + stepsPerBar;
+      const vel = h.vel ?? accentOf(h.at, stepsPerBar);
+      starts.push({ step, until, slice: sb * slots + h.k, pitch: h.pitch, pan, gate, vel, fx: h.fx });
     }
   }
 
@@ -194,16 +254,17 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
         break;
       }
     }
-    const barEnd = (Math.floor(s.step / stepsPerBar) + 1) * stepsPerBar; // 小節をまたいで伸ばさない（コードが混ざらない）
+    // 小節をまたいで伸ばさない（コードが混ざらない）。掛け合いの前半は、後半に食い込ませない
     const ev: LaneEvent = {
       step: s.step,
-      len: Math.max(1, Math.min(end, barEnd) - s.step),
+      len: Math.max(1, Math.min(end, s.until) - s.step),
       slice: s.slice,
       pitch: s.pitch,
       gate: s.gate,
     };
     if (s.pan !== 0) ev.pan = s.pan;
     if (s.fx) ev.fx = s.fx;
+    if (s.vel < 1) ev.vel = Math.round(s.vel * 100) / 100;
     return ev;
   });
 }
