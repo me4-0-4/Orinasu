@@ -1,91 +1,103 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyChain,
   applyDrive,
-  chainIsOff,
+  applyTrack,
   delaySeconds,
   delayWet,
+  envCurve,
+  envValueAt,
   fillBars,
   highCutHz,
   lowCutHz,
-  newSlot,
+  newEnvelope,
+  newPlugin,
   reverbSeconds,
-  sanitizeChain,
-  whenMask,
-  type ChainEnv,
+  sanitizeTakes,
+  sanitizeTrack,
+  trackIsOff,
+  type FxEnv,
+  type TakeFx,
 } from "./fx.ts";
 import type { Pcm } from "./pcm.ts";
 
 const SR = 1000;
-const env = (over: Partial<ChainEnv> = {}): ChainEnv => ({
-  totalSteps: 8 * 16,
-  stepsPerBar: 16,
-  stepSamples: 10, // 1小節＝160サンプル
+const env = (over: Partial<FxEnv> = {}): FxEnv => ({
+  stepSamples: 10, // 1小節（16ステップ）＝160サンプル
   sampleRate: SR,
   bpm: 120,
-  reverb: async (pcm) => pcm, // 響き＝そのまま（試験用）
+  reverb: async (pcm) => pcm, // 響き＝送った音そのまま（試験用）
   ...over,
 });
 const flat = (n: number, v = 0.5): Pcm => ({ l: new Float32Array(n).fill(v), r: new Float32Array(n).fill(v) });
+const sine = (n: number, hz = 30): Pcm => {
+  const l = Float32Array.from({ length: n }, (_, i) => 0.6 * Math.sin((2 * Math.PI * hz * i) / SR));
+  return { l, r: l.slice() };
+};
 
-test("エフェクトの数字：長さ・間隔・削る周波数", () => {
+test("エフェクトの数字：長さ・間隔・周波数", () => {
   assert.ok(Math.abs(reverbSeconds(0) - 0.3) < 1e-9);
   assert.ok(Math.abs(reverbSeconds(1) - 6) < 1e-9);
   assert.equal(delaySeconds("1/8d", 120), 0.375);
   assert.equal(lowCutHz(0), 20);
   assert.ok(Math.abs(highCutHz(1) - 300) < 1e-6);
   assert.deepEqual(fillBars(8), [3, 7]);
-  assert.deepEqual(fillBars(6), [3, 5]);
 });
 
-test("いつ掛けるか：小節・フィル・選んだ断片の所だけ1になる（端はなめらか）", () => {
-  const n = 8 * 160;
-  const bars = whenMask(newSlot("drive", { when: "bars", from: 2, to: 3 }), n, env())!;
-  assert.equal(bars[100], 0);
-  assert.equal(bars[200], 1);
-  assert.equal(bars[470], 1);
-  assert.equal(bars[600], 0);
-  const fills = whenMask(newSlot("drive", { when: "fills" }), n, env())!;
-  assert.equal(fills[3 * 160 + 50], 1);
-  assert.equal(fills[2 * 160 + 50], 0);
-  const events = [
-    { step: 4, len: 2, slice: 0, pitch: 0 },
-    { step: 8, len: 4, slice: 1, pitch: 0 },
+test("エンベロープ：点の間はまっすぐ結ぶ。同じ位置の2点は段（四角）になる。前後ははみ出さない", () => {
+  const pts = [
+    { t: 0, v: 0 },
+    { t: 10, v: 1 },
+    { t: 20, v: 1 },
+    { t: 20, v: 0 },
   ];
-  const hits = whenMask(newSlot("drive", { when: "hits", steps: [8] }), n, env({ events }))!;
-  assert.equal(hits[50], 0);
-  assert.equal(hits[100], 1);
-  assert.equal(hits[130], 0);
-  assert.equal(whenMask(newSlot("drive"), n, env()), null);
+  assert.equal(envValueAt(pts, -5), 0);
+  assert.equal(envValueAt(pts, 5), 0.5);
+  assert.equal(envValueAt(pts, 15), 1);
+  assert.equal(envValueAt(pts, 20), 0);
+  assert.equal(envValueAt(pts, 99), 0);
+  const c = envCurve(pts, 300, 10);
+  assert.equal(c[50], 0.5);
+  assert.equal(c[150], 1);
+  assert.equal(c[250], 0);
 });
 
-test("並べた順に掛かる。差し込み（歪みなど）は、いつ掛けるか の所だけ入れ替わる", async () => {
-  const n = 8 * 160;
-  const crushed = await applyChain(flat(n, 0.3), [newSlot("crush", { amount: 1, when: "bars", from: 1, to: 1 })], env());
-  assert.notEqual(crushed.l[50], 0.3); // 1小節目は音質が下がる
-  assert.ok(Math.abs(crushed.l[500] - 0.3) < 1e-6); // ほかはそのまま
-  // 順番が違えば結果も違う（歪み→低音を削る と 低音を削る→歪み）
-  const sine = (): Pcm => {
-    const l = Float32Array.from({ length: n }, (_, i) => 0.6 * Math.sin((2 * Math.PI * 30 * i) / SR));
-    return { l, r: l.slice() };
-  };
-  const a = await applyChain(sine(), [newSlot("drive", { amount: 1 }), newSlot("lowCut", { amount: 0.6 })], env());
-  const b = await applyChain(sine(), [newSlot("lowCut", { amount: 0.6 }), newSlot("drive", { amount: 1 })], env());
+test("FXチェーン：上から順に掛かる。バイパスしたものは掛からない", async () => {
+  const n = 1000;
+  const drive = newPlugin("drive", { amount: 1 });
+  const hpf = newPlugin("lowCut", { amount: 0.6 });
+  const a = await applyTrack(sine(n), { chain: [drive, hpf], envelopes: [] }, env());
+  const b = await applyTrack(sine(n), { chain: [hpf, drive], envelopes: [] }, env());
   assert.ok(Math.abs(a.l[400] - b.l[400]) > 1e-3);
+  const off = await applyTrack(sine(n), { chain: [{ ...drive, bypass: true }], envelopes: [] }, env());
+  assert.ok(Math.abs(off.l[400] - sine(n).l[400]) < 1e-9);
+  assert.ok(trackIsOff({ chain: [{ ...drive, bypass: true }], envelopes: [] }));
 });
 
-test("送り（リバーブ・ディレイ）は、いつ掛けるか の所の音だけを響かせる", async () => {
+test("ウェット：差し込みは、元の音と掛けた音をウェットの割合で混ぜる", async () => {
+  const n = 200;
+  const full = await applyTrack(flat(n, 0.3), { chain: [newPlugin("crush", { amount: 1 })], envelopes: [] }, env());
+  const half = await applyTrack(flat(n, 0.3), { chain: [newPlugin("crush", { amount: 1, mix: 0.5 })], envelopes: [] }, env());
+  assert.ok(Math.abs(half.l[50] - (0.3 + full.l[50]) / 2) < 1e-6);
+});
+
+test("エンベロープで、ウェットを時間で動かせる（その所だけ掛かる）。送りは、送った所の音だけ響く", async () => {
   const n = 8 * 160;
+  const crush = newPlugin("crush", { amount: 1 });
+  const e = { ...newEnvelope(crush, "mix", 128), points: [{ t: 0, v: 0 }, { t: 16, v: 0 }, { t: 16, v: 1 }, { t: 32, v: 1 }, { t: 32, v: 0 }] };
+  const out = await applyTrack(flat(n, 0.3), { chain: [crush], envelopes: [e] }, env());
+  assert.ok(Math.abs(out.l[50] - 0.3) < 1e-6); // 1小節目：掛からない
+  assert.notEqual(out.l[250], 0.3); // 2小節目：掛かる
+  assert.ok(Math.abs(out.l[500] - 0.3) < 1e-6);
+  // 切ったエンベロープは無視（つまみの値＝ウェット100%）
+  const offEnv = await applyTrack(flat(n, 0.3), { chain: [crush], envelopes: [{ ...e, active: false }] }, env());
+  assert.notEqual(offEnv.l[50], 0.3);
+  // 送り：量のエンベロープの所だけ送る
   const seen: number[] = [];
-  const out = await applyChain(flat(n, 0.5), [newSlot("reverb", { amount: 1, when: "bars", from: 2, to: 2 })], env({
-    reverb: async (pcm) => {
-      seen.push(pcm.l[50], pcm.l[250]);
-      return pcm;
-    },
-  }));
-  assert.deepEqual(seen, [0, 0.5]);
-  assert.ok(out.l[250] > out.l[50]);
+  const rev = newPlugin("reverb", { amount: 1 });
+  const re = { ...newEnvelope(rev, "amount", 128), points: [{ t: 0, v: 0 }, { t: 16, v: 0 }, { t: 16, v: 1 }] };
+  await applyTrack(flat(n, 0.5), { chain: [rev], envelopes: [re] }, env({ reverb: async (pcm) => (seen.push(pcm.l[50], pcm.l[250]), pcm) }));
+  assert.deepEqual(seen, [0, 0.25]);
 });
 
 test("ディレイ：間隔ごとに、だんだん小さくくり返す。曲の終わりを越えたら頭に回す", () => {
@@ -93,19 +105,36 @@ test("ディレイ：間隔ごとに、だんだん小さくくり返す。曲�
   const pcm: Pcm = { l: new Float32Array(n), r: new Float32Array(n) };
   pcm.l[90] = 1;
   const wet = delayWet(pcm, 20, 0.5);
-  assert.ok(wet.l[10] > 0.2); // 90+20 → 頭の10
+  assert.ok(wet.l[10] > 0.2);
   assert.ok(wet.l[30] > 0.05 && wet.l[30] < wet.l[10]);
 });
 
-test("何も掛けない並びは、何もしない。前の1組の形からも読める", () => {
-  assert.ok(chainIsOff([]));
-  assert.ok(chainIsOff([newSlot("delay", { amount: 0 })]));
-  assert.ok(chainIsOff([newSlot("delay", { when: "hits", steps: [] })]));
-  assert.ok(!chainIsOff([newSlot("delay")]));
+test("読み込み：いまの形、少し前の形（いつ掛けるか つき）、その前の1組の形", () => {
+  const legacy = { stepsPerBar: 16, bars: 8 };
+  const now = sanitizeTrack({ chain: [{ id: "p1", kind: "delay", amount: 0.5, time: "1/4", bypass: true }], envelopes: [{ id: "e1", pluginId: "p1", param: "mix", points: [{ t: 5, v: 2 }, { t: 1, v: 0.5 }] }, { pluginId: "zz", param: "mix", points: [] }] }, legacy);
+  assert.equal(now.chain[0].time, "1/4");
+  assert.equal(now.chain[0].bypass, true);
+  assert.equal(now.envelopes.length, 1);
+  assert.deepEqual(now.envelopes[0].points, [{ t: 1, v: 0.5 }, { t: 5, v: 1 }]);
+  const takes: TakeFx[] = [];
+  const old = sanitizeTrack(
+    [
+      { kind: "highCut", amount: 0.4, when: "bars", from: 2, to: 3 },
+      { kind: "delay", amount: 0.5, when: "hits", steps: [4, 8] },
+      { kind: "reverb", amount: 0.2, when: "all" },
+    ],
+    legacy,
+    takes,
+  );
+  assert.deepEqual(old.chain.map((p) => p.kind), ["highCut", "reverb"]);
+  assert.equal(old.envelopes.length, 1); // 小節を選ぶ → ウェットのエンベロープ（2〜3小節目だけ1）
+  assert.equal(envValueAt(old.envelopes[0].points, 10), 0);
+  assert.equal(envValueAt(old.envelopes[0].points, 20), 1);
+  assert.equal(envValueAt(old.envelopes[0].points, 50), 0);
+  assert.deepEqual(takes.map((t) => [t.step, t.chain[0].kind]), [[4, "delay"], [8, "delay"]]);
+  const older = sanitizeTrack({ reverb: 0.2, delay: 0.5, delayTime: "1/4", drive: 0.3 }, legacy);
+  assert.deepEqual(older.chain.map((p) => p.kind), ["drive", "delay", "reverb"]);
+  assert.deepEqual(sanitizeTakes([{ step: 3, chain: [{ kind: "crush" }] }, { step: 3, chain: [{ kind: "drive" }] }, { step: 1, chain: [] }]).map((t) => t.step), [3]);
   const pcm = { l: Float32Array.from([0.1]), r: Float32Array.from([0.1]) };
   assert.equal(applyDrive(pcm, 0, 0), pcm);
-  const old = sanitizeChain({ reverb: 0.2, delay: 0.5, delayTime: "1/4", drive: 0.3 });
-  assert.deepEqual(old.map((s) => s.kind), ["drive", "delay", "reverb"]);
-  assert.equal(old[1].time, "1/4");
-  assert.deepEqual(sanitizeChain([{ kind: "???" }, { kind: "crush", amount: 2, when: "hits", steps: [3, 3, 1] }]).map((s) => [s.kind, s.amount, s.steps]), [["crush", 1, [1, 3]]]);
 });

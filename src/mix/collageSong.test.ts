@@ -4,7 +4,7 @@ import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
 import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
-import { newSlot, type FxSlot } from "./fx.ts";
+import { newPlugin, type FxPlugin } from "./fx.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
 
@@ -181,25 +181,33 @@ test("混ぜる：2つの曲で1つのリズム。同じ所で両方は鳴らず
   assert.equal(r.lanes[2].events.length, 0);
 });
 
-test("エフェクト：掛けた所（層・下地・全体）にだけ掛ける。掛けていない所では、リバーブは呼ばない", async () => {
+test("エフェクト：FXのあるトラック（層・下地・マスター）とテイクFXの断片にだけ掛ける。無ければリバーブは呼ばない", async () => {
   const phrases = [drumPhrase("a"), phrase("b", 100, 62)];
   const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], drumId: "a" };
   song.params = { ...song.params, pad: 0, sfx: 0 };
   song.lanes = syncLanes(song, seq);
-  const tagged = (tag: number): FxSlot => newSlot("reverb", { amount: 1, size: tag });
-  song.lanes[1].fx = [tagged(0.1)];
-  song.fx = { master: [tagged(0.3)], bed: [tagged(0.2)], pad: [] };
+  const tagged = (size: number): FxPlugin => newPlugin("reverb", { amount: 1, size });
+  const track = (size: number) => ({ chain: [tagged(size)], envelopes: [] });
+  song.lanes[1].fx = track(0.1);
+  song.fx = { master: track(0.3), bed: track(0.2), pad: { chain: [], envelopes: [] } };
   const called: number[] = [];
   const reverb = async (pcm: Pcm, seconds: number): Promise<Pcm> => {
     called.push(Math.round(seconds * 100) / 100);
     return pcm;
   };
-  await buildCollage(song, phrases, steadyRender, 1000, reverb);
-  // 0.3·20^size 秒：層0.1→0.40、下地0.2→0.55、全体0.3→0.74
+  const first = (await buildCollage(song, phrases, steadyRender, 1000, reverb))!;
+  // 0.3·20^size 秒：層0.1→0.40、下地0.2→0.55、マスター0.3→0.74
   assert.deepEqual(called.sort(), [0.4, 0.55, 0.74]);
+  // テイクFX：層Aの最初の断片だけ
   called.length = 0;
-  song.fx = { master: [], bed: [], pad: [] };
+  song.fx = { master: { chain: [], envelopes: [] }, bed: { chain: [], envelopes: [] }, pad: { chain: [], envelopes: [] } };
   delete song.lanes[1].fx;
+  const step = first.lanes[0].events[0].step;
+  song.lanes[0].takes = [{ step, chain: [tagged(0.4)] }];
+  await buildCollage(song, phrases, steadyRender, 1000, reverb);
+  assert.deepEqual(called, [0.99]); // 0.3·20^0.4 ≈ 0.99
+  called.length = 0;
+  delete song.lanes[0].takes;
   await buildCollage(song, phrases, steadyRender, 1000, reverb);
   assert.deepEqual(called, []);
 });

@@ -1,25 +1,55 @@
+import type { EnvPoint } from "../mix/fx";
 import type { LaneEvent } from "../mix/sequencer";
 
-/** 1本の線に描く層。 */
-export interface LaneRow {
+/** トラックの行：層・下地・伸ばし・マスター。 */
+export interface TrackRow {
+  type: "track";
+  /** トラックの鍵：lane:<曲のid>・bed・pad・master。 */
+  key: string;
+  kind: "lane" | "bed" | "pad" | "master";
   name: string;
   locked: boolean;
   muted: boolean;
-  /** 全体と違う形（ずらし・切り方・音量）を持っているか。 */
+  /** 全体と違う設定（ずらし・切り方・音量・エフェクト）を持っているか。 */
   custom: boolean;
   /** いま選んでいる層か。 */
   selected: boolean;
   events: LaneEvent[];
+  /** 鳴っているFXがあるか（FXボタンを光らせる）。 */
+  fx: boolean;
+  /** テイクFXを持っている断片の位置。 */
+  takeSteps?: number[];
 }
 
+/** エンベロープの行：トラックの下に出る折れ線。 */
+export interface EnvRow {
+  type: "env";
+  /** エンベロープのid。 */
+  key: string;
+  label: string;
+  points: EnvPoint[];
+  active: boolean;
+}
+
+export type Row = TrackRow | EnvRow;
+
 export interface LaneViewData {
-  lanes: LaneRow[];
-  /** 下地（鳴らしっぱなしのドラム）。いちばん下に灰色で描く。 */
-  bed?: { name: string; events: LaneEvent[] } | null;
-  /** エフェクトの「いつ掛けるか」の印：掛ける小節（0から）と、選んだ断片（laneIndex の層の steps）。 */
-  highlight?: { laneIndex?: number; steps?: number[]; bars?: number[]; picking: boolean } | null;
+  rows: Row[];
   totalSteps: number;
   stepsPerBar: number;
+  /** 選んでいる断片（テイクFXを開く対象）。 */
+  selectedHit?: { track: string; step: number } | null;
+}
+
+export interface LaneViewHandlers {
+  /** トラック名をタップ。 */
+  onName: (track: string) => void;
+  /** FXボタンをタップ。 */
+  onFx: (track: string) => void;
+  /** 層の線の上の断片をタップ（無い所なら step は null）。 */
+  onHit: (track: string, step: number | null) => void;
+  /** エンベロープを描き変えた（点を足す・動かす・消す）。 */
+  onEnvEdit: (id: string, points: EnvPoint[]) => void;
 }
 
 export interface LaneView {
@@ -29,21 +59,23 @@ export interface LaneView {
   setProgress: (t: number | null) => void;
 }
 
-const GUTTER = 96;
+const GUTTER = 128;
 const HEAD_H = 16;
 const ROW_H = 30;
+const ENV_H = 40;
 const EMPTY_H = 72;
+const FX_W = 26;
+const POINT_R = 4;
+const ENV_PAD = 5;
 
 /**
- * phrz の円環を、横に並べた直線にしたもの。層（＝刻む曲）1つが1本の線で、左が頭、右が終わり。
- * 線の上の小さな棒が「打った断片」。色は断片の番号（同じ色＝同じ断片の連打）、上下の位置は音程。
- * 左の名前をタップすると、その層を選べる（選んだ層は、その層だけの形を変えられる）。
+ * トラックの表示（REAPER 風）。1行が1トラック：層（刻む曲）・下地・伸ばし・マスター。
+ * 左の名前をタップで層を選び、[FX] でそのトラックのFXチェーンを開く。
+ * 層の線の上の小さな棒が「打った断片」（色は断片の番号、上下は音程）。断片をタップすると選べる（テイクFXを開ける）。
+ * トラックの下には、エンベロープ（つまみを時間で動かす折れ線）が出る：
+ * 空いた所をタップで点を足し、点をドラッグで動かし、点をダブルタップ（右クリック）で消す。
  */
-export function buildLaneView(
-  onLaneClick: (index: number) => void,
-  /** 線の上（断片のある所）をタップした：何番目の層の、どの断片（打つ位置のステップ）か。 */
-  onHitClick?: (index: number, step: number) => void,
-): LaneView {
+export function buildLaneView(handlers: LaneViewHandlers): LaneView {
   const root = document.createElement("div");
   root.className = "lane-view";
   const canvas = document.createElement("canvas");
@@ -54,11 +86,32 @@ export function buildLaneView(
   let data: LaneViewData | null = null;
   let progress: number | null = null;
   let width = 400;
+  /** ドラッグ中のエンベロープ（描き終わるまで、ここで動かす）。 */
+  let drag: { id: string; points: EnvPoint[]; index: number; moved: boolean; added: boolean } | null = null;
 
   const css = (name: string, fallback: string): string =>
     getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-  const rowCount = (): number => (data ? data.lanes.length + (data.bed ? 1 : 0) : 0);
-  const heightNow = (): number => (data && data.lanes.length > 0 ? HEAD_H + rowCount() * ROW_H + 6 : EMPTY_H);
+  const rowHeight = (r: Row): number => (r.type === "env" ? ENV_H : ROW_H);
+  const heightNow = (): number =>
+    data && data.rows.length > 0 ? HEAD_H + data.rows.reduce((a, r) => a + rowHeight(r), 0) + 6 : EMPTY_H;
+  const plotW = (): number => Math.max(1, width - GUTTER);
+  const xOf = (step: number): number => GUTTER + (step / Math.max(1, data?.totalSteps ?? 1)) * plotW();
+  const stepOf = (x: number): number => ((x - GUTTER) / plotW()) * (data?.totalSteps ?? 1);
+
+  /** y から、行と、その行の上端。 */
+  function rowAt(y: number): { row: Row; top: number } | null {
+    if (!data) return null;
+    let top = HEAD_H;
+    for (const row of data.rows) {
+      const h = rowHeight(row);
+      if (y >= top && y < top + h) return { row, top };
+      top += h;
+    }
+    return null;
+  }
+
+  const envY = (top: number, v: number): number => top + ENV_PAD + (1 - v) * (ENV_H - 2 * ENV_PAD);
+  const envV = (top: number, y: number): number => Math.min(1, Math.max(0, 1 - (y - top - ENV_PAD) / (ENV_H - 2 * ENV_PAD)));
 
   function draw(): void {
     const height = heightNow();
@@ -72,101 +125,129 @@ export function buildLaneView(
     const text = css("--text", "#e8e8ee");
     const border = css("--border", "#2a2c36");
     const blue = css("--accent-blue", "#5eb4ff");
+    const green = css("--accent-green", "#3ee6b0");
     g.font = "11px sans-serif";
     g.textBaseline = "middle";
 
-    if (!data || data.lanes.length === 0) {
+    if (!data || data.rows.length === 0) {
       g.fillStyle = dim;
       g.fillText("「刻む」を押すと、ここに層（選んだ曲）ごとの線が出る", 8, height / 2);
       return;
     }
 
-    const plotW = Math.max(1, width - GUTTER);
-    const sx = plotW / data.totalSteps;
+    const sx = plotW() / data.totalSteps;
     const bars = Math.round(data.totalSteps / data.stepsPerBar);
-
-    // 小節と拍の目盛り
     for (let s = 0; s <= data.totalSteps; s += data.stepsPerBar / 4) {
       const x = GUTTER + s * sx;
       const isBar = s % data.stepsPerBar === 0;
-      const isUnit = s % (data.stepsPerBar * 4) === 0; // 4小節のまとまり（音楽モードのくり返しの単位）
+      const isUnit = s % (data.stepsPerBar * 4) === 0;
       g.strokeStyle = isUnit ? "rgba(255,255,255,0.32)" : isBar ? border : "rgba(255,255,255,0.04)";
       g.beginPath();
       g.moveTo(x, isBar ? 0 : HEAD_H);
       g.lineTo(x, height);
       g.stroke();
     }
-    // エフェクトを掛ける小節の印
-    const hl = data.highlight;
-    canvas.style.cursor = hl?.picking ? "pointer" : "";
-    if (hl?.bars) {
-      g.fillStyle = "rgba(255,196,80,0.13)";
-      for (const b of hl.bars) g.fillRect(GUTTER + b * data.stepsPerBar * sx, 0, data.stepsPerBar * sx, height);
-    }
     g.fillStyle = dim;
     for (let b = 0; b < bars; b++) g.fillText(String(b + 1), GUTTER + b * data.stepsPerBar * sx + 3, HEAD_H / 2);
 
-    data.lanes.forEach((lane, i) => {
-      const top = HEAD_H + i * ROW_H;
-      const mid = top + ROW_H / 2;
-      if (lane.selected) {
-        g.fillStyle = "rgba(255,255,255,0.07)";
-        g.fillRect(0, top, width, ROW_H);
-        g.fillStyle = css("--accent-green", "#3ee6b0");
-        g.fillRect(0, top + 2, 3, ROW_H - 4);
-      } else if (lane.locked) {
-        g.fillStyle = "rgba(94,180,255,0.10)";
-        g.fillRect(0, top, width, ROW_H);
-      }
-      g.fillStyle = lane.muted ? dim : lane.locked ? blue : text;
-      g.fillText(`${lane.locked ? "● " : ""}${lane.name}${lane.custom ? " ＊" : ""}`, 8, mid, GUTTER - 12);
-      // 線
-      g.strokeStyle = "rgba(255,255,255,0.18)";
-      g.beginPath();
-      g.moveTo(GUTTER, mid);
-      g.lineTo(width, mid);
-      g.stroke();
-      // 打った断片
-      g.globalAlpha = lane.muted ? 0.25 : 1;
-      for (const ev of lane.events) {
-        const hue = (ev.slice * 47) % 360;
-        g.fillStyle = `hsl(${hue} 75% 62%)`;
-        const y = mid - 3 - (ev.pitch / 12) * 8;
-        g.fillRect(GUTTER + ev.step * sx, y, Math.max(2, ev.len * sx - 1), 6);
-      }
-      g.globalAlpha = 1;
-      // 選んでいる最中の層は枠で囲み、選んだ断片は明るい枠で示す
-      if (hl?.laneIndex === i) {
-        if (hl.picking) {
-          g.strokeStyle = "rgba(255,196,80,0.7)";
-          g.strokeRect(GUTTER + 0.5, top + 1.5, width - GUTTER - 1, ROW_H - 3);
+    let top = HEAD_H;
+    for (const row of data.rows) {
+      const h = rowHeight(row);
+      const mid = top + h / 2;
+      if (row.type === "track") {
+        if (row.selected) {
+          g.fillStyle = "rgba(255,255,255,0.07)";
+          g.fillRect(0, top, width, h);
+          g.fillStyle = green;
+          g.fillRect(0, top + 2, 3, h - 4);
+        } else if (row.kind !== "lane") {
+          g.fillStyle = "rgba(255,255,255,0.03)";
+          g.fillRect(0, top, width, h);
+        } else if (row.locked) {
+          g.fillStyle = "rgba(94,180,255,0.10)";
+          g.fillRect(0, top, width, h);
         }
-        const chosen = new Set(hl.steps ?? []);
-        g.strokeStyle = "#ffc450";
-        g.lineWidth = 2;
-        for (const ev of lane.events) {
-          if (!chosen.has(ev.step)) continue;
-          const y = mid - 3 - (ev.pitch / 12) * 8;
-          g.strokeRect(GUTTER + ev.step * sx - 1, y - 2, Math.max(2, ev.len * sx - 1) + 2, 10);
+        g.fillStyle = row.muted || row.kind !== "lane" ? dim : row.locked ? blue : text;
+        g.fillText(`${row.locked ? "● " : ""}${row.name}${row.custom ? " ＊" : ""}`, 8, mid, GUTTER - FX_W - 14);
+        // FXボタン（鳴っているFXがあれば光る）
+        const bx = GUTTER - FX_W - 6;
+        g.fillStyle = row.fx ? green : "rgba(255,255,255,0.06)";
+        g.fillRect(bx, mid - 8, FX_W, 16);
+        g.strokeStyle = row.fx ? green : border;
+        g.strokeRect(bx + 0.5, mid - 7.5, FX_W - 1, 15);
+        g.fillStyle = row.fx ? "#0c0d12" : dim;
+        g.fillText("FX", bx + 6, mid + 0.5);
+        if (row.kind === "lane" || row.kind === "bed") {
+          g.strokeStyle = "rgba(255,255,255,0.18)";
+          g.beginPath();
+          g.moveTo(GUTTER, mid);
+          g.lineTo(width, mid);
+          g.stroke();
         }
+        if (row.kind === "bed") {
+          g.fillStyle = "rgba(200,200,210,0.55)";
+          for (const ev of row.events) g.fillRect(GUTTER + ev.step * sx, mid - 5, Math.max(1.5, sx * 0.6), 10);
+        } else if (row.kind === "lane") {
+          g.globalAlpha = row.muted ? 0.25 : 1;
+          const takes = new Set(row.takeSteps ?? []);
+          const sel = data.selectedHit?.track === row.key ? data.selectedHit.step : null;
+          for (const ev of row.events) {
+            const y = mid - 3 - (ev.pitch / 12) * 8;
+            const x = GUTTER + ev.step * sx;
+            const w = Math.max(2, ev.len * sx - 1);
+            g.fillStyle = `hsl(${(ev.slice * 47) % 360} 75% 62%)`;
+            g.fillRect(x, y, w, 6);
+            if (takes.has(ev.step)) {
+              // テイクFXのある断片：上に小さな印
+              g.fillStyle = green;
+              g.fillRect(x, y - 4, Math.min(w, 6), 2);
+            }
+            if (sel === ev.step) {
+              g.strokeStyle = "#ffc450";
+              g.lineWidth = 2;
+              g.strokeRect(x - 1, y - 2, w + 2, 10);
+              g.lineWidth = 1;
+            }
+          }
+          g.globalAlpha = 1;
+        } else {
+          g.fillStyle = dim;
+          g.fillText(row.kind === "master" ? "曲のぜんぶ" : "和音を伸ばした音", GUTTER + 6, mid);
+        }
+      } else {
+        // エンベロープ：折れ線と点
+        const points = drag?.id === row.key ? drag.points : row.points;
+        g.fillStyle = "rgba(255,196,80,0.05)";
+        g.fillRect(0, top, width, h);
+        g.fillStyle = row.active ? "#ffc450" : dim;
+        g.fillText(row.label, 16, mid, GUTTER - 22);
+        g.strokeStyle = row.active ? "#ffc450" : "rgba(255,255,255,0.3)";
+        g.lineWidth = 1.5;
+        g.beginPath();
+        const first = points[0];
+        g.moveTo(GUTTER, envY(top, first ? first.v : 0));
+        for (const p of points) g.lineTo(xOf(p.t), envY(top, p.v));
+        const last = points[points.length - 1];
+        g.lineTo(width, envY(top, last ? last.v : 0));
+        g.stroke();
         g.lineWidth = 1;
+        g.fillStyle = row.active ? "#ffc450" : dim;
+        for (const p of points) {
+          g.beginPath();
+          g.arc(xOf(p.t), envY(top, p.v), POINT_R, 0, Math.PI * 2);
+          g.fill();
+        }
       }
-    });
-
-    if (data.bed) {
-      // 下地：刻まずに鳴らしっぱなしのドラム（打つ所を灰色の細い棒で）
-      const top = HEAD_H + data.lanes.length * ROW_H;
-      const mid = top + ROW_H / 2;
-      g.fillStyle = "rgba(255,255,255,0.04)";
-      g.fillRect(0, top, width, ROW_H);
-      g.fillStyle = dim;
-      g.fillText(`下地 ${data.bed.name}`, 8, mid, GUTTER - 12);
-      g.fillStyle = "rgba(200,200,210,0.55)";
-      for (const ev of data.bed.events) g.fillRect(GUTTER + ev.step * sx, mid - 5, Math.max(1.5, sx * 0.6), 10);
+      g.strokeStyle = "rgba(255,255,255,0.05)";
+      g.beginPath();
+      g.moveTo(0, top + h - 0.5);
+      g.lineTo(width, top + h - 0.5);
+      g.stroke();
+      top += h;
     }
 
     if (progress !== null) {
-      const x = GUTTER + progress * plotW;
+      const x = GUTTER + progress * plotW();
       g.strokeStyle = "#ffffff";
       g.beginPath();
       g.moveTo(x, 0);
@@ -175,29 +256,125 @@ export function buildLaneView(
     }
   }
 
+  const local = (e: MouseEvent): { x: number; y: number } => {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+
+  /** エンベロープの点のうち、(x, y) に近いもの。 */
+  function nearPoint(points: EnvPoint[], top: number, x: number, y: number): number {
+    let best = -1;
+    let bestD = (POINT_R + 6) ** 2;
+    points.forEach((p, i) => {
+      const d = (xOf(p.t) - x) ** 2 + (envY(top, p.v) - y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  // トラックの行：名前・FXボタン・断片
   canvas.addEventListener("click", (e) => {
     if (!data) return;
-    const r = canvas.getBoundingClientRect();
-    const i = Math.floor((e.clientY - r.top - HEAD_H) / ROW_H);
-    if (i < 0 || i >= data.lanes.length) return;
-    const x = e.clientX - r.left;
-    if (x <= GUTTER) {
-      onLaneClick(i);
+    const { x, y } = local(e);
+    const hit = rowAt(y);
+    if (!hit || hit.row.type !== "track") return;
+    const row = hit.row;
+    if (x >= GUTTER - FX_W - 8 && x <= GUTTER - 2) {
+      handlers.onFx(row.key);
       return;
     }
-    // 線の上：タップした所にある断片（無ければ、いちばん近い断片）
-    const step = ((x - GUTTER) / Math.max(1, width - GUTTER)) * data.totalSteps;
-    const events = data.lanes[i].events;
+    if (x < GUTTER) {
+      handlers.onName(row.key);
+      return;
+    }
+    if (row.kind !== "lane") return;
+    const step = stepOf(x);
     let best: LaneEvent | undefined;
     let bestD = Infinity;
-    for (const ev of events) {
+    for (const ev of row.events) {
       const d = step < ev.step ? ev.step - step : step > ev.step + ev.len ? step - ev.step - ev.len : 0;
       if (d < bestD) {
         bestD = d;
         best = ev;
       }
     }
-    if (best && bestD <= 1.5) onHitClick?.(i, best.step);
+    // 細い棒でも押しやすいよう、少し離れていても近い断片を選ぶ（画面で10pxくらいまで）
+    const slack = Math.max(1, 10 / (plotW() / data.totalSteps));
+    handlers.onHit(row.key, best && bestD <= slack ? best.step : null);
+  });
+
+  // エンベロープの行：点を足す・動かす
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!data) return;
+    const { x, y } = local(e);
+    const hit = rowAt(y);
+    if (!hit || hit.row.type !== "env" || x < GUTTER || e.button === 2) return;
+    const row = hit.row;
+    const points = row.points.map((p) => ({ ...p }));
+    let index = nearPoint(points, hit.top, x, y);
+    const added = index < 0;
+    if (added) {
+      const t = Math.round(Math.min(data.totalSteps, Math.max(0, stepOf(x))));
+      points.push({ t, v: envV(hit.top, y) });
+      points.sort((a, b) => a.t - b.t || 0);
+      index = points.findIndex((p) => p.t === t);
+    }
+    drag = { id: row.key, points, index, moved: false, added };
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    draw();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag || !data) return;
+    const { x, y } = local(e);
+    let top = HEAD_H;
+    for (const r of data.rows) {
+      if (r.type === "env" && r.key === drag.id) break;
+      top += rowHeight(r);
+    }
+    const p = drag.points[drag.index];
+    const prev = drag.points[drag.index - 1];
+    const next = drag.points[drag.index + 1];
+    // 前後の点を追い越さない（順番を保つ）。16分の格子にそろえる
+    let t = Math.round(Math.min(data.totalSteps, Math.max(0, stepOf(x))));
+    if (prev) t = Math.max(prev.t, t);
+    if (next) t = Math.min(next.t, t);
+    p.t = t;
+    p.v = envV(top, y);
+    drag.moved = true;
+    draw();
+  });
+  const finish = (): void => {
+    if (!drag) return;
+    const { id, points, moved, added } = drag;
+    drag = null;
+    if (moved || added) handlers.onEnvEdit(id, points);
+    else draw();
+  };
+  canvas.addEventListener("pointerup", finish);
+  canvas.addEventListener("pointercancel", () => {
+    drag = null;
+    draw();
+  });
+  // 点を消す：ダブルタップ／右クリック
+  const removeAt = (e: MouseEvent): boolean => {
+    if (!data) return false;
+    const { x, y } = local(e);
+    const hit = rowAt(y);
+    if (!hit || hit.row.type !== "env") return false;
+    const i = nearPoint(hit.row.points, hit.top, x, y);
+    if (i < 0 || hit.row.points.length <= 1) return false;
+    handlers.onEnvEdit(hit.row.key, hit.row.points.filter((_, j) => j !== i));
+    return true;
+  };
+  canvas.addEventListener("dblclick", (e) => {
+    removeAt(e);
+  });
+  canvas.addEventListener("contextmenu", (e) => {
+    if (removeAt(e)) e.preventDefault();
   });
 
   new ResizeObserver((entries) => {
@@ -213,12 +390,12 @@ export function buildLaneView(
     el: root,
     setData(next) {
       data = next;
-      draw();
+      if (!drag) draw();
     },
     setProgress(t) {
       if (t === progress) return;
       progress = t;
-      draw();
+      if (!drag) draw();
     },
   };
 }
