@@ -1,6 +1,6 @@
 import type { CutMode } from "./slicer.ts";
 import type { ShapeParams } from "./sequencer.ts";
-import { defaultSongFx, fxIsOff, sanitizeFx, DEFAULT_MASTER_FX, type FxSettings, type SongFx } from "./fx.ts";
+import { chainIsOff, defaultSongFx, newSlot, sanitizeChain, type FxSlot, type SongFx } from "./fx.ts";
 
 /**
  * 層：刻む曲（フレーズ）1つが、1本の層。曲はまるごと1本の波形として扱い、中身（ドラム・ベースなど）には分けない。
@@ -20,8 +20,8 @@ export interface Lane {
   /** 音量（0〜1.5）。無ければ1。 */
   volume?: number;
   muted?: boolean;
-  /** この層だけに掛けるエフェクト。無ければ掛けない（全体のエフェクトは別に掛かる）。 */
-  fx?: FxSettings;
+  /** この層だけに掛けるエフェクト（上から順に掛かる）。無ければ掛けない（全体のエフェクトは別に掛かる）。 */
+  fx?: FxSlot[];
 }
 
 /** 層ごとにずらせる形のつまみ。 */
@@ -136,7 +136,7 @@ export function effectiveParams(global: SongParams, lane: Pick<Lane, "shift" | "
 /** 層が全体と違う設定を持っているか（ずらし・切り方・音量・ミュート）。 */
 export function laneIsCustom(lane: Lane): boolean {
   const shifted = SHAPE_KEYS.some((k) => Math.abs(lane.shift?.[k] ?? 0) > 1e-9);
-  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted || !fxIsOff(lane.fx);
+  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted || !chainIsOff(lane.fx);
 }
 
 /**
@@ -226,7 +226,7 @@ export function migrateSong(raw: unknown): Song {
     if (p.mode === "transient" || p.mode === "divide") song.params.mode = p.mode;
     if (typeof p.dry === "boolean") song.params.dry = p.dry;
     // 前の「仕上げの響き」は、全体のリバーブの量にする
-    if (isNum(p.reverb)) song.fx.master.reverb = Math.min(1, Math.max(0, p.reverb));
+    if (isNum(p.reverb)) song.fx.master = p.reverb > 0 ? [newSlot("reverb", { amount: Math.min(1, p.reverb) })] : [];
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
     if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
     for (const key of ["bedVolume", "sfx", "pad", "pump"] as const) {
@@ -237,9 +237,9 @@ export function migrateSong(raw: unknown): Song {
   if (typeof r.fx === "object" && r.fx !== null) {
     const fx = r.fx as Record<string, unknown>;
     song.fx = {
-      master: sanitizeFx(fx.master, DEFAULT_MASTER_FX),
-      bed: sanitizeFx(fx.bed),
-      pad: sanitizeFx(fx.pad),
+      master: fx.master === undefined ? song.fx.master : sanitizeChain(fx.master),
+      bed: sanitizeChain(fx.bed),
+      pad: sanitizeChain(fx.pad),
     };
   }
   return song;
@@ -252,8 +252,8 @@ function sanitizeLane(raw: Lane): Lane {
   if (raw.mode === "transient" || raw.mode === "divide") lane.mode = raw.mode;
   if (isNum(raw.volume)) lane.volume = Math.min(MAX_LANE_VOLUME, Math.max(0, raw.volume));
   if (typeof raw.fx === "object" && raw.fx !== null) {
-    const fx = sanitizeFx(raw.fx);
-    if (!fxIsOff(fx)) lane.fx = fx;
+    const fx = sanitizeChain(raw.fx);
+    if (fx.length > 0) lane.fx = fx;
   }
   if (typeof raw.shift === "object" && raw.shift !== null) {
     const shift: Partial<Record<ShapeKey, number>> = {};

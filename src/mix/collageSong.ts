@@ -2,7 +2,7 @@ import { createRng } from "../theory/rng.ts";
 import { keyShortName } from "../theory/key.ts";
 import { totalBeats, type Phrase } from "../phrase/types.ts";
 import { layBed, renderCollage, type CollageLane } from "./collage.ts";
-import { fxIsOff, type FxSettings } from "./fx.ts";
+import { applyChain, chainIsOff, type ChainEnv, type FxSlot } from "./fx.ts";
 import { addSfx, fourOnFloor, kickSteps, pump, renderPad, type Grid, type PadSource } from "./glue.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
@@ -123,7 +123,8 @@ const BED_GAIN = 0.75;
  * 下地があれば、その曲のドラムだけを書き出して、刻まずに頭から最後まで鳴らしっぱなしにする。
  * フレーズ自身のBPMは関係ない。ほかの層の調は、いちばん上の層の調に寄せる。
  */
-export type ApplyFx = (pcm: Pcm, fx: FxSettings, bpm: number) => Promise<Pcm>;
+/** リバーブの響きだけ（元の音を含まない）を作る。 */
+export type ReverbFn = ChainEnv["reverb"];
 
 /** 波形を足す（out に add を重ねる）。 */
 function mixInto(out: Pcm, add: Pcm): void {
@@ -138,10 +139,10 @@ export async function buildCollage(
   phrases: Phrase[],
   render: (phrase: Phrase, bpm: number, opts: RenderOpts) => Promise<Pcm>,
   sampleRate: number,
-  /** エフェクトを掛ける（層ごと・下地・伸ばし・全体）。無ければ掛けない。 */
-  applyFx?: ApplyFx,
+  /** リバーブの響きを作る（エフェクトのリバーブに使う）。無ければ、エフェクトは掛けない。 */
+  reverb?: ReverbFn,
 ): Promise<CollageResult | null> {
-  const fxOn = (fx: FxSettings | undefined): fx is FxSettings => !!applyFx && !fxIsOff(fx);
+  const fxOn = (fx: FxSlot[] | undefined): fx is FxSlot[] => !!reverb && !chainIsOff(fx);
   const sources = collectSources(song, phrases);
   const byId = new Map(sources.map((p) => [p.id, p]));
   const lanes = (song.lanes ?? []).filter((l) => byId.has(l.phraseId));
@@ -216,18 +217,28 @@ export async function buildCollage(
   const swing = song.params.swing;
   const grid: Grid = { totalSteps, stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT, stepSamples, sampleRate, swing };
   const collageOpts = { totalSteps, stepSamples, sampleRate, swing };
+  const chainEnv = (events?: LaneEvent[]): ChainEnv => ({
+    totalSteps,
+    stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT,
+    stepSamples,
+    sampleRate,
+    swing,
+    bpm: song.bpm,
+    events,
+    reverb: reverb!,
+  });
   // エフェクトの無い層はまとめて作り、エフェクトのある層は1本ずつ作って、その層のエフェクトを掛けてから重ねる
   const mixed = renderCollage(built.filter((b) => !fxOn(b.fx)).map((b) => b.collage), collageOpts);
   for (const b of built) {
     if (!fxOn(b.fx)) continue;
-    mixInto(mixed, await applyFx!(renderCollage([b.collage], collageOpts), b.fx, song.bpm));
+    mixInto(mixed, await applyChain(renderCollage([b.collage], collageOpts), b.fx, chainEnv(b.collage.events)));
   }
   // 仕上げ（つなぎ）の偶然は、いちばん上の層の種から（刻み直すと変わり、形のつまみでは変わらない）
   const glueSeed = (lanes.find((l) => !l.muted) ?? lanes[0]).cutSeed;
   // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）
   const padSources = built.map((b) => b.pad).filter((p): p is PadSource => p !== null);
   let pad = renderPad(padSources, grid, song.params.pad, createRng(glueSeed ^ 0x51ed270b));
-  if (song.params.pad > 0 && fxOn(song.fx.pad)) pad = await applyFx!(pad, song.fx.pad, song.bpm);
+  if (song.params.pad > 0 && fxOn(song.fx.pad)) pad = await applyChain(pad, song.fx.pad, chainEnv());
   mixInto(mixed, pad);
   // 下地：選んだ曲のドラムだけを、刻まずに鳴らしっぱなし（ノリの軸になる）
   const drumId = pickDrum(song, phrases);
@@ -238,13 +249,19 @@ export async function buildCollage(
   pump(mixed, kicks.length > 0 ? kicks : fourOnFloor(totalSteps), grid, song.params.pump);
   if (drumPhrase) {
     let bedPcm = await render(drumPhrase, song.bpm, { dry: song.params.dry, drumsOnly: true, swing });
-    if (fxOn(song.fx.bed)) bedPcm = await applyFx!(bedPcm, song.fx.bed, song.bpm);
-    layBed(mixed, bedPcm, BED_GAIN * song.params.bedVolume);
+    if (fxOn(song.fx.bed)) {
+      // 下地は1周ぶんの波形なので、曲の長さに並べてから掛ける（「いつ掛けるか」が曲の位置で決まるように）
+      const full: Pcm = { l: new Float32Array(mixed.l.length), r: new Float32Array(mixed.r.length) };
+      layBed(full, bedPcm, BED_GAIN * song.params.bedVolume);
+      mixInto(mixed, await applyChain(full, song.fx.bed, chainEnv()));
+    } else {
+      layBed(mixed, bedPcm, BED_GAIN * song.params.bedVolume);
+    }
     bed = { phraseId: drumPhrase.id, name: `${drumPhrase.name}のドラム`, events: bedEvents(drumPhrase, totalSteps) };
   }
   // SFX：区切りを聞かせる（8小節ごとのライザー・インパクト、4小節ごとのリバースシンバル）
   addSfx(mixed, grid, song.params.sfx, createRng(glueSeed ^ 0x2f6b8a1d));
   // 全体のエフェクト：最後に、曲全体に掛ける
-  const pcm = limitPeak(fxOn(song.fx.master) ? await applyFx!(mixed, song.fx.master, song.bpm) : mixed);
+  const pcm = limitPeak(fxOn(song.fx.master) ? await applyChain(mixed, song.fx.master, chainEnv()) : mixed);
   return { pcm, lanes: built.map((b) => b.view), bed, totalSteps, keyName: baseKey ? keyShortName(baseKey) : null };
 }

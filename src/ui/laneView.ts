@@ -16,6 +16,8 @@ export interface LaneViewData {
   lanes: LaneRow[];
   /** 下地（鳴らしっぱなしのドラム）。いちばん下に灰色で描く。 */
   bed?: { name: string; events: LaneEvent[] } | null;
+  /** エフェクトの「いつ掛けるか」の印：掛ける小節（0から）と、選んだ断片（laneIndex の層の steps）。 */
+  highlight?: { laneIndex?: number; steps?: number[]; bars?: number[]; picking: boolean } | null;
   totalSteps: number;
   stepsPerBar: number;
 }
@@ -37,7 +39,11 @@ const EMPTY_H = 72;
  * 線の上の小さな棒が「打った断片」。色は断片の番号（同じ色＝同じ断片の連打）、上下の位置は音程。
  * 左の名前をタップすると、その層を選べる（選んだ層は、その層だけの形を変えられる）。
  */
-export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
+export function buildLaneView(
+  onLaneClick: (index: number) => void,
+  /** 線の上（断片のある所）をタップした：何番目の層の、どの断片（打つ位置のステップ）か。 */
+  onHitClick?: (index: number, step: number) => void,
+): LaneView {
   const root = document.createElement("div");
   root.className = "lane-view";
   const canvas = document.createElement("canvas");
@@ -90,6 +96,13 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
       g.lineTo(x, height);
       g.stroke();
     }
+    // エフェクトを掛ける小節の印
+    const hl = data.highlight;
+    canvas.style.cursor = hl?.picking ? "pointer" : "";
+    if (hl?.bars) {
+      g.fillStyle = "rgba(255,196,80,0.13)";
+      for (const b of hl.bars) g.fillRect(GUTTER + b * data.stepsPerBar * sx, 0, data.stepsPerBar * sx, height);
+    }
     g.fillStyle = dim;
     for (let b = 0; b < bars; b++) g.fillText(String(b + 1), GUTTER + b * data.stepsPerBar * sx + 3, HEAD_H / 2);
 
@@ -122,6 +135,22 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
         g.fillRect(GUTTER + ev.step * sx, y, Math.max(2, ev.len * sx - 1), 6);
       }
       g.globalAlpha = 1;
+      // 選んでいる最中の層は枠で囲み、選んだ断片は明るい枠で示す
+      if (hl?.laneIndex === i) {
+        if (hl.picking) {
+          g.strokeStyle = "rgba(255,196,80,0.7)";
+          g.strokeRect(GUTTER + 0.5, top + 1.5, width - GUTTER - 1, ROW_H - 3);
+        }
+        const chosen = new Set(hl.steps ?? []);
+        g.strokeStyle = "#ffc450";
+        g.lineWidth = 2;
+        for (const ev of lane.events) {
+          if (!chosen.has(ev.step)) continue;
+          const y = mid - 3 - (ev.pitch / 12) * 8;
+          g.strokeRect(GUTTER + ev.step * sx - 1, y - 2, Math.max(2, ev.len * sx - 1) + 2, 10);
+        }
+        g.lineWidth = 1;
+      }
     });
 
     if (data.bed) {
@@ -149,9 +178,26 @@ export function buildLaneView(onLaneClick: (index: number) => void): LaneView {
   canvas.addEventListener("click", (e) => {
     if (!data) return;
     const r = canvas.getBoundingClientRect();
-    if (e.clientX - r.left > GUTTER) return;
     const i = Math.floor((e.clientY - r.top - HEAD_H) / ROW_H);
-    if (i >= 0 && i < data.lanes.length) onLaneClick(i);
+    if (i < 0 || i >= data.lanes.length) return;
+    const x = e.clientX - r.left;
+    if (x <= GUTTER) {
+      onLaneClick(i);
+      return;
+    }
+    // 線の上：タップした所にある断片（無ければ、いちばん近い断片）
+    const step = ((x - GUTTER) / Math.max(1, width - GUTTER)) * data.totalSteps;
+    const events = data.lanes[i].events;
+    let best: LaneEvent | undefined;
+    let bestD = Infinity;
+    for (const ev of events) {
+      const d = step < ev.step ? ev.step - step : step > ev.step + ev.len ? step - ev.step - ev.len : 0;
+      if (d < bestD) {
+        bestD = d;
+        best = ev;
+      }
+    }
+    if (best && bestD <= 1.5) onHitClick?.(i, best.step);
   });
 
   new ResizeObserver((entries) => {

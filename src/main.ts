@@ -65,7 +65,7 @@ import { createCloudPanel } from "./ui/cloudPanel";
 import { buildUserPresets } from "./ui/userPresets";
 import { buildMixPanel } from "./ui/mixPanel";
 import { renderPhrase } from "./audio/renderPhrase";
-import { applyFx } from "./audio/applyFx";
+import { reverbWet } from "./audio/reverbWet";
 import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -257,7 +257,7 @@ const mixPanel = buildMixPanel({
   },
   audio: { ctx: engine.ctx, out: engine.masterGain },
   render: (phrase, bpm, opts) => renderPhrase(phrase, bpm, engine.ctx.sampleRate, opts),
-  fx: (pcm, settings, bpm) => applyFx(pcm, engine.ctx.sampleRate, settings, bpm),
+  reverb: (pcm, seconds, toneHz) => reverbWet(pcm, engine.ctx.sampleRate, seconds, toneHz),
 });
 
 function toggleRecord(): void {

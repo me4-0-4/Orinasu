@@ -93,22 +93,21 @@ test("刻み方のモード：初期は音楽モード。保存データから�
   assert.equal(migrateSong({ params: { style: "???" } }).params.style, "music");
 });
 
-test("エフェクト：全体の初期はリバーブ15%。前の「仕上げの響き」は全体のリバーブに。層・下地のエフェクトも読める", () => {
+test("エフェクト：全体の初期はリバーブ15%。前の「仕上げの響き」は全体のリバーブに。並び・層のエフェクトも読める", () => {
   const s0 = createEmptySong();
-  assert.equal(s0.fx.master.reverb, 0.15);
-  assert.equal(s0.fx.bed.reverb, 0);
-  assert.equal(migrateSong({ params: { reverb: 0.4 } }).fx.master.reverb, 0.4);
-  assert.equal(migrateSong({ params: { reverb: 7 } }).fx.master.reverb, 1);
+  assert.deepEqual(s0.fx.master.map((x) => [x.kind, x.amount]), [["reverb", 0.15]]);
+  assert.deepEqual(s0.fx.bed, []);
+  assert.equal(migrateSong({ params: { reverb: 0.4 } }).fx.master[0].amount, 0.4);
+  assert.deepEqual(migrateSong({ params: { reverb: 0 } }).fx.master, []);
   const s1 = migrateSong({
-    fx: { master: { delay: 0.5, delayTime: "1/4" }, bed: { lowCut: 2 } },
-    lanes: [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, fx: { drive: 0.3, delayTime: "???" } }],
+    fx: { master: [{ kind: "delay", amount: 0.5, time: "1/4", when: "bars", from: 3, to: 2 }], bed: { lowCut: 0.5 } },
+    lanes: [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, fx: [{ kind: "drive", amount: 0.3 }] }],
   });
-  assert.equal(s1.fx.master.delay, 0.5);
-  assert.equal(s1.fx.master.delayTime, "1/4");
-  assert.equal(s1.fx.master.reverb, 0.15);
-  assert.equal(s1.fx.bed.lowCut, 1);
-  assert.equal(s1.lanes![0].fx!.drive, 0.3);
-  assert.equal(s1.lanes![0].fx!.delayTime, "1/8d");
+  assert.equal(s1.fx.master[0].kind, "delay");
+  assert.equal(s1.fx.master[0].time, "1/4");
+  assert.equal(s1.fx.master[0].to, 3); // 終わりは始まりより前にならない
+  assert.equal(s1.fx.bed[0].kind, "lowCut");
+  assert.equal(s1.lanes![0].fx![0].amount, 0.3);
   assert.ok(laneIsCustom(s1.lanes![0]));
 });
 

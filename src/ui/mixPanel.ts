@@ -9,14 +9,13 @@ import {
   rerollLanes,
   seedSnapshot,
   syncLanes,
-  type ApplyFx,
+  type ReverbFn,
   type CollageResult,
   type RenderOpts,
   type RerollPart,
   type SeedSnapshot,
 } from "../mix/collageSong";
 import type { Pcm } from "../mix/pcm";
-import { NO_FX, fxIsOff, highCutHz, lowCutHz, reverbSeconds, reverbToneHz, type DelayTime, type FxSettings } from "../mix/fx";
 import { repeatPcm } from "../mix/loopFold";
 import { STEPS_PER_BEAT, holdFraction } from "../mix/sequencer";
 import { musicSlotSteps } from "../mix/musicChop";
@@ -43,6 +42,7 @@ import {
 import type { Phrase } from "../phrase/types";
 import { randomSeed } from "../theory/rng";
 import { buildLaneView } from "./laneView";
+import { buildFxPanel } from "./fxPanel";
 
 export interface MixPanelDeps {
   /** 保存されているフレーズ（刻む曲の候補）。 */
@@ -54,8 +54,8 @@ export interface MixPanelDeps {
   audio: { ctx: AudioContext; out: AudioNode };
   /** フレーズを、指定のBPMで1周ぶんの波形に書き出す。 */
   render: (phrase: Phrase, bpm: number, opts: RenderOpts) => Promise<Pcm>;
-  /** 波形にエフェクトを掛ける（全体・層ごと・下地・伸ばし）。 */
-  fx: ApplyFx;
+  /** リバーブの響きだけを作る（エフェクトのリバーブに使う）。 */
+  reverb: ReverbFn;
 }
 
 export interface MixPanel {
@@ -139,8 +139,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     const id = result?.lanes[i]?.phraseId;
     if (!id) return;
     selectedId = selectedId === id ? null : id;
-    if (selectedId) fxTarget = `lane:${selectedId}`; // 層を選んだら、エフェクトもその層に
+    if (selectedId) fxPanel.selectLane(selectedId); // 層を選んだら、エフェクトもその層に
     refresh();
+  }, (i, step) => {
+    // 断片を選んでいる最中なら、タップした断片を選ぶ・外す
+    const id = result?.lanes[i]?.phraseId;
+    if (id) fxPanel.pickHit(id, step);
   });
 
   // --- 材料（刻む曲） ---
@@ -348,130 +352,18 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       : `スウィング – 16分の裏を後ろにずらして、はねさせる（${pct(song.params.swing)}。100%で3連符のはね。下地のドラムにも掛かる）`,
   );
 
-  // --- エフェクト（掛ける所を選んで、そこにだけ掛ける） ---
-  /** いまエフェクトを変えている所：全体・下地・伸ばし・層（曲のid）。 */
-  let fxTarget = "master";
-  const fxTargetSelect = document.createElement("select");
-  fxTargetSelect.className = "quantize-select mix-fx-target";
-  fxTargetSelect.addEventListener("change", () => {
-    fxTarget = fxTargetSelect.value;
-    refresh();
+  // --- エフェクト（掛ける所を選んで、好きな順番で並べる） ---
+  const fxPanel = buildFxPanel({
+    getSong: () => song,
+    getPhrases: deps.getPhrases,
+    drumId: () => pickDrum(song, deps.getPhrases()),
+    onChange: () => {
+      touch();
+      refresh();
+      scheduleRebuild();
+    },
+    onView: () => refresh(),
   });
-  let fxTargetSignature = "";
-  function renderFxTargets(): void {
-    const phrases = deps.getPhrases();
-    const drum = pickDrum(song, phrases);
-    const drumName = drum ? phrases.find((p) => p.id === drum)?.name : undefined;
-    const options: [string, string][] = [["master", "全体（曲のぜんぶ）"]];
-    for (const lane of song.lanes ?? []) {
-      const name = phrases.find((p) => p.id === lane.phraseId)?.name ?? "層";
-      options.push([`lane:${lane.phraseId}`, `層：${name}${fxIsOff(lane.fx) ? "" : " ＊"}`]);
-    }
-    if (drumName) options.push(["bed", `下地：${drumName}のドラム${fxIsOff(song.fx.bed) ? "" : " ＊"}`]);
-    options.push(["pad", `伸ばし${fxIsOff(song.fx.pad) ? "" : " ＊"}`]);
-    if (!options.some(([v]) => v === fxTarget)) fxTarget = "master";
-    const signature = JSON.stringify(options);
-    if (signature !== fxTargetSignature) {
-      fxTargetSignature = signature;
-      fxTargetSelect.innerHTML = "";
-      for (const [value, label] of options) {
-        const opt = document.createElement("option");
-        opt.value = value;
-        opt.textContent = label;
-        fxTargetSelect.appendChild(opt);
-      }
-    }
-    fxTargetSelect.value = fxTarget;
-  }
-  /** いま選んでいる所のエフェクト。 */
-  function targetFx(): FxSettings {
-    if (fxTarget === "master" || fxTarget === "bed" || fxTarget === "pad") return song.fx[fxTarget];
-    return song.lanes?.find((l) => `lane:${l.phraseId}` === fxTarget)?.fx ?? NO_FX;
-  }
-  function setTargetFx(fx: FxSettings): void {
-    if (fxTarget === "master" || fxTarget === "bed" || fxTarget === "pad") {
-      song.fx = { ...song.fx, [fxTarget]: fx };
-    } else if (song.lanes) {
-      const same = JSON.stringify(fx) === JSON.stringify(NO_FX);
-      song.lanes = song.lanes.map((l) => {
-        if (`lane:${l.phraseId}` !== fxTarget) return l;
-        const { fx: _old, ...rest } = l;
-        return same ? rest : { ...rest, fx };
-      });
-    }
-    touch();
-    refresh();
-    scheduleRebuild();
-  }
-  const fxRefreshers: (() => void)[] = [];
-  type FxNumberKey = Exclude<keyof FxSettings, "delayTime">;
-  function fxSlider(key: FxNumberKey, label: string, hint: (v: number) => string): HTMLElement {
-    const row = document.createElement("div");
-    row.className = "mix-slider-row";
-    const name = document.createElement("span");
-    name.className = "mix-slider-name";
-    name.textContent = label;
-    const input = document.createElement("input");
-    input.type = "range";
-    input.className = "layer-volume";
-    input.min = "0";
-    input.max = "1";
-    input.step = "0.05";
-    const value = document.createElement("span");
-    value.className = "mix-slider-value";
-    const note = document.createElement("div");
-    note.className = "mix-info mix-slider-hint";
-    const show = (v: number): void => {
-      value.textContent = pct(v);
-      note.textContent = hint(v);
-    };
-    fxRefreshers.push(() => {
-      const v = targetFx()[key];
-      input.value = String(v);
-      show(v);
-    });
-    input.addEventListener("input", () => {
-      const v = Number(input.value);
-      show(v);
-      setTargetFx({ ...targetFx(), [key]: v });
-    });
-    input.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
-    row.append(name, input, value, note);
-    return row;
-  }
-  const delayTimeSelect = document.createElement("select");
-  delayTimeSelect.className = "quantize-select";
-  for (const [value, label] of [
-    ["1/16", "16分"],
-    ["1/8", "8分"],
-    ["1/8d", "付点8分"],
-    ["1/4", "4分（1拍）"],
-  ] as const) {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = label;
-    delayTimeSelect.appendChild(opt);
-  }
-  delayTimeSelect.addEventListener("change", () => setTargetFx({ ...targetFx(), delayTime: delayTimeSelect.value as DelayTime }));
-  fxRefreshers.push(() => {
-    delayTimeSelect.value = targetFx().delayTime;
-  });
-  const off = (v: number): boolean => v < 0.01;
-  const fxRows = [
-    fxSlider("reverb", "リバーブ", (v) => (off(v) ? "リバーブ – 掛けない" : `リバーブ – 響きの量 ${pct(v)}`)),
-    fxSlider("reverbSize", "響きの長さ", (v) => `響きの長さ – ${reverbSeconds(v).toFixed(1)}秒（短いと部屋、長いとホール）`),
-    fxSlider("reverbTone", "響きの明るさ", (v) => `響きの明るさ – ${Math.round(reverbToneHz(v))}Hzより上を削る（小さいほどこもった響き）`),
-    fxSlider("delay", "ディレイ", (v) => (off(v) ? "ディレイ – 掛けない" : `ディレイ – やまびこの量 ${pct(v)}`)),
-    fieldRow("間隔", delayTimeSelect),
-    fxSlider("delayFeedback", "くり返し", (v) => `くり返し – ${pct(v)}（大きいほど、やまびこが長く残る）`),
-    fxSlider("lowCut", "低音を削る", (v) => (off(v) ? "低音を削る – 削らない" : `低音を削る – ${Math.round(lowCutHz(v))}Hzより下を削る（軽くなる）`)),
-    fxSlider("highCut", "高音を削る", (v) => (off(v) ? "高音を削る – 削らない" : `高音を削る – ${Math.round(highCutHz(v))}Hzより上を削る（こもる）`)),
-    fxSlider("drive", "歪み", (v) => (off(v) ? "歪み – 掛けない" : `歪み – ${pct(v)}（ザラっとさせる）`)),
-    fxSlider("crush", "音質下げ", (v) => (off(v) ? "音質下げ – 掛けない" : `音質下げ – ${pct(v)}（ローファイ。ビット数と細かさを下げる）`)),
-  ];
-  const fxResetButton = button("この所のエフェクトを消す", () => setTargetFx({ ...NO_FX }), "preset-button");
-  const fxTargetHint = document.createElement("span");
-  fxTargetHint.className = "mix-info mix-slider-hint";
   const lengthHint = document.createElement("span");
   lengthHint.className = "mix-info mix-slider-hint";
   function fieldRow(label: string, ...children: HTMLElement[]): HTMLElement {
@@ -787,10 +679,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     ),
     rule(
       "エフェクト",
-      "掛ける所を選んで、そこにだけ掛ける。全体は最後に曲のぜんぶへ。層・下地・伸ばしは、それぞれの音にだけ（＊は掛けている所）",
-      fieldRow("掛ける所", fxTargetSelect, fxTargetHint),
-      ...fxRows,
-      fxResetButton,
+      "掛ける所を選んで、エフェクトを好きな順番で好きなだけ並べる（上から順に掛かる）。1つずつ「いつ掛けるか」も選べる。＊は掛けている所",
+      fxPanel.el,
     ),
     rule("つなぎ", "刻んだ音を、曲としてまとめる仕上げ。区切りを聞かせるSFX、和音でつなぐ伸ばし、キックでまとめるポンピング", sfxRow, padRow, pumpRow),
     rule("形（全体）", "曲全体の雰囲気。動かすと、同じ刻みのまま形だけ変わる。層ごとのずらしは、左の「層」で", busyRow, breaksRow, onBeatRow, sizeRow, holdRow, crispRow, motionRow, panRow, fxRow, swingRow),
@@ -841,7 +731,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     }
     setNotice("曲を作っています…");
     try {
-      const out = await buildCollage(song, deps.getPhrases(), render, sampleRate, deps.fx);
+      const out = await buildCollage(song, deps.getPhrases(), render, sampleRate, deps.reverb);
       if (token !== buildToken) return;
       result = out;
       builtStamps = stampsOf(song.lanes ?? []);
@@ -976,6 +866,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
               };
             }),
             bed: result.bed,
+            highlight: (() => {
+              const h = fxPanel.highlight();
+              if (!h) return null;
+              const laneIndex = h.lanePhraseId ? result.lanes.findIndex((l) => l.phraseId === h.lanePhraseId) : undefined;
+              return { laneIndex, steps: h.steps, bars: h.bars, picking: h.picking };
+            })(),
             totalSteps: result.totalSteps,
             stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT,
           }
@@ -1007,17 +903,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     for (const r of [...musicOnlyRows, laneCrispRow, lanePanRow, laneFxRow]) r.hidden = !music;
     for (const r of [...materialOnlyRows, laneHoldRow]) r.hidden = music;
     drySelect.value = song.params.dry ? "dry" : "wet";
-    renderFxTargets();
-    fxTargetHint.textContent =
-      fxTarget === "master"
-        ? "曲のぜんぶに、最後に掛ける"
-        : fxTarget === "bed"
-          ? "下地のドラムにだけ掛ける"
-          : fxTarget === "pad"
-            ? "伸ばしにだけ掛ける"
-            : "この層（曲）の刻んだ音にだけ掛ける。全体のエフェクトは、その上に重なる";
-    fxResetButton.disabled = fxIsOff(targetFx());
-    for (const f of fxRefreshers) f();
+    fxPanel.refresh();
     const hits = result ? result.lanes.reduce((a, l) => a + l.events.length, 0) : 0;
     status.textContent = [
       `層 ${result?.lanes.length ?? 0}`,
