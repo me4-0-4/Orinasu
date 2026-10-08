@@ -26,9 +26,7 @@ import {
   MAX_LANE_VOLUME,
   MIN_BPM,
   createEmptySong,
-  fitLength,
   formatDuration,
-  minLengthBars,
   effectiveParams,
   laneIsCustom,
   setLaneShape,
@@ -175,7 +173,6 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       return;
     }
     song.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, v));
-    song.lengthBars = fitLength(song); // 30秒より短くならないように
     bpmInput.value = String(song.bpm);
     bpmTouched = true;
     touch();
@@ -771,7 +768,6 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       // 最初に刻むときだけ、いちばん上の層の曲のテンポから始める（このあとは曲のBPMだけで決まる）
       const top = sources.find((p) => p.id === song.lanes![0].phraseId) ?? sources[0];
       song.bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(top.bpm)));
-      song.lengthBars = fitLength(song);
     }
     // 下地をまだ決めていなければ、ドラムのある最初の材料にする（あとで選び直せる）
     if (song.drumId === undefined) song.drumId = pickDrum(song, deps.getPhrases());
@@ -879,14 +875,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     );
     if (document.activeElement !== nameInput) nameInput.value = song.name;
     if (document.activeElement !== bpmInput) bpmInput.value = String(song.bpm);
-    const minBars = minLengthBars(song);
     for (const opt of Array.from(lengthSelect.options)) {
       const n = Number(opt.value);
-      opt.disabled = n < minBars;
       opt.textContent = `${n}小節（${formatDuration(songSeconds({ ...song, lengthBars: n }))}）`;
     }
     lengthSelect.value = String(song.lengthBars);
-    lengthHint.textContent = "30秒より短くなる長さは選べない（テンポで変わる）";
+    lengthHint.textContent = "かっこの中は、いまのテンポでの長さ";
     turnsSelect.value = song.params.turns;
     turnsHint.textContent = turnsHints[song.params.turns];
     turnsRow.hidden = song.params.style !== "music";

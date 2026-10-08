@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, laneIsCustom, fitLength, formatDuration, minLengthBars, migrateSong, songSeconds, type Lane } from "./types.ts";
+import { createEmptySong, laneIsCustom, formatDuration, migrateSong, songSeconds, type Lane } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
@@ -111,14 +111,10 @@ test("エフェクト：全体の初期はリバーブ15%。前の「仕上げ�
   assert.ok(laneIsCustom(s1.lanes![0]));
 });
 
-test("曲の長さは30秒より短くならない：テンポに合わせて、選べるいちばん短い長さが変わる", () => {
-  assert.equal(createEmptySong().lengthBars, 16); // 120BPMで16小節＝32秒
-  assert.equal(minLengthBars({ bpm: 120, beatsPerBar: 4 }), 16);
-  assert.equal(minLengthBars({ bpm: 60, beatsPerBar: 4 }), 8);
-  assert.equal(minLengthBars({ bpm: 200, beatsPerBar: 4 }), 32);
-  assert.equal(fitLength({ lengthBars: 8, bpm: 180, beatsPerBar: 4 }), 32);
-  assert.equal(fitLength({ lengthBars: 64, bpm: 180, beatsPerBar: 4 }), 64);
-  assert.equal(migrateSong({ bpm: 200, lengthBars: 8 }).lengthBars, 32);
+test("曲の長さ：初期は16小節。8〜64小節はテンポに関係なく選べる（短くても伸ばさない）", () => {
+  assert.equal(createEmptySong().lengthBars, 16);
+  assert.equal(migrateSong({ bpm: 200, lengthBars: 8 }).lengthBars, 8);
+  assert.equal(migrateSong({ bpm: 200, lengthBars: 7 }).lengthBars, 16);
 });
 
 test("下地・スウィング・層の組み方を引き継ぐ。決めていない下地は undefined のまま", () => {

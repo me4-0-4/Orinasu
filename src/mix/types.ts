@@ -99,8 +99,6 @@ export const SONG_ID = "song";
 export const MIN_BPM = 40;
 export const MAX_BPM = 240;
 export const LENGTH_OPTIONS = [8, 16, 32, 64];
-/** 刻んだ曲の、いちばん短い長さ（秒）。これより短くなる長さは選べない。 */
-export const MIN_SONG_SECONDS = 30;
 export const DEFAULT_BPM = 120;
 
 export const DEFAULT_PARAMS: SongParams = {
@@ -171,19 +169,6 @@ export function songSeconds(song: Pick<Song, "lengthBars" | "beatsPerBar" | "bpm
   return (song.lengthBars * song.beatsPerBar * 60) / song.bpm;
 }
 
-/** そのテンポで、MIN_SONG_SECONDS 以上になる、いちばん短い長さ（小節）。どれも足りなければ、いちばん長いもの。 */
-export function minLengthBars(song: Pick<Song, "beatsPerBar" | "bpm">): number {
-  return (
-    LENGTH_OPTIONS.find((n) => songSeconds({ ...song, lengthBars: n }) >= MIN_SONG_SECONDS - 1e-9) ??
-    LENGTH_OPTIONS[LENGTH_OPTIONS.length - 1]
-  );
-}
-
-/** 長さが短すぎれば、足りる長さまで伸ばす。 */
-export function fitLength(song: Pick<Song, "lengthBars" | "beatsPerBar" | "bpm">): number {
-  return Math.max(song.lengthBars, minLengthBars(song));
-}
-
 /** 秒を「1:05」の形にする。 */
 export function formatDuration(seconds: number): string {
   const total = Math.round(seconds);
@@ -208,7 +193,6 @@ export function migrateSong(raw: unknown): Song {
   if (isNum(r.bpm) && r.bpm >= MIN_BPM && r.bpm <= MAX_BPM) song.bpm = Math.round(r.bpm);
   if (isNum(r.beatsPerBar) && r.beatsPerBar >= 1 && r.beatsPerBar <= 12) song.beatsPerBar = Math.round(r.beatsPerBar);
   if (isNum(r.lengthBars) && LENGTH_OPTIONS.includes(r.lengthBars)) song.lengthBars = r.lengthBars;
-  song.lengthBars = fitLength(song);
   if (typeof r.drumId === "string" || r.drumId === null) song.drumId = r.drumId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(
