@@ -11,6 +11,7 @@ import {
   type TakeFx,
   type TrackFx,
 } from "./fx.ts";
+import { sanitizeGroups, type HitGroup } from "./groups.ts";
 
 /**
  * 層：刻む曲（フレーズ）1つが、1本の層。曲はまるごと1本の波形として扱い、中身（ドラム・ベースなど）には分けない。
@@ -102,6 +103,8 @@ export interface Song {
   fx: SongFx;
   /** 層。まだ刻んでいなければ無い。 */
   lanes?: Lane[];
+  /** グループ：選んだ断片のまとまり（まとめて刻み方・ミュート・FXを変える）。 */
+  groups?: HitGroup[];
   params: SongParams;
   updatedAt: number;
 }
@@ -231,6 +234,8 @@ export function migrateSong(raw: unknown): Song {
     }
     if (p.turns === "mix" || p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
   }
+  const groups = sanitizeGroups(r.groups);
+  if (groups.length > 0) song.groups = groups;
   if (typeof r.fx === "object" && r.fx !== null) {
     const fx = r.fx as Record<string, unknown>;
     const legacy: LegacyContext = { stepsPerBar: song.beatsPerBar * 4, bars: song.lengthBars };

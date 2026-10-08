@@ -5,6 +5,7 @@ import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/type
 import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
+import { newGroup } from "./groups.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
 
@@ -210,4 +211,23 @@ test("エフェクト：FXのあるトラック（層・下地・マスター）
   delete song.lanes[0].takes;
   await buildCollage(song, phrases, steadyRender, 1000, reverb);
   assert.deepEqual(called, []);
+});
+
+test("グループ：ミュートしたグループの断片は鳴らない。グループのFXは、そのグループの断片にだけ掛かる", async () => {
+  const phrases = [phrase("a", 100), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"] };
+  song.params = { ...song.params, pad: 0, sfx: 0 };
+  song.fx = { master: { chain: [], envelopes: [] }, bed: { chain: [], envelopes: [] }, pad: { chain: [], envelopes: [] } };
+  song.lanes = syncLanes(song, seq);
+  const first = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  const a = first.lanes[0].events.slice(0, 2).map((e) => ({ phraseId: "a", step: e.step }));
+  const b = first.lanes[1].events.slice(0, 1).map((e) => ({ phraseId: "b", step: e.step }));
+  song.groups = [{ ...newGroup([...a, ...b], []), muted: true }];
+  const muted = (await buildCollage(song, phrases, steadyRender, 1000))!;
+  assert.deepEqual(muted.lanes[0].events.map((e) => e.step), first.lanes[0].events.map((e) => e.step)); // 表示には残る
+  // グループFX：リバーブを呼ぶのは、グループの断片があるトラックごとに1回
+  song.groups = [{ ...newGroup([...a, ...b], []), fx: [newPlugin("reverb", { amount: 1 })] }];
+  let calls = 0;
+  await buildCollage(song, phrases, steadyRender, 1000, async (pcm) => (calls++, pcm));
+  assert.equal(calls, 2);
 });

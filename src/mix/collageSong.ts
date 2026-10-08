@@ -2,7 +2,8 @@ import { createRng } from "../theory/rng.ts";
 import { keyShortName } from "../theory/key.ts";
 import { totalBeats, type Phrase } from "../phrase/types.ts";
 import { layBed, renderCollage, type CollageLane } from "./collage.ts";
-import { applyTrack, trackIsOff, type FxEnv, type TrackFx } from "./fx.ts";
+import { applyTrack, trackIsOff, type FxEnv, type FxPlugin, type TrackFx } from "./fx.ts";
+import { applyGroups, groupOf } from "./groups.ts";
 import { addSfx, fourOnFloor, kickSteps, pump, renderPad, type Grid, type PadSource } from "./glue.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
@@ -198,7 +199,9 @@ export async function buildCollage(
       const key = phraseKey(phrase);
       const keyShift = key && baseKey ? transposeSemitones(key, baseKey) : 0;
       const gain = lane.muted ? 0 : 0.9 * (lane.volume ?? 1);
-      const collage: CollageLane = { pcm, slices, events, keyShift, gain, holdFraction: holdFraction(params.hold, song.params.style) };
+      // グループの編集（音程・パン・長さ・強さ・逆再生・ミュート）を当てはめる
+      const grouped = applyGroups(lane.phraseId, events, song.groups);
+      const collage: CollageLane = { pcm, slices, events: grouped.play, keyShift, gain, holdFraction: holdFraction(params.hold, song.params.style) };
       const stepsPerBarSrc = song.beatsPerBar * STEPS_PER_BEAT;
       const pad: PadSource | null = lane.muted
         ? null
@@ -208,7 +211,7 @@ export async function buildCollage(
         name: phrase.name,
         locked: !!lane.locked,
         muted: !!lane.muted,
-        events,
+        events: grouped.view,
         sliceCount: slices.length,
       };
       return { collage, view, pad, fx: lane.muted ? undefined : lane.fx, takes: lane.muted || !reverb ? [] : (lane.takes ?? []) };
@@ -218,22 +221,43 @@ export async function buildCollage(
   const grid: Grid = { totalSteps, stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT, stepSamples, sampleRate, swing };
   const collageOpts = { totalSteps, stepSamples, sampleRate, swing };
   const fxEnv: FxEnv | null = reverb ? { stepSamples, sampleRate, bpm: song.bpm, reverb } : null;
-  // エフェクトの無い層はまとめて作り、エフェクトのある層は1本ずつ作って、その層のエフェクトを掛けてから重ねる
   // エフェクトの無い層はまとめて作る。エフェクトのある層は1本ずつ：テイクFXの断片は1つずつ作ってそのFXを掛け、
   // 残りの断片と合わせてから、その層のトラックFXを掛ける（REAPER と同じ、テイクFX → トラックFX の順）
-  const plain = built.filter((b) => !fxOn(b.fx) && !b.takes.some((t) => !trackIsOff({ chain: t.chain, envelopes: [] })));
+  // グループのFX：グループの断片を集めて（トラックごとに）、テイクFXのあと、トラックFXの前に掛ける
+  const chainOn = (chain: FxPlugin[] | undefined): chain is FxPlugin[] => !!chain && fxOn({ chain, envelopes: [] });
+  const groupFxOf = (phraseId: string, step: number): { id: string; chain: FxPlugin[] } | null => {
+    const g = groupOf(song.groups, { phraseId, step });
+    return g && chainOn(g.fx) ? { id: g.id, chain: g.fx } : null;
+  };
+  const plain = built.filter(
+    (b) =>
+      !fxOn(b.fx) &&
+      !b.takes.some((t) => chainOn(t.chain)) &&
+      !b.collage.events.some((e) => groupFxOf(b.view.phraseId, e.step)),
+  );
   const mixed = renderCollage(plain.map((b) => b.collage), collageOpts);
   for (const b of built) {
     if (plain.includes(b)) continue;
-    const takes = new Map(b.takes.filter((t) => !trackIsOff({ chain: t.chain, envelopes: [] })).map((t) => [t.step, t.chain]));
-    const rest = b.collage.events.filter((e) => !takes.has(e.step));
-    const lanePcm = renderCollage([{ ...b.collage, events: rest }], collageOpts);
+    const takes = new Map(b.takes.filter((t) => chainOn(t.chain)).map((t) => [t.step, t.chain]));
+    const special = (e: LaneEvent): boolean => takes.has(e.step) || !!groupFxOf(b.view.phraseId, e.step);
+    const lanePcm = renderCollage([{ ...b.collage, events: b.collage.events.filter((e) => !special(e)) }], collageOpts);
+    // テイクFX・グループFXのある断片：断片ごとにテイクFXを掛け、グループごとに集めてグループFXを掛ける
+    const groupBus = new Map<string, { chain: FxPlugin[]; pcm: Pcm }>();
     for (const ev of b.collage.events) {
-      const chain = takes.get(ev.step);
-      if (!chain) continue;
-      const one = renderCollage([{ ...b.collage, events: [ev] }], collageOpts);
-      mixInto(lanePcm, await applyTrack(one, { chain, envelopes: [] }, fxEnv!));
+      if (!special(ev)) continue;
+      let one = renderCollage([{ ...b.collage, events: [ev] }], collageOpts);
+      const take = takes.get(ev.step);
+      if (take) one = await applyTrack(one, { chain: take, envelopes: [] }, fxEnv!);
+      const g = groupFxOf(b.view.phraseId, ev.step);
+      if (!g) {
+        mixInto(lanePcm, one);
+        continue;
+      }
+      const bus = groupBus.get(g.id) ?? { chain: g.chain, pcm: { l: new Float32Array(lanePcm.l.length), r: new Float32Array(lanePcm.r.length) } };
+      mixInto(bus.pcm, one);
+      groupBus.set(g.id, bus);
     }
+    for (const bus of groupBus.values()) mixInto(lanePcm, await applyTrack(bus.pcm, { chain: bus.chain, envelopes: [] }, fxEnv!));
     mixInto(mixed, fxOn(b.fx) ? await applyTrack(lanePcm, b.fx, fxEnv!) : lanePcm);
   }
   // 仕上げ（つなぎ）の偶然は、いちばん上の層の種から（刻み直すと変わり、形のつまみでは変わらない）

@@ -43,6 +43,7 @@ import { ENV_H, HEAD_H, ROW_H, buildLaneView, type Row } from "./laneView";
 import { buildFxWindow } from "./fxWindow";
 import { ENV_PARAM_LABELS, FX_LABELS, FX_SHORT, emptyTrack, trackHasFx, type EnvPoint, type TrackFx } from "../mix/fx";
 import { button, choice, el, knob, note, section, type Control } from "./mixWidgets";
+import { assignToGroup, groupOf, newGroup, type HitGroup, type HitRef } from "../mix/groups";
 
 export interface MixPanelDeps {
   /** 保存されているフレーズ（刻む曲の候補）。 */
@@ -72,7 +73,14 @@ export interface MixPanel {
 }
 
 /** いま右のインスペクタに出しているもの：曲・トラック・断片。 */
-type Selection = { type: "song" } | { type: "track"; key: string } | { type: "hit"; track: string; step: number };
+/** 選んだ断片（track はトラックの鍵 lane:<曲のid>）。 */
+type Hit = { track: string; step: number };
+type Selection =
+  | { type: "song" }
+  | { type: "track"; key: string }
+  | { type: "hit"; track: string; step: number }
+  | { type: "hits"; hits: Hit[] }
+  | { type: "group"; id: string };
 
 /**
  * 刻むタブ（DAW 風）。
@@ -163,13 +171,22 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   const fxWindow = buildFxWindow({
-    get: (t) => (t.type === "track" ? trackFx(t.key) : takeOf(t.track, t.step)),
+    get: (t) =>
+      t.type === "track" ? trackFx(t.key) : t.type === "take" ? takeOf(t.track, t.step) : { chain: groupById(t.id)?.fx ?? [], envelopes: [] },
     set: (t, fx) => {
       if (t.type === "track") setTrackFx(t.key, fx);
-      else setTakeFx(t.track, t.step, fx);
+      else if (t.type === "take") setTakeFx(t.track, t.step, fx);
+      else {
+        song.groups = song.groups?.map((g) => (g.id === t.id ? { ...g, fx: fx.chain } : g));
+      }
       changed();
     },
-    title: (t) => (t.type === "track" ? `FX：${trackName(t.key)}` : `テイクFX：${trackName(t.track)} ${posName(t.step)}`),
+    title: (t) =>
+      t.type === "track"
+        ? `FX：${trackName(t.key)}`
+        : t.type === "take"
+          ? `テイクFX：${trackName(t.track)} ${posName(t.step)}`
+          : `グループFX：${groupById(t.id)?.name ?? ""}`,
     totalSteps: totalStepsNow,
     onClose: () => refresh(),
   });
@@ -258,14 +275,26 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   // ------------------------------------------------------------------ アレンジ画面（トラックヘッダー＋線）
 
   const laneView = buildLaneView({
-    onHit: (track, step) => {
+    onHit: (track, step, add) => {
       if (step === null) {
+        if (add || multiMode) return; // 足して選んでいる最中は、空いた所のタップで選び直さない
         sel = sel.type === "track" && sel.key === track ? { type: "song" } : { type: "track", key: track };
+      } else if (add || multiMode) {
+        // 足して選ぶ（もう選んでいれば外す）。グループを開いていたら、そのグループのメンバーを選び直す
+        if (sel.type === "group") regrouping = sel.id;
+        const cur = selectedHits();
+        const has = cur.some((h) => h.track === track && h.step === step);
+        setHits(has ? cur.filter((h) => !(h.track === track && h.step === step)) : [...cur, { track, step }]);
       } else {
         sel = sel.type === "hit" && sel.track === track && sel.step === step ? { type: "track", key: track } : { type: "hit", track, step };
         // テイクFXの窓を開いているなら、選んだ断片のテイクFXに切り替える
         if (sel.type === "hit" && fxWindow.target()?.type === "take") fxWindow.open({ type: "take", track, step });
       }
+      refresh();
+    },
+    onRect: (hits, add) => {
+      if (sel.type === "group" && (add || multiMode)) regrouping = sel.id;
+      setHits(add || multiMode ? [...selectedHits(), ...hits] : hits);
       refresh();
     },
     onEnvEdit: (id, points: EnvPoint[]) => {
@@ -279,6 +308,37 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     },
   });
   const allTrackKeys = (): string[] => [...(song.lanes ?? []).map(laneKey), "bed", "pad", "master"];
+
+  // --- 断片の選び方（いくつでも）とグループ ---
+  /** 足して選ぶモード（タッチでシフトの代わり）。 */
+  let multiMode = false;
+  /** グループのメンバーを選び直している最中なら、そのグループのid。 */
+  let regrouping: string | null = null;
+  const toRef = (h: Hit): HitRef => ({ phraseId: h.track.slice(5), step: h.step });
+  const toHit = (r: HitRef): Hit => ({ track: `lane:${r.phraseId}`, step: r.step });
+  function selectedHits(): Hit[] {
+    if (sel.type === "hit") return [{ track: sel.track, step: sel.step }];
+    if (sel.type === "hits") return sel.hits;
+    if (sel.type === "group") return groupById(sel.id)?.members.map(toHit) ?? [];
+    return [];
+  }
+  function setHits(hits: Hit[]): void {
+    const seen = new Map(hits.map((h) => [`${h.track}@${h.step}`, h]));
+    const list = [...seen.values()].sort((a, b) => a.step - b.step);
+    sel = list.length === 0 ? { type: "song" } : list.length === 1 && !regrouping ? { type: "hit", ...list[0] } : { type: "hits", hits: list };
+  }
+  const groupById = (id: string): HitGroup | undefined => song.groups?.find((g) => g.id === id);
+  function updateGroup(id: string, fn: (g: HitGroup) => HitGroup): void {
+    song.groups = song.groups?.map((g) => (g.id === id ? fn(g) : g));
+    changed();
+  }
+  function makeGroup(hits: Hit[]): void {
+    const g = newGroup(hits.map(toRef), song.groups ?? []);
+    song.groups = assignToGroup(song.groups ?? [], g, g.members);
+    regrouping = null;
+    sel = { type: "group", id: g.id };
+    changed();
+  }
 
   const headerCol = el("div", "arr-headers");
   const arrange = el("div", "mix-arrange");
@@ -424,11 +484,19 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   } catch {
     showHints = false;
   }
-  insHead.append(crumbs, hintToggle);
+  const multiToggle = button("複数選択", () => {
+    multiMode = !multiMode;
+    refresh();
+  }, "preset-button ins-hint-toggle", "オンのあいだ、断片をタップすると足して選ぶ（シフト＋クリックと同じ）");
+  const insTools = el("div", "preset-row");
+  insTools.append(multiToggle, hintToggle);
+  insHead.append(crumbs, insTools);
   const songPanel = el("div", "ins-panel");
   const trackPanel = el("div", "ins-panel");
   const hitPanel = el("div", "ins-panel");
-  inspector.append(insHead, songPanel, trackPanel, hitPanel);
+  const hitsPanel = el("div", "ins-panel");
+  const groupPanel = el("div", "ins-panel");
+  inspector.append(insHead, songPanel, trackPanel, hitPanel, hitsPanel, groupPanel);
 
   const controls: Control[] = [];
   const reg = <T extends Control>(c: T): T => {
@@ -438,6 +506,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const show = (c: Control | HTMLElement, visible: boolean): void => {
     ("el" in c ? c.el : c).hidden = !visible;
   };
+
+  // --- 曲：グループの一覧 ---
+  const groupList = el("div", "ins-group-list");
 
   // --- 曲：素材 ---
   const materialList = el("div", "mix-list");
@@ -659,6 +730,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     ),
     section("drums", "ドラムループ", drumChoice.el, bedKnob.el, pumpKnob.el),
     section("finish", "仕上げ", sfxKnob.el, padKnob.el, dryChoice.el, button("マスターのFXを開く", () => openTrackFx("master"), "preset-button")),
+    section("groups", "グループ", note("断片をいくつか選んで「グループにする」と、まとめて刻み方・ミュート・FXを変えられる"), groupList),
     section("info", "曲の情報", nameRow, keyInfo),
   );
 
@@ -798,7 +870,116 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }, "preset-button");
   const takeButtons = el("div", "preset-row");
   takeButtons.append(takeOpen, takeClear);
-  hitPanel.append(hitTitle, hitMeta, section("take", "テイクFX（この断片だけ）", note("トラックのFXより先に掛かる。位置で覚えるので、刻み直してこの位置に断片が無くなると掛からない"), takeList, takeButtons));
+  const hitGroupRow = el("div", "preset-row ins-group-row");
+  hitPanel.append(
+    hitTitle,
+    hitMeta,
+    hitGroupRow,
+    section("take", "テイクFX（この断片だけ）", note("トラックのFXより先に掛かる。位置で覚えるので、刻み直してこの位置に断片が無くなると掛からない"), takeList, takeButtons),
+  );
+
+  // --- 断片をいくつか選んだとき ---
+  const hitsTitle = el("div", "ins-title");
+  const hitsMeta = el("div", "ins-meta");
+  const hitsButtons = el("div", "preset-row");
+  hitsPanel.append(
+    hitsTitle,
+    hitsMeta,
+    hitsButtons,
+    note("線の上をドラッグして四角で囲む／シフト（Ctrl）を押しながらタップで、断片を足したり外したりできる。タッチなら右上の「複数選択」をオンに"),
+  );
+
+  // --- グループ ---
+  const groupNameInput = el("input", "mix-name");
+  groupNameInput.type = "text";
+  groupNameInput.addEventListener("input", () => {
+    if (sel.type !== "group") return;
+    const id = sel.id;
+    song.groups = song.groups?.map((g) => (g.id === id ? { ...g, name: groupNameInput.value } : g));
+    touch();
+  });
+  const groupNameRow = el("label", "ins-row ins-choice");
+  groupNameRow.append(el("span", "ins-label", "名前"), groupNameInput);
+  const groupMeta = el("div", "ins-meta");
+  const selGroup = (): HitGroup | undefined => (sel.type === "group" ? groupById(sel.id) : undefined);
+  const editGroup = (fn: (g: HitGroup) => HitGroup): void => {
+    if (sel.type === "group") updateGroup(sel.id, fn);
+  };
+  const groupMute = button("ミュート", () => editGroup((g) => ({ ...g, muted: !g.muted })), "preset-button", "このグループの断片を鳴らさない");
+  const groupReverse = button("逆再生", () => editGroup((g) => ({ ...g, reverse: !g.reverse })), "preset-button", "このグループの断片を逆から鳴らす");
+  const groupReselect = button("メンバーを選び直す", () => {
+    const g = selGroup();
+    if (!g) return;
+    regrouping = g.id;
+    sel = { type: "hits", hits: g.members.map(toHit) };
+    refresh();
+  }, "preset-button", "いまのメンバーを選んだ状態にする。足したり外したりして「このグループにする」");
+  const groupDelete = button("グループを解く", () => {
+    if (sel.type !== "group") return;
+    const id = sel.id;
+    song.groups = song.groups?.filter((g) => g.id !== id);
+    if (song.groups?.length === 0) delete song.groups;
+    sel = { type: "song" };
+    changed();
+  }, "preset-button", "グループをやめる（断片は刻んだときのままに戻る）");
+  const groupButtons = el("div", "preset-row");
+  groupButtons.append(groupMute, groupReverse);
+  const groupPitch = reg(
+    knob({
+      label: "音程",
+      min: -12,
+      max: 12,
+      step: 1,
+      get: () => selGroup()?.pitch ?? 0,
+      set: (v) => editGroup((g) => ({ ...g, pitch: Math.round(v) })),
+      format: (v) => (Math.round(v) === 0 ? "そのまま" : `${v > 0 ? "+" : ""}${Math.round(v)}半音`),
+      hint: () => "サンプラーと同じく、速さごと変わる（高いほど短く）",
+    }),
+  );
+  const groupPan = reg(
+    knob({
+      label: "パン",
+      min: -1,
+      max: 1,
+      step: 0.05,
+      get: () => selGroup()?.pan ?? 0,
+      set: (v) => editGroup((g) => ({ ...g, pan: v })),
+      format: (v) => (selGroup()?.pan === null ? "そのまま" : Math.abs(v) < 0.025 ? "中央" : `${v < 0 ? "左" : "右"}${Math.round(Math.abs(v) * 100)}`),
+    }),
+  );
+  const groupGate = reg(
+    knob({
+      label: "音の長さ",
+      min: 0.05,
+      max: 1,
+      step: 0.05,
+      get: () => selGroup()?.gate ?? 1,
+      set: (v) => editGroup((g) => ({ ...g, gate: v })),
+      format: (v) => (selGroup()?.gate === null ? "そのまま" : `${Math.round(v * 100)}%`),
+      hint: () => "次に打つ所までの何割を鳴らすか（短いほどブツ切れ）",
+    }),
+  );
+  const groupVel = reg(
+    knob({
+      label: "強さ",
+      max: 1.5,
+      get: () => selGroup()?.vel ?? 1,
+      set: (v) => editGroup((g) => ({ ...g, vel: v })),
+    }),
+  );
+  const groupResetShape = button("刻んだときのままに戻す", () => editGroup((g) => ({ ...g, pitch: 0, pan: null, gate: null, vel: 1, reverse: false })), "preset-button");
+  const groupFxList = el("div", "ins-fx-list");
+  const groupFxOpen = button("グループのFXを開く", () => sel.type === "group" && fxWindow.open({ type: "group", id: sel.id }), "preset-button");
+  groupPanel.append(
+    groupNameRow,
+    groupMeta,
+    groupButtons,
+    section("groupShape", "刻み方（このグループだけ）", groupPitch.el, groupPan.el, groupGate.el, groupVel.el, groupResetShape),
+    section("groupFx", "グループのFX", note("このグループの断片にだけ掛かる（テイクFXのあと、トラックのFXの前）"), groupFxList, groupFxOpen),
+    el("div", "preset-row", undefined),
+  );
+  const groupFoot = groupPanel.lastElementChild as HTMLElement;
+  groupFoot.append(groupReselect, groupDelete);
 
   // ------------------------------------------------------------------ 全体の並び
 
@@ -1009,6 +1190,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       const { track, step } = sel;
       if (!result?.lanes.some((l) => laneKey(l) === track && l.events.some((e) => e.step === step))) sel = { type: "song" };
     }
+    if (sel.type === "group" && !groupById(sel.id)) sel = { type: "song" };
+    if (sel.type !== "hits") regrouping = null;
 
     // トランスポート
     playButton.textContent = player.playing ? "■ 停止" : "▶ 再生";
@@ -1029,7 +1212,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
     // アレンジ画面
     const rows = trackRows(result);
-    laneView.setData(result ? { rows, totalSteps: result.totalSteps, stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT, selectedHit: sel.type === "hit" ? sel : null } : null);
+    const groupMarks = (song.groups ?? []).flatMap((g) => g.members.map((m) => ({ ...toHit(m), hue: g.hue, muted: g.muted })));
+    laneView.setData(
+      result ? { rows, totalSteps: result.totalSteps, stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT, selectedHits: selectedHits(), groupMarks } : null,
+    );
     arrangeBody.classList.toggle("empty", !result);
     headerCol.hidden = !result;
     if (result) renderHeaders(rows);
@@ -1040,6 +1226,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     songPanel.hidden = sel.type !== "song";
     trackPanel.hidden = sel.type !== "track";
     hitPanel.hidden = sel.type !== "hit";
+    hitsPanel.hidden = sel.type !== "hits";
+    groupPanel.hidden = sel.type !== "group";
+    multiToggle.classList.toggle("on", multiMode);
+    multiToggle.hidden = !result;
     crumbs.innerHTML = "";
     const crumb = (label: string, onClick?: () => void): void => {
       if (crumbs.childElementCount > 0) crumbs.appendChild(el("span", "ins-crumb-sep", "›"));
@@ -1058,6 +1248,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       });
       crumb(`断片 ${posName(sel.step)}`);
     }
+    if (sel.type === "hits") crumb(`断片 ${sel.hits.length}個`);
+    if (sel.type === "group") crumb(groupById(sel.id)?.name ?? "グループ");
 
     const music = song.params.style === "music";
     const playingLanes = (song.lanes ?? []).filter((l) => !l.muted).length;
@@ -1069,6 +1261,18 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       show(bedKnob, !!drum);
       if (document.activeElement !== nameInput) nameInput.value = song.name;
       keyInfo.textContent = result?.keyName ? `キー：${result.keyName}（いちばん上のトラックの調。ほかのトラックはこれに寄せる）` : "キー：まだ刻んでいない";
+      groupList.innerHTML = "";
+      if (!song.groups?.length) groupList.appendChild(el("div", "ins-meta", "まだグループがない"));
+      for (const g of song.groups ?? []) {
+        const b = button("", () => {
+          sel = { type: "group", id: g.id };
+          refresh();
+        }, "ins-group-item");
+        const dot = el("span", "ins-dot");
+        dot.style.background = `hsl(${g.hue} 85% 60%)`;
+        b.append(dot, el("span", undefined, `${g.name}（${g.members.length}個${g.muted ? "・ミュート" : ""}）`));
+        groupList.appendChild(b);
+      }
     } else if (sel.type === "track") {
       const key = sel.key;
       const lane = laneOfKey(key);
@@ -1091,9 +1295,63 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         for (const s of laneShape) show(s.c, s.mode === "both" || (s.mode === "music") === music);
       }
       renderFxSummary(key);
+    } else if (sel.type === "hits") {
+      const hits = sel.hits;
+      hitsTitle.textContent = `${hits.length}個の断片を選んでいる`;
+      const byTrack = new Map<string, number>();
+      for (const h of hits) byTrack.set(h.track, (byTrack.get(h.track) ?? 0) + 1);
+      hitsMeta.textContent = [...byTrack].map(([t, n]) => `${trackName(t)} ${n}個`).join("・");
+      hitsButtons.innerHTML = "";
+      const regroup = regrouping ? groupById(regrouping) : undefined;
+      if (regroup) {
+        hitsButtons.append(
+          button(`「${regroup.name}」をこの選択にする`, () => {
+            song.groups = assignToGroup(song.groups ?? [], regroup, hits.map(toRef));
+            regrouping = null;
+            sel = { type: "group", id: regroup.id };
+            changed();
+          }, "preset-button on"),
+        );
+      } else {
+        hitsButtons.append(button("グループにする", () => makeGroup(hits), "preset-button on", "選んだ断片を1つのまとまりにする（まとめて刻み方・ミュート・FXを変えられる）"));
+      }
+      hitsButtons.append(
+        button("選ぶのをやめる", () => {
+          regrouping = null;
+          sel = { type: "song" };
+          refresh();
+        }),
+      );
+    } else if (sel.type === "group") {
+      const g = groupById(sel.id)!;
+      if (document.activeElement !== groupNameInput) groupNameInput.value = g.name;
+      const tracks = new Set(g.members.map((m) => m.phraseId));
+      const alive = g.members.filter((m) => result?.lanes.some((l) => l.phraseId === m.phraseId && l.events.some((e) => e.step === m.step))).length;
+      groupMeta.textContent = `${g.members.length}個の断片（${tracks.size}トラック）${alive < g.members.length ? `・うち${g.members.length - alive}個は、刻み直してその位置に断片が無い` : ""}`;
+      groupMute.textContent = g.muted ? "ミュート中" : "ミュート";
+      groupMute.classList.toggle("on", g.muted);
+      groupReverse.textContent = g.reverse ? "逆再生中" : "逆再生";
+      groupReverse.classList.toggle("on", g.reverse);
+      groupResetShape.disabled = g.pitch === 0 && g.pan === null && g.gate === null && g.vel === 1 && !g.reverse;
+      groupFxList.innerHTML = "";
+      if (g.fx.length === 0) groupFxList.appendChild(el("div", "ins-meta", "プラグインなし"));
+      g.fx.forEach((p, i) => groupFxList.appendChild(el("div", "ins-fx-item" + (p.bypass ? " bypassed" : ""), `${i + 1}. ${FX_LABELS[p.kind]}`)));
     } else {
       const { track, step } = sel;
       const ev = result?.lanes.find((l) => laneKey(l) === track)?.events.find((e) => e.step === step);
+      const g = groupOf(song.groups, toRef({ track, step }));
+      hitGroupRow.innerHTML = "";
+      if (g) {
+        hitGroupRow.append(
+          el("span", "ins-meta", `グループ：${g.name}`),
+          button("グループを開く", () => {
+            sel = { type: "group", id: g.id };
+            refresh();
+          }),
+        );
+      } else {
+        hitGroupRow.append(button("グループにする", () => makeGroup([{ track, step }]), "preset-button", "この断片だけのグループを作る（あとでメンバーを足せる）"));
+      }
       hitTitle.textContent = `断片：${trackName(track)}`;
       hitMeta.textContent = ev
         ? `位置 ${posName(step)}・長さ ${ev.len}／16・${ev.pitch === 0 ? "元の高さ" : `${ev.pitch > 0 ? "+" : ""}${ev.pitch}半音`}・断片 #${ev.slice + 1}`

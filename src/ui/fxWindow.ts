@@ -15,7 +15,10 @@ import {
 } from "../mix/fx";
 
 /** FXチェーンの窓で開いているもの：トラック（エンベロープつき）か、断片1つ（テイクFX）。 */
-export type FxTarget = { type: "track"; key: string } | { type: "take"; track: string; step: number };
+export type FxTarget =
+  | { type: "track"; key: string }
+  | { type: "take"; track: string; step: number }
+  | { type: "group"; id: string };
 
 export interface FxWindowDeps {
   /** 開いているもののFX。テイクFXは、エンベロープの無いトラックとして扱う。 */
@@ -324,6 +327,8 @@ export function buildFxWindow(deps: FxWindowDeps): FxWindow {
     foot.textContent =
       target.type === "take"
         ? "テイクFX：この断片だけに掛かる（トラックのFXより先）。刻み直して、この位置に断片が無くなると掛からない"
+        : target.type === "group"
+          ? "グループFX：このグループの断片にだけ掛かる（テイクFXのあと、トラックのFXの前）"
         : "上から順に掛かる。チェックを外すとバイパス。[E] で、量・ウェットを時間で動かすエンベロープを出せる（点はトラックの下でタップ・ドラッグ、ダブルタップで消す）";
     renderList();
     renderParams();

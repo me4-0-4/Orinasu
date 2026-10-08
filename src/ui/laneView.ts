@@ -37,13 +37,17 @@ export interface LaneViewData {
   rows: Row[];
   totalSteps: number;
   stepsPerBar: number;
-  /** 選んでいる断片（テイクFXを開く対象）。 */
-  selectedHit?: { track: string; step: number } | null;
+  /** 選んでいる断片（いくつでも）。 */
+  selectedHits?: { track: string; step: number }[];
+  /** グループに入っている断片の印（色相）。ミュートしたグループの断片は薄く。 */
+  groupMarks?: { track: string; step: number; hue: number; muted: boolean }[];
 }
 
 export interface LaneViewHandlers {
-  /** トラックの線の上をタップ：断片の上なら step、空いた所なら null。 */
-  onHit: (track: string, step: number | null) => void;
+  /** トラックの線の上をタップ：断片の上なら step、空いた所なら null。add はシフト・Ctrl を押していたか（足して選ぶ）。 */
+  onHit: (track: string, step: number | null, add: boolean) => void;
+  /** 線の上をドラッグして四角で囲んだ断片（トラックをまたいでいい）。 */
+  onRect: (hits: { track: string; step: number }[], add: boolean) => void;
   /** エンベロープを描き変えた（点を足す・動かす・消す）。 */
   onEnvEdit: (id: string, points: EnvPoint[]) => void;
 }
@@ -84,6 +88,10 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
   let width = 400;
   /** ドラッグ中のエンベロープ（描き終わるまで、ここで動かす）。 */
   let drag: { id: string; points: EnvPoint[]; index: number; moved: boolean; added: boolean } | null = null;
+  /** 四角で囲んで選んでいる途中。 */
+  let rect: { x0: number; y0: number; x1: number; y1: number; add: boolean; active: boolean } | null = null;
+  /** 四角で選んだ直後の click を無視する。 */
+  let swallowClick = false;
 
   const css = (name: string, fallback: string): string =>
     getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
@@ -174,19 +182,28 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
         } else if (row.kind === "lane") {
           g.globalAlpha = row.muted ? 0.25 : 1;
           const takes = new Set(row.takeSteps ?? []);
-          const sel = data.selectedHit?.track === row.key ? data.selectedHit.step : null;
+          const sel = new Set((data.selectedHits ?? []).filter((h) => h.track === row.key).map((h) => h.step));
+          const marks = new Map((data.groupMarks ?? []).filter((m) => m.track === row.key).map((m) => [m.step, m]));
           for (const ev of row.events) {
             const y = mid - 3 - (ev.pitch / 12) * 8;
             const x = GUTTER + ev.step * sx;
             const w = Math.max(2, ev.len * sx - 1);
+            const mark = marks.get(ev.step);
+            g.globalAlpha = row.muted || mark?.muted ? 0.25 : 1;
             g.fillStyle = `hsl(${(ev.slice * 47) % 360} 75% 62%)`;
             g.fillRect(x, y, w, 6);
+            g.globalAlpha = 1;
+            if (mark) {
+              // グループの印：下に色の帯
+              g.fillStyle = `hsl(${mark.hue} 85% 60%)`;
+              g.fillRect(x, mid + 9, w, 3);
+            }
             if (takes.has(ev.step)) {
               // テイクFXのある断片：上に小さな印
               g.fillStyle = green;
               g.fillRect(x, y - 4, Math.min(w, 6), 2);
             }
-            if (sel === ev.step) {
+            if (sel.has(ev.step)) {
               g.strokeStyle = "#ffc450";
               g.lineWidth = 2;
               g.strokeRect(x - 1, y - 2, w + 2, 10);
@@ -228,6 +245,15 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
       top += h;
     }
 
+    if (rect?.active) {
+      g.fillStyle = "rgba(255,196,80,0.12)";
+      g.strokeStyle = "#ffc450";
+      const rx = Math.min(rect.x0, rect.x1);
+      const ry = Math.min(rect.y0, rect.y1);
+      g.fillRect(rx, ry, Math.abs(rect.x1 - rect.x0), Math.abs(rect.y1 - rect.y0));
+      g.strokeRect(rx + 0.5, ry + 0.5, Math.abs(rect.x1 - rect.x0), Math.abs(rect.y1 - rect.y0));
+    }
+
     if (progress !== null) {
       const x = GUTTER + progress * plotW();
       g.strokeStyle = "#ffffff";
@@ -260,12 +286,16 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
   // トラックの行：名前・FXボタン・断片
   canvas.addEventListener("click", (e) => {
     if (!data) return;
+    if (swallowClick) {
+      swallowClick = false;
+      return;
+    }
     const { x, y } = local(e);
     const hit = rowAt(y);
     if (!hit || hit.row.type !== "track") return;
     const row = hit.row;
     if (row.kind !== "lane") {
-      handlers.onHit(row.key, null);
+      handlers.onHit(row.key, null, false);
       return;
     }
     const step = stepOf(x);
@@ -280,7 +310,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     }
     // 細い棒でも押しやすいよう、少し離れていても近い断片を選ぶ（画面で10pxくらいまで）
     const slack = Math.max(1, 10 / (plotW() / data.totalSteps));
-    handlers.onHit(row.key, best && bestD <= slack ? best.step : null);
+    handlers.onHit(row.key, best && bestD <= slack ? best.step : null, e.shiftKey || e.ctrlKey || e.metaKey);
   });
 
   // エンベロープの行：点を足す・動かす
@@ -288,6 +318,11 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     if (!data) return;
     const { x, y } = local(e);
     const hit = rowAt(y);
+    if (hit && hit.row.type === "track" && e.button === 0) {
+      rect = { x0: x, y0: y, x1: x, y1: y, add: e.shiftKey || e.ctrlKey || e.metaKey, active: false };
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
     if (!hit || hit.row.type !== "env" || x < GUTTER || e.button === 2) return;
     const row = hit.row;
     const points = row.points.map((p) => ({ ...p }));
@@ -305,6 +340,14 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     draw();
   });
   canvas.addEventListener("pointermove", (e) => {
+    if (rect && data) {
+      const { x, y } = local(e);
+      rect.x1 = x;
+      rect.y1 = y;
+      if (!rect.active && Math.hypot(x - rect.x0, y - rect.y0) > 6) rect.active = true;
+      if (rect.active) draw();
+      return;
+    }
     if (!drag || !data) return;
     const { x, y } = local(e);
     let top = HEAD_H;
@@ -325,6 +368,31 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     draw();
   });
   const finish = (): void => {
+    if (rect) {
+      const r = rect;
+      rect = null;
+      if (r.active && data) {
+        // 四角に入った断片（横は断片の長さ、縦は行の中央）
+        const s0 = stepOf(Math.min(r.x0, r.x1));
+        const s1 = stepOf(Math.max(r.x0, r.x1));
+        const ya = Math.min(r.y0, r.y1);
+        const yb = Math.max(r.y0, r.y1);
+        const hits: { track: string; step: number }[] = [];
+        let top = HEAD_H;
+        for (const row of data.rows) {
+          const h = rowHeight(row);
+          const mid = top + h / 2;
+          if (row.type === "track" && row.kind === "lane" && mid >= ya && mid <= yb) {
+            for (const ev of row.events) if (ev.step + ev.len > s0 && ev.step < s1) hits.push({ track: row.key, step: ev.step });
+          }
+          top += h;
+        }
+        swallowClick = true;
+        handlers.onRect(hits, r.add);
+        draw();
+      }
+      return;
+    }
     if (!drag) return;
     const { id, points, moved, added } = drag;
     drag = null;
@@ -334,6 +402,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
   canvas.addEventListener("pointerup", finish);
   canvas.addEventListener("pointercancel", () => {
     drag = null;
+    rect = null;
     draw();
   });
   // 点を消す：ダブルタップ／右クリック
