@@ -6,6 +6,7 @@ import { applyTrack, chainTailSeconds, trackIsOff, type FxEnv, type FxPlugin, ty
 import { applyGroups, groupOf } from "./groups.ts";
 import { addSfx, fourOnFloor, kickSteps, pump, renderPad, type Grid, type PadSource } from "./glue.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
+import { masterBus } from "./masterBus.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
 import { STEPS_PER_BEAT, holdFraction, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
 import { cutSlices, type Slice } from "./slicer.ts";
@@ -324,6 +325,7 @@ export async function buildCollage(
   // SFX：区切りを聞かせる（8小節ごとのライザー・インパクト、4小節ごとのリバースシンバル）
   addSfx(mixed, grid, song.params.sfx, createRng(glueSeed ^ 0x2f6b8a1d));
   // 全体のエフェクト：最後に、曲全体に掛ける
-  const pcm = limitPeak(fxOn(song.fx.master) ? await applyTrack(mixed, song.fx.master, fxEnv!) : mixed);
+  // そのあと、仕上げのコンプ＋リミッター（音圧をそろえて、割れないようにする）
+  const pcm = limitPeak(masterBus(fxOn(song.fx.master) ? await applyTrack(mixed, song.fx.master, fxEnv!) : mixed, sampleRate));
   return { pcm, lanes: built.map((b) => b.view), bed, totalSteps, keyName: baseKey ? keyShortName(baseKey) : null };
 }
