@@ -1216,6 +1216,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     undoButton.disabled = undoStack.length === 0;
     redoButton.disabled = redoStack.length === 0;
     exportButton.disabled = !result;
+    // 作っている間は、目立たせる（色つきの札＋くるくる＋上の帯）
+    statusText.classList.toggle("is-busy", !!busy);
+    transport.classList.toggle("is-busy", !!busy);
     statusText.textContent = busy || (result ? [result.keyName ? `キー ${result.keyName}` : null, `${result.lanes.length}トラック`].filter(Boolean).join("・") : "");
     updateTime();
 
