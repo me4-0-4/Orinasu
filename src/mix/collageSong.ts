@@ -167,18 +167,14 @@ export async function buildCollage(
   const stepSamples = (sampleRate * 60) / song.bpm / STEPS_PER_BEAT;
   const baseKey = phraseKey(byId.get(lanes[0].phraseId)!);
 
-  // 音楽モードの交代は、ミュートしていない層だけで回す（ミュートした層の番で、無音の4小節ができないように）
-  const playing = lanes.filter((l) => !l.muted);
-  // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種と形は、いちばん上の鳴っている層のもの（形は全体のつまみ）
-  const mixing = song.params.style === "music" && song.params.turns === "mix" && playing.length > 1;
-  const lead = playing[0];
+  // ミュートは「このトラックを抜いたら、同じ曲がどう聞こえるか」を聞くためのもの。
+  // ミュートしても、ほかのトラックの打つ内容（交代・掛け合い・混ぜるの番や、リズムの種）は変えない。ミュートした層は、打つ予定は同じまま、音だけ出さない
+  const mixing = song.params.style === "music" && song.params.turns === "mix" && lanes.length > 1;
+  // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種と形は、いちばん上の層のもの（形は全体のつまみ）
+  const lead = lanes[0];
   const built = await Promise.all(
     lanes.map(async (lane, i) => {
-      const turn = lane.muted
-        ? mixing
-          ? { laneIndex: -1, laneCount: playing.length } // 混ぜるとき、ミュートした層には番を回さない
-          : { laneIndex: i, laneCount: lanes.length }
-        : { laneIndex: playing.indexOf(lane), laneCount: playing.length };
+      const turn = { laneIndex: i, laneCount: lanes.length };
       const phrase = byId.get(lane.phraseId)!;
       const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし（混ぜるときは、1つのリズムなので全体の形）
@@ -320,7 +316,7 @@ export async function buildCollage(
   }
 
   // 仕上げ（つなぎ）の偶然は、いちばん上の層の種から（刻み直すと変わり、形のつまみでは変わらない）
-  const glueSeed = (lanes.find((l) => !l.muted) ?? lanes[0]).cutSeed;
+  const glueSeed = lanes[0].cutSeed;
   // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）
   const padSources = built.map((b) => b.pad).filter((p): p is PadSource => p !== null);
   const padKey = JSON.stringify([padSources.map((p) => [cache ? cache.idOf(p.pcm) : 0, p.srcBars, p.keyShift]), song.params.pad, glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm]);
