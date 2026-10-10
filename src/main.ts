@@ -1181,6 +1181,7 @@ initCloud({
   onSynced: () => {
     void reloadPhraseList();
     void reloadUserPresets();
+    mixPanel.refreshLibrary();
   },
   // 別のアカウントに切り替えて端末のデータを消したら、刻む曲も空にする（前の人の曲を新しい人の所に保存しない）
   onCleared: () => {

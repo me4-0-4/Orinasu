@@ -74,6 +74,8 @@ export interface MixPanel {
   refreshMaterials: () => void;
   /** 鳴らしているものを止める。 */
   stop: () => void;
+  /** 保存した曲の一覧を読み直す（クラウドから取り込んだとき）。 */
+  refreshLibrary: () => void;
   /** 毎フレーム呼ぶ。再生位置の線と時間の表示を動かす。 */
   tick: () => void;
   /** 再生⇔停止（スペースキー用）。 */
@@ -1554,6 +1556,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       renderMaterials();
       refresh();
       if (song.lanes) void rebuild();
+      void loadLibrary();
+    },
+    refreshLibrary() {
       void loadLibrary();
     },
     refreshMaterials() {

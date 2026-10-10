@@ -15,6 +15,9 @@ export const storageHooks: {
   phraseDeleted?: (id: string) => void;
   presetSaved?: (preset: UserPreset) => void;
   presetDeleted?: (id: string) => void;
+  /** 名前を付けて残した曲だけ通知する（作業中の曲は同期しない）。 */
+  songSaved?: (song: Song) => void;
+  songDeleted?: (id: string) => void;
 } = {};
 
 /** silent: true にすると通知しない（クラウドから取り込んだデータを書くときに使う）。 */
@@ -124,7 +127,7 @@ export async function loadUserPresets(): Promise<UserPreset[]> {
  * 刻んだ曲（選んだ曲・BPM・刻み方の計画）。いまは端末内だけに保存する（クラウド同期は未対応）。
  * 作業中の曲（SONG_ID）も、名前を付けて残した曲（saved_…）も、同じ保存場所に入れる。
  */
-export async function saveSong(song: Song): Promise<void> {
+export async function saveSong(song: Song, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(SONG_STORE, "readwrite");
@@ -133,6 +136,7 @@ export async function saveSong(song: Song): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  if (!opts.silent && isSavedSongId(song.id)) storageHooks.songSaved?.(song);
 }
 
 export async function loadSong(id: string): Promise<Song | null> {
@@ -158,7 +162,7 @@ export async function loadSavedSongs(): Promise<Song[]> {
   return result.filter((s) => isSavedSongId(s.id)).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export async function deleteSong(id: string): Promise<void> {
+export async function deleteSong(id: string, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(SONG_STORE, "readwrite");
@@ -167,6 +171,7 @@ export async function deleteSong(id: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  if (!opts.silent && isSavedSongId(id)) storageHooks.songDeleted?.(id);
 }
 
 /** 端末内のフレーズと自分の音色を全部消す。別のアカウントでログインしたときに前の人のデータを残さないために使う。 */
