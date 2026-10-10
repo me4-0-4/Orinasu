@@ -130,6 +130,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let live = false;
   const isPlaying = (): boolean => mixer.playing || player.playing;
   const progressNow = (): number | null => (mixer.playing ? mixer.progress() : player.progress());
+  /** 「ここから鳴らす」位置（0〜1）。上の小節の帯をタップして決める。止めると、ここに戻る。 */
+  let startFraction = 0;
+  /** 画面に出す位置：鳴っていればその位置、止まっていて印があれば印の位置。 */
+  const positionNow = (): number | null => progressNow() ?? (startFraction > 0 ? startFraction : null);
   const stopAll = (): void => {
     mixer.stop();
     player.stop();
@@ -305,6 +309,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   // ------------------------------------------------------------------ アレンジ画面（トラックヘッダー＋線）
 
   const laneView = buildLaneView({
+    onSeek: (fraction) => void seek(fraction),
     onHit: (track, step, add) => {
       if (step === null) {
         if (add || multiMode) return; // 足して選んでいる最中は、空いた所のタップで選び直さない
@@ -1353,18 +1358,30 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (!result) return;
     await deps.prepareAudio();
     if (live) {
-      mixer.play(0);
+      mixer.play(startFraction);
     } else {
       // ミキサーで鳴らせない曲：ミックスダウンした波形を鳴らす
       busy = "準備しています…";
       refresh();
       try {
-        player.play(await mixdownNow(), sampleRate);
+        player.play(await mixdownNow(), sampleRate, startFraction);
       } finally {
         busy = "";
       }
     }
     refresh();
+  }
+
+  /** 位置を選ぶ（上の小節の帯）：鳴っていればそこから続け、止まっていれば「ここから鳴らす」印にする。 */
+  async function seek(fraction: number): Promise<void> {
+    if (!result) return;
+    startFraction = Math.min(1, Math.max(0, fraction));
+    if (isPlaying()) {
+      if (live) mixer.play(startFraction);
+      else player.play(await mixdownNow(), sampleRate, startFraction);
+    }
+    laneView.setProgress(positionNow(), !isPlaying());
+    updateTime();
   }
 
   /** 書き出し：ミキサーと同じ入力から、ミックスダウン（全体のエフェクト → コンプ・リミッター）した波形を、WAVにして保存する。 */
@@ -1640,7 +1657,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   function updateTime(): void {
     const total = songSeconds(song);
-    const t = progressNow();
+    const t = positionNow();
     const steps = totalStepsNow();
     const step = t === null ? 0 : Math.min(steps - 1, Math.floor(t * steps));
     posMain.textContent = posName(step);
@@ -1660,6 +1677,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       live = false;
       solo.lanes.clear();
       solo.bed = false;
+      startFraction = 0;
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;
@@ -1687,7 +1705,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       refresh();
     },
     tick() {
-      laneView.setProgress(progressNow());
+      laneView.setProgress(positionNow(), !isPlaying());
       if (isPlaying()) updateTime();
     },
     togglePlay() {
