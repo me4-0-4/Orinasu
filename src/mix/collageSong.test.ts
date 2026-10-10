@@ -6,6 +6,7 @@ import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum
 import { createEmptySong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
 import { newGroup } from "./groups.ts";
+import { BuildCache } from "./buildCache.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
 
@@ -121,14 +122,19 @@ test("ひとつ戻すは、種だけを戻す（形のずらし・固定はそ�
   assert.equal(back[0].locked, true);
 });
 
-test("音楽モード：ミュートした層があっても、交代はミュートしていない層だけで回す（無音の4小節ができない）", async () => {
-  const phrases = [phrase("a", 100), phrase("b", 100, 62)];
-  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], lengthBars: 8 };
-  song.lanes = syncLanes(song, seq);
-  song.lanes[1].muted = true;
-  const out = (await buildCollage(song, phrases, steadyRender, 1000))!;
-  const a = out.lanes[0].events;
-  assert.ok(a.some((e) => e.step < 64) && a.some((e) => e.step >= 64), "鳴っている層が、前半も後半も打つ");
+test("ミュートしても、ほかのトラックの打つ内容は変わらない（交代・掛け合い・混ぜるのどれでも）。ミュートした層の番は無音になる", async () => {
+  const phrases = [phrase("a", 100), phrase("b", 100, 62), phrase("c", 100, 64)];
+  for (const turns of ["swap", "call", "mix"] as const) {
+    const song: Song = { ...createEmptySong(), materialIds: ["a", "b", "c"], lengthBars: 8 };
+    song.params = { ...song.params, turns };
+    song.lanes = syncLanes(song, seq);
+    const before = (await buildCollage(song, phrases, steadyRender, 1000))!;
+    song.lanes[1].muted = true;
+    const after = (await buildCollage(song, phrases, steadyRender, 1000))!;
+    for (const i of [0, 2]) assert.deepEqual(after.lanes[i].events, before.lanes[i].events, `${turns}：層${i}は変わらない`);
+    assert.deepEqual(after.lanes[1].events, before.lanes[1].events, `${turns}：ミュートした層の打つ予定も同じ（線には出る）`);
+    assert.ok(after.pcm.l.some((v) => v !== 0), `${turns}：ほかの層は鳴る`);
+  }
 });
 
 function drumPhrase(id: string): Phrase {
@@ -170,16 +176,15 @@ test("下地：選んだ曲のドラムだけを書き出して、刻まずに�
   assert.deepEqual(bedEvents(phrases[0], 16).map((e) => e.step), [0, 4, 8, 12]);
 });
 
-test("混ぜる：2つの曲で1つのリズム。同じ所で両方は鳴らず、ミュートした層には番を回さない", async () => {
+test("混ぜる：全部の曲で1つのリズム。同じ所で2つは鳴らない。ミュートした層の打つ所は、無音のまま残る", async () => {
   const phrases = [phrase("a", 100), phrase("b", 100, 62), phrase("c", 100, 64)];
   const song: Song = { ...createEmptySong(), materialIds: ["a", "b", "c"], lengthBars: 16 };
   song.lanes = syncLanes(song, seq);
   song.lanes[2].muted = true;
   const r = (await buildCollage(song, phrases, steadyRender, 1000))!;
-  const steps = r.lanes.slice(0, 2).flatMap((l) => l.events.map((e) => e.step));
+  const steps = r.lanes.flatMap((l) => l.events.map((e) => e.step));
   assert.equal(new Set(steps).size, steps.length);
-  assert.ok(r.lanes[0].events.length > 0 && r.lanes[1].events.length > 0);
-  assert.equal(r.lanes[2].events.length, 0);
+  assert.ok(r.lanes.every((l) => l.events.length > 0), "3つとも番がある（ミュートした層にも）");
 });
 
 test("エフェクト：FXのあるトラック（層・下地・マスター）とテイクFXの断片にだけ掛ける。無ければリバーブは呼ばない", async () => {
@@ -246,4 +251,55 @@ test("テイクFX：短く作っても、曲全体で作ったのと同じ位置
   let diff = 0;
   for (let i = 0; i < base.pcm.l.length; i++) diff = Math.max(diff, Math.abs(base.pcm.l[i] - withTake.pcm.l[i]));
   assert.ok(diff < 1e-3, `違い ${diff}`);
+});
+
+test("使い回し：同じ入力なら前と同じ波形。ミュートしても、変わっていないトラックは作り直さない", async () => {
+  const phrases = [phrase("a", 100), phrase("b", 120, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], bpm: 120, lengthBars: 4 };
+  song.lanes = syncLanes(song, seq);
+  song.lanes[1] = { ...song.lanes[1], fx: { chain: [newPlugin("drive", { amount: 0.5 })], envelopes: [] } };
+  const sr = 2000;
+  const pcms = new Map<string, Pcm>();
+  const render = async (p: Phrase, bpm: number): Promise<Pcm> => {
+    const key = `${p.id}|${bpm}`;
+    if (!pcms.has(key)) {
+      const len = Math.round((16 * 60 * sr) / bpm);
+      const l = new Float32Array(len).map((_, i) => (i % 400 < 20 ? 0.5 : 0.01));
+      pcms.set(key, { l, r: l.slice() });
+    }
+    return pcms.get(key)!;
+  };
+  const reverb = async (pcm: Pcm): Promise<Pcm> => pcm;
+  const cache = new BuildCache();
+  const plain = (await buildCollage(song, phrases, render, sr, reverb))!;
+  const first = (await buildCollage(song, phrases, render, sr, reverb, cache))!;
+  const again = (await buildCollage(song, phrases, render, sr, reverb, cache))!;
+  assert.deepEqual(first.pcm.l, plain.pcm.l, "使い回しの有無で、結果は同じ");
+  assert.deepEqual(again.pcm.l, first.pcm.l);
+  const sizeBefore = cache.size;
+  const muted = structuredClone(song);
+  muted.lanes![0].muted = true;
+  const viaCache = (await buildCollage(muted, phrases, render, sr, reverb, cache))!;
+  const direct = (await buildCollage(muted, phrases, render, sr, reverb))!;
+  assert.deepEqual(viaCache.pcm.l, direct.pcm.l, "ミュートしても、使い回しの有無で結果は同じ");
+  // ほかのトラックの打つ内容は変わらないので、FXのあるトラックは使い回される（増えるのは、ミュートした層と、伸ばしだけ）
+  assert.ok(cache.size - sizeBefore <= 2, `増えたのは ${cache.size - sizeBefore} 個`);
+});
+
+test("使い回しの入れ物：上限を超えたら古いものから捨てる。使ったものは残る", async () => {
+  const cache = new BuildCache(2);
+  let made = 0;
+  const make = (v: number) => () => {
+    made++;
+    return v;
+  };
+  await cache.getOrCompute("a", make(1));
+  await cache.getOrCompute("b", make(2));
+  await cache.getOrCompute("a", make(1)); // a を使った（新しい側へ）
+  await cache.getOrCompute("c", make(3)); // b が捨てられる
+  assert.equal(made, 3);
+  await cache.getOrCompute("a", make(1));
+  assert.equal(made, 3);
+  await cache.getOrCompute("b", make(2));
+  assert.equal(made, 4);
 });

@@ -6,6 +6,7 @@ import { applyTrack, chainTailSeconds, trackIsOff, type FxEnv, type FxPlugin, ty
 import { applyGroups, groupOf } from "./groups.ts";
 import { addSfx, fourOnFloor, kickSteps, pump, renderPad, type Grid, type PadSource } from "./glue.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
+import { BuildCache } from "./buildCache.ts";
 import { masterBus } from "./masterBus.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
 import { STEPS_PER_BEAT, holdFraction, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
@@ -153,7 +154,10 @@ export async function buildCollage(
   sampleRate: number,
   /** リバーブの響きを作る（エフェクトのリバーブに使う）。無ければ、エフェクトは掛けない。 */
   reverb?: ReverbFn,
+  /** 前と同じ入力のトラック（と伸ばし）の波形を使い回す入れ物。無ければ毎回ぜんぶ作る。 */
+  cache?: BuildCache,
 ): Promise<CollageResult | null> {
+  const cached = <T>(key: string, make: () => Promise<T> | T): Promise<T> => (cache ? cache.getOrCompute(key, make) : Promise.resolve(make()));
   const fxOn = (fx: TrackFx | undefined): fx is TrackFx => !!reverb && !trackIsOff(fx);
   const sources = collectSources(song, phrases);
   const byId = new Map(sources.map((p) => [p.id, p]));
@@ -163,18 +167,14 @@ export async function buildCollage(
   const stepSamples = (sampleRate * 60) / song.bpm / STEPS_PER_BEAT;
   const baseKey = phraseKey(byId.get(lanes[0].phraseId)!);
 
-  // 音楽モードの交代は、ミュートしていない層だけで回す（ミュートした層の番で、無音の4小節ができないように）
-  const playing = lanes.filter((l) => !l.muted);
-  // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種と形は、いちばん上の鳴っている層のもの（形は全体のつまみ）
-  const mixing = song.params.style === "music" && song.params.turns === "mix" && playing.length > 1;
-  const lead = playing[0];
+  // ミュートは「このトラックを抜いたら、同じ曲がどう聞こえるか」を聞くためのもの。
+  // ミュートしても、ほかのトラックの打つ内容（交代・掛け合い・混ぜるの番や、リズムの種）は変えない。ミュートした層は、打つ予定は同じまま、音だけ出さない
+  const mixing = song.params.style === "music" && song.params.turns === "mix" && lanes.length > 1;
+  // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種と形は、いちばん上の層のもの（形は全体のつまみ）
+  const lead = lanes[0];
   const built = await Promise.all(
     lanes.map(async (lane, i) => {
-      const turn = lane.muted
-        ? mixing
-          ? { laneIndex: -1, laneCount: playing.length } // 混ぜるとき、ミュートした層には番を回さない
-          : { laneIndex: i, laneCount: lanes.length }
-        : { laneIndex: playing.indexOf(lane), laneCount: playing.length };
+      const turn = { laneIndex: i, laneCount: lanes.length };
       const phrase = byId.get(lane.phraseId)!;
       const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし（混ぜるときは、1つのリズムなので全体の形）
@@ -246,40 +246,59 @@ export async function buildCollage(
       !b.takes.some((t) => chainOn(t.chain)) &&
       !b.collage.events.some((e) => groupFxOf(b.view.phraseId, e.step)),
   );
-  const mixed = renderCollage(plain.map((b) => b.collage), collageOpts);
+  // トラックの波形の使い回し：このトラックの結果が何で決まるか（波形・断片・打つ予定・音程・音量・書き出しの条件）を名前にする
+  const laneSig = (b: (typeof built)[number]): string =>
+    JSON.stringify([
+      cache ? cache.idOf(b.collage.pcm) : 0,
+      b.collage.slices.map((s) => [s.start, s.end]),
+      b.collage.events,
+      b.collage.keyShift,
+      b.collage.gain,
+      b.collage.holdFraction,
+      collageOpts,
+    ]);
+  const mixed = renderCollage([], collageOpts);
+  for (const b of plain) mixInto(mixed, await cached(`plain|${laneSig(b)}`, () => renderCollage([b.collage], collageOpts)));
   for (const b of built) {
     if (plain.includes(b)) continue;
-    const takes = new Map(b.takes.filter((t) => chainOn(t.chain)).map((t) => [t.step, t.chain]));
-    const groupIdOf = (e: LaneEvent): string | null => groupFxOf(b.view.phraseId, e.step)?.id ?? null;
-    const plainEvents = b.collage.events.filter((e) => !takes.has(e.step) && !groupIdOf(e));
-    const lanePcm = renderCollage([{ ...b.collage, events: plainEvents }], collageOpts);
-    // グループFX：グループの断片をまとめて1回で作る（断片ごとに曲全体の長さを作ると、とても重くなる）
-    const groupBus = new Map<string, Pcm>();
-    const groupEvents = new Map<string, LaneEvent[]>();
-    for (const ev of b.collage.events) {
-      const gid = groupIdOf(ev);
-      if (!gid || takes.has(ev.step)) continue;
-      groupEvents.set(gid, [...(groupEvents.get(gid) ?? []), ev]);
-    }
-    for (const [gid, events] of groupEvents) groupBus.set(gid, renderCollage([{ ...b.collage, events }], collageOpts));
-    // テイクFX：断片1つぶんと、FXの余韻が収まる短い長さだけ作って掛け、その位置に重ねる
-    for (const ev of b.collage.events) {
-      const take = takes.get(ev.step);
-      if (!take) continue;
-      const one = await renderTake(b.collage, ev, take);
-      const gid = groupIdOf(ev);
-      let target = lanePcm;
-      if (gid) {
-        if (!groupBus.has(gid)) groupBus.set(gid, { l: new Float32Array(lanePcm.l.length), r: new Float32Array(lanePcm.r.length) });
-        target = groupBus.get(gid)!;
-      }
-      mixAt(target, one.pcm, one.offset);
-    }
-    for (const [gid, pcm] of groupBus) {
-      const chain = song.groups?.find((g) => g.id === gid)?.fx ?? [];
-      mixInto(lanePcm, await applyTrack(pcm, { chain, envelopes: [] }, fxEnv!));
-    }
-    mixInto(mixed, fxOn(b.fx) ? await applyTrack(lanePcm, b.fx, fxEnv!) : lanePcm);
+    // エフェクトのあるトラック（テイクFX・グループFX・トラックFXまで含めて）は、同じ入力なら丸ごと使い回す
+    const fxKey = `fx|${laneSig(b)}|${JSON.stringify([b.view.phraseId, b.fx, b.takes, song.groups, song.bpm, !!reverb])}`;
+    mixInto(
+      mixed,
+      await cached(fxKey, async () => {
+        const takes = new Map(b.takes.filter((t) => chainOn(t.chain)).map((t) => [t.step, t.chain]));
+        const groupIdOf = (e: LaneEvent): string | null => groupFxOf(b.view.phraseId, e.step)?.id ?? null;
+        const plainEvents = b.collage.events.filter((e) => !takes.has(e.step) && !groupIdOf(e));
+        const lanePcm = renderCollage([{ ...b.collage, events: plainEvents }], collageOpts);
+        // グループFX：グループの断片をまとめて1回で作る（断片ごとに曲全体の長さを作ると、とても重くなる）
+        const groupBus = new Map<string, Pcm>();
+        const groupEvents = new Map<string, LaneEvent[]>();
+        for (const ev of b.collage.events) {
+          const gid = groupIdOf(ev);
+          if (!gid || takes.has(ev.step)) continue;
+          groupEvents.set(gid, [...(groupEvents.get(gid) ?? []), ev]);
+        }
+        for (const [gid, events] of groupEvents) groupBus.set(gid, renderCollage([{ ...b.collage, events }], collageOpts));
+        // テイクFX：断片1つぶんと、FXの余韻が収まる短い長さだけ作って掛け、その位置に重ねる
+        for (const ev of b.collage.events) {
+          const take = takes.get(ev.step);
+          if (!take) continue;
+          const one = await renderTake(b.collage, ev, take);
+          const gid = groupIdOf(ev);
+          let target = lanePcm;
+          if (gid) {
+            if (!groupBus.has(gid)) groupBus.set(gid, { l: new Float32Array(lanePcm.l.length), r: new Float32Array(lanePcm.r.length) });
+            target = groupBus.get(gid)!;
+          }
+          mixAt(target, one.pcm, one.offset);
+        }
+        for (const [gid, pcm] of groupBus) {
+          const chain = song.groups?.find((g) => g.id === gid)?.fx ?? [];
+          mixInto(lanePcm, await applyTrack(pcm, { chain, envelopes: [] }, fxEnv!));
+        }
+        return fxOn(b.fx) ? await applyTrack(lanePcm, b.fx, fxEnv!) : lanePcm;
+      }),
+    );
   }
 
   /** テイクFXの断片：断片の位置から、FXの余韻が収まるまでの短い波形を作って、FXを掛ける（曲より長くなるなら曲の長さで）。 */
@@ -297,11 +316,14 @@ export async function buildCollage(
   }
 
   // 仕上げ（つなぎ）の偶然は、いちばん上の層の種から（刻み直すと変わり、形のつまみでは変わらない）
-  const glueSeed = (lanes.find((l) => !l.muted) ?? lanes[0]).cutSeed;
+  const glueSeed = lanes[0].cutSeed;
   // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）
   const padSources = built.map((b) => b.pad).filter((p): p is PadSource => p !== null);
-  let pad = renderPad(padSources, grid, song.params.pad, createRng(glueSeed ^ 0x51ed270b));
-  if (song.params.pad > 0 && fxOn(song.fx.pad)) pad = await applyTrack(pad, song.fx.pad, fxEnv!);
+  const padKey = JSON.stringify([padSources.map((p) => [cache ? cache.idOf(p.pcm) : 0, p.srcBars, p.keyShift]), song.params.pad, glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm]);
+  const pad = await cached(`pad|${padKey}`, async () => {
+    const raw = renderPad(padSources, grid, song.params.pad, createRng(glueSeed ^ 0x51ed270b));
+    return song.params.pad > 0 && fxOn(song.fx.pad) ? await applyTrack(raw, song.fx.pad, fxEnv!) : raw;
+  });
   mixInto(mixed, pad);
   // 下地：選んだ曲のドラムだけを、刻まずに鳴らしっぱなし（ノリの軸になる）
   const drumId = pickDrum(song, phrases);
