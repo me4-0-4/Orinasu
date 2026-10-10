@@ -1,4 +1,4 @@
-import type { StemSet } from "../mix/collageSong";
+import { CHANNEL_FADERS, type StemSet } from "../mix/collageSong";
 import { liveReverbChain } from "../mix/fx";
 import workletUrl from "./masterBusWorklet.ts?worker&url";
 import { reverbImpulse } from "./reverbWet";
@@ -38,8 +38,8 @@ export interface MixerGraph {
   /** when（コンテキストの時刻）から、曲の offsetSeconds の位置を鳴らし始める。 */
   start(when: number, offsetSeconds: number): void;
   stop(when?: number): void;
-  /** 層のフェーダー（音量・ミュート）を動かす。プチ音が出ないよう、短くなめらかに。 */
-  setFader(phraseId: string, value: number, smooth?: boolean): void;
+  /** フェーダー（層の曲の id、または @bed・@pad・@sfx）を動かす。プチ音が出ないよう、短くなめらかに。 */
+  setFader(name: string, value: number, smooth?: boolean): void;
   dispose(): void;
 }
 
@@ -53,24 +53,27 @@ export function buildMixerGraph(ctx: BaseAudioContext, set: StemSet, out: AudioN
   if (!chain) throw new Error("マスターのエフェクトが、リアルタイムでは掛けられない形です");
   const sampleRate = ctx.sampleRate;
   const bus = ctx.createGain();
-  const laneGains = new Map<string, GainNode>();
+  /** フェーダーの名前（層の曲の id、@bed・@pad・@sfx）ごとの音量ノード。 */
+  const gains = new Map<string, GainNode>();
+  const faderNode = (name: string, to: AudioNode): GainNode => {
+    let g = gains.get(name);
+    if (!g) {
+      g = ctx.createGain();
+      g.gain.value = faders[name] ?? 1;
+      g.connect(to);
+      gains.set(name, g);
+    }
+    return g;
+  };
   const sources: AudioBufferSourceNode[] = [];
   for (const stem of set.stems) {
     const src = ctx.createBufferSource();
     src.buffer = bufferOf(stem.pcm, sampleRate);
     src.loop = true;
-    if (stem.phraseId !== undefined) {
-      let g = laneGains.get(stem.phraseId);
-      if (!g) {
-        g = ctx.createGain();
-        g.gain.value = faders[stem.phraseId] ?? 1;
-        g.connect(bus);
-        laneGains.set(stem.phraseId, g);
-      }
-      src.connect(g);
-    } else {
-      src.connect(bus);
-    }
+    // ステム → チャンネルのフェーダー → 層のフェーダー → 足す、の順（どちらも掛け算なので、順番で音は変わらない）
+    const lane = stem.phraseId !== undefined ? faderNode(stem.phraseId, bus) : bus;
+    const target = stem.channel ? faderNode(CHANNEL_FADERS[stem.channel], lane) : lane;
+    src.connect(target);
     sources.push(src);
   }
   // 全体のリバーブ（直接音＋送った音の響き。書き出しの applyTrack と同じ式）
@@ -116,15 +119,15 @@ export function buildMixerGraph(ctx: BaseAudioContext, set: StemSet, out: AudioN
         }
       }
     },
-    setFader(phraseId, value, smooth = true) {
-      const g = laneGains.get(phraseId);
+    setFader(name, value, smooth = true) {
+      const g = gains.get(name);
       if (!g) return;
       if (smooth) g.gain.setTargetAtTime(value, ctx.currentTime, 0.008);
       else g.gain.value = value;
     },
     dispose() {
       for (const s of sources) s.disconnect();
-      for (const g of laneGains.values()) g.disconnect();
+      for (const g of gains.values()) g.disconnect();
       for (const n of owned) n.disconnect();
     },
   };
@@ -194,10 +197,10 @@ export class StemMixer {
     window.setTimeout(() => g.dispose(), 200);
   }
 
-  /** 層のフェーダー（ミュートは0、ふだんは音量）を動かす。 */
-  setFader(phraseId: string, value: number): void {
-    this.faders[phraseId] = value;
-    this.graph?.setFader(phraseId, value);
+  /** フェーダー（層のミュート・音量、ドラムループ・パッド・効果音の量）を動かす。 */
+  setFader(name: string, value: number): void {
+    this.faders[name] = value;
+    this.graph?.setFader(name, value);
   }
 
   /** いま曲のどこか（0〜1）。鳴っていなければ null。 */

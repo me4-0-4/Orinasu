@@ -5,8 +5,8 @@ import { BuildCache } from "../mix/buildCache";
 import {
   applySeeds,
   buildStems,
-  faderOf,
   mixdown,
+  songFaders,
   collectSources,
   hasDrums,
   pickDrum,
@@ -428,11 +428,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
             return Math.abs(v - 1) < 1e-9 ? rest : { ...rest, volume: v };
           });
         } else if (kind === "bed") {
-          song.params.bedVolume = v;
-          changed();
+          setChannelParam("bedVolume", v);
         } else {
-          song.params.pad = v;
-          changed();
+          setChannelParam("pad", v);
         }
       });
       vol.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
@@ -695,10 +693,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     knob({
       label: "音量",
       get: () => song.params.bedVolume,
-      set: (v) => {
-        song.params.bedVolume = v;
-        changed();
-      },
+      set: (v) => setChannelParam("bedVolume", v),
     }),
   );
   const pumpKnob = reg(
@@ -718,10 +713,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     knob({
       label: "効果音",
       get: () => song.params.sfx,
-      set: (v) => {
-        song.params.sfx = v;
-        changed();
-      },
+      set: (v) => setChannelParam("sfx", v),
       hint: () => "8小節ごとにライザーとインパクト・クラッシュ、4小節ごとにリバースシンバル",
     }),
   );
@@ -729,10 +721,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     knob({
       label: "パッド",
       get: () => song.params.pad,
-      set: (v) => {
-        song.params.pad = v;
-        changed();
-      },
+      set: (v) => setChannelParam("pad", v),
       hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らし続ける（断片の間をつなぐ）",
     }),
   );
@@ -962,20 +951,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       },
     }),
   );
-  const bedVol = reg(knob({ label: "音量", get: () => song.params.bedVolume, set: (v) => {
-    song.params.bedVolume = v;
-    changed();
-  } }));
+  const bedVol = reg(knob({ label: "音量", get: () => song.params.bedVolume, set: (v) => setChannelParam("bedVolume", v) }));
   const bedPump = reg(knob({ label: "サイドチェイン", get: () => song.params.pump, set: (v) => {
     song.params.pump = v;
     changed();
   }, hint: () => "このキックに合わせて、刻んだ音とパッドを沈ませる" }));
   bedGroup.append(bedDrum.el, bedVol.el, bedPump.el);
   const padGroup = el("div", "ins-group");
-  const padAmount = reg(knob({ label: "量", get: () => song.params.pad, set: (v) => {
-    song.params.pad = v;
-    changed();
-  }, hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らす" }));
+  const padAmount = reg(knob({ label: "量", get: () => song.params.pad, set: (v) => setChannelParam("pad", v), hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らす" }));
   padGroup.append(padAmount.el);
   const fxSummary = el("div", "ins-fx");
   const fxList = el("div", "ins-fx-list");
@@ -1164,17 +1147,29 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     deps.onSongChange(song);
   }
 
-  /** 層ごとのフェーダー（ミュート＝0、ふだんは音量）。いまの曲の設定から。 */
-  const currentFaders = (): Record<string, number> => Object.fromEntries((song.lanes ?? []).map((l) => [l.phraseId, faderOf(l)]));
+  /** 全部のフェーダー（層のミュート・音量、ドラムループ・パッド・効果音の量）。いまの曲の設定から。 */
+  const currentFaders = (): Record<string, number> => songFaders(song);
 
-  /** ミュート・音量を変える：ミキサーなら、フェーダーを動かすだけ（作り直さない）。ミキサーで鳴らせない曲は、作り直す。 */
-  function updateFader(key: string, fn: (lane: Lane) => Lane): void {
-    updateLane(key, fn, false);
+  /** フェーダーの値を、ミキサーに伝える。ミキサーで鳴らせない曲は、作り直す。 */
+  function applyFaders(): void {
     if (live) {
-      for (const l of song.lanes ?? []) mixer.setFader(l.phraseId, faderOf(l));
+      for (const [name, value] of Object.entries(currentFaders())) mixer.setFader(name, value);
     } else {
       scheduleRebuild();
     }
+  }
+
+  /** ミュート・音量を変える：ミキサーなら、フェーダーを動かすだけ（作り直さない）。 */
+  function updateFader(key: string, fn: (lane: Lane) => Lane): void {
+    updateLane(key, fn, false);
+    applyFaders();
+  }
+
+  /** ドラムループの音量・パッドの量・効果音の量を変える（作り直さない）。 */
+  function setChannelParam(name: "bedVolume" | "pad" | "sfx", value: number): void {
+    song.params[name] = value;
+    changed(false);
+    applyFaders();
   }
 
   /** ステムを、いまのフェーダーでミックスダウンした波形（書き出しの音。同じ曲・同じフェーダーなら使い回す）。 */
@@ -1396,7 +1391,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       rows.push({ ...base, type: "track", key: "bed", kind: "bed", name: res.bed.name, events: res.bed.events, selected: sel.type === "track" && sel.key === "bed" });
       envRows("bed");
     }
-    if (res && song.params.pad > 0) {
+    if (res && res.stems.some((s) => s.kind === "pad")) {
       rows.push({ ...base, type: "track", key: "pad", kind: "pad", name: "パッド", events: [], selected: sel.type === "track" && sel.key === "pad" });
       envRows("pad");
     }

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
-import { applySeeds, bedEvents, buildCollage, buildStems, collectSources, faderOf, mixdown, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
+import { applySeeds, bedEvents, buildCollage, buildStems, collectSources, faderOf, mixdown, songFaders, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
 import { newGroup } from "./groups.ts";
@@ -313,7 +313,9 @@ test("ステム：トラックごと（伸ばしも曲ごと）。ミュート�
   assert.deepEqual(set.stems.filter((s) => s.kind === "track").map((s) => s.phraseId), ["a", "b", "c"]);
   assert.ok(set.stems.some((s) => s.kind === "bed") && set.stems.some((s) => s.kind === "sfx"));
   assert.ok(set.stems.filter((s) => s.kind === "pad").every((s) => s.phraseId !== undefined));
-  assert.deepEqual(set.faders, { a: 1, b: 1, c: 1 });
+  assert.deepEqual(set.faders, songFaders(song));
+  assert.deepEqual([set.faders.a, set.faders.b, set.faders.c], [1, 1, 1]);
+  assert.deepEqual(Object.keys(set.faders).filter((k) => k.startsWith("@")).sort(), ["@bed", "@pad", "@sfx"]);
   assert.equal(new Set(set.stems.map((s) => s.pcm.l.length)).size, 1, "全部同じ長さ（くり返すとき、ずれない）");
 
   // 最初からミュート／音量を設定した曲と、ステムにフェーダーを掛けた結果は、同じ
@@ -321,14 +323,38 @@ test("ステム：トラックごと（伸ばしも曲ごと）。ミュート�
   muted.lanes![1].muted = true;
   muted.lanes![2].volume = 0.4;
   const direct = (await buildCollage(muted, phrases, steadyRender, sr))!;
-  const viaFaders = await mixdown(set, undefined, { a: 1, b: 0, c: 0.4 });
+  const viaFaders = await mixdown(set, undefined, { ...set.faders, a: 1, b: 0, c: 0.4 });
   assert.equal(viaFaders.l.length, direct.pcm.l.length);
   let max = 0;
   for (let i = 0; i < viaFaders.l.length; i++) max = Math.max(max, Math.abs(viaFaders.l[i] - direct.pcm.l[i]));
   assert.ok(max < 1e-6, `差 ${max}`);
 
   // 全部ミュートしても、下地と効果音は残る。フェーダーが1のものだけで足している
-  const bedAndSfx = sumStems(set, { a: 0, b: 0, c: 0 });
+  const bedAndSfx = sumStems(set, { ...set.faders, a: 0, b: 0, c: 0 });
   assert.ok(bedAndSfx.l.some((x) => x !== 0));
   assert.deepEqual([faderOf({}), faderOf({ muted: true, volume: 2 }), faderOf({ volume: 0.5 })], [1, 0, 0.5]);
+});
+
+test("チャンネルのフェーダー：ドラムループの音量・パッドの量・効果音の量は、作り直さなくても、最初から設定した曲と同じ音になる。0なら、そのぶんは鳴らない", async () => {
+  const phrases = [drumPhrase("a"), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], lengthBars: 8, bpm: 120 };
+  song.params = { ...song.params, pad: 0.5, sfx: 0.6, bedVolume: 1 };
+  song.lanes = syncLanes(song, seq);
+  const sr = 2000;
+  const set = (await buildStems(song, phrases, steadyRender, sr))!;
+  const tweaked = structuredClone(song);
+  tweaked.params = { ...tweaked.params, pad: 0.2, sfx: 0.1, bedVolume: 0.3 };
+  const direct = (await buildCollage(tweaked, phrases, steadyRender, sr))!;
+  const via = await mixdown(set, undefined, songFaders(tweaked));
+  let max = 0;
+  for (let i = 0; i < via.l.length; i++) max = Math.max(max, Math.abs(via.l[i] - direct.pcm.l[i]));
+  assert.ok(max < 1e-6, `差 ${max}`);
+  // 0にすれば、ステムは足されない
+  const off = sumStems(set, { ...set.faders, "@bed": 0, "@pad": 0, "@sfx": 0, a: 0, b: 0 });
+  assert.ok(off.l.every((x) => x === 0));
+  // パッド・効果音・ドラムループを 0 から上げても、作り直さずに鳴る（量0のときも、ステムは作ってある）
+  const zero = structuredClone(song);
+  zero.params = { ...zero.params, pad: 0, sfx: 0 };
+  const zeroSet = (await buildStems(zero, phrases, steadyRender, sr))!;
+  assert.ok(zeroSet.stems.some((s) => s.kind === "sfx") && zeroSet.stems.some((s) => s.kind === "bed"));
 });

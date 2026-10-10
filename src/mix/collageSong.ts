@@ -118,6 +118,8 @@ export interface Stem {
   kind: "track" | "pad" | "bed" | "sfx";
   /** track・pad：どの層のものか（層の曲の id）。この層のフェーダー（ミュート・音量）が掛かる。 */
   phraseId?: string;
+  /** pad・bed・sfx：そのチャンネルのフェーダー（パッドの量・ドラムループの音量・効果音の量）も掛かる。 */
+  channel?: "pad" | "bed" | "sfx";
   pcm: Pcm;
 }
 
@@ -139,6 +141,26 @@ export interface StemSet {
 
 /** 層のフェーダー：ミュートなら0、そうでなければ音量（無ければ1）。 */
 export const faderOf = (lane: Pick<Lane, "muted" | "volume">): number => (lane.muted ? 0 : (lane.volume ?? 1));
+
+/** フェーダーの名前：層は曲の id、そのほかのチャンネルは @ をつけた名前。 */
+export const CHANNEL_FADERS = { bed: "@bed", pad: "@pad", sfx: "@sfx" } as const;
+
+/** 曲の設定から、全部のフェーダーの値（層ごとの音量・ミュートと、ドラムループ・パッド・効果音の量）。 */
+export function songFaders(song: Pick<Song, "lanes" | "params">): Record<string, number> {
+  return {
+    ...Object.fromEntries((song.lanes ?? []).map((l) => [l.phraseId, faderOf(l)])),
+    [CHANNEL_FADERS.bed]: song.params.bedVolume,
+    [CHANNEL_FADERS.pad]: song.params.pad,
+    [CHANNEL_FADERS.sfx]: song.params.sfx,
+  };
+}
+
+/** 1つのステムに掛かるフェーダーの値：層のフェーダー × チャンネルのフェーダー。 */
+export function stemFader(stem: Pick<Stem, "phraseId" | "channel">, faders: Record<string, number>): number {
+  const lane = stem.phraseId !== undefined ? (faders[stem.phraseId] ?? 1) : 1;
+  const channel = stem.channel ? (faders[CHANNEL_FADERS[stem.channel]] ?? 1) : 1;
+  return lane * channel;
+}
 
 export interface RenderOpts {
   dry: boolean;
@@ -356,44 +378,46 @@ export async function buildStems(
   // 仕上げ（つなぎ）の偶然は、いちばん上の層の種から（刻み直すと変わり、形のつまみでは変わらない）
   const glueSeed = lanes[0].cutSeed;
   // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）。曲（トラック）ごとのステムにして、その層のフェーダーに従わせる
-  if (song.params.pad > 0) {
-    const padKey = JSON.stringify([built.map((b) => [cache ? cache.idOf(b.pad.pcm) : 0, b.pad.srcBars, b.pad.keyShift]), song.params.pad, glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm, pumpKey]);
+  // 量（パッドの量）は掛け算だけなので、いちばん大きい量で作って、ミキサーのフェーダー（@pad）で下げる
+  {
+    const padKey = JSON.stringify([built.map((b) => [cache ? cache.idOf(b.pad.pcm) : 0, b.pad.srcBars, b.pad.keyShift]), glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm, pumpKey]);
     const pads = await cached(`pad|${padKey}`, async () => {
-      const raw = renderPadStems(built.map((b) => b.pad), grid, song.params.pad, createRng(glueSeed ^ 0x51ed270b));
+      const raw = renderPadStems(built.map((b) => b.pad), grid, 1, createRng(glueSeed ^ 0x51ed270b));
       const out: Pcm[] = [];
       for (const r of raw) out.push(pumped(fxOn(song.fx.pad) ? await applyTrack(r, song.fx.pad, fxEnv!) : r));
       return out;
     });
     // 偶然で一度も選ばれなかった曲の伸ばしは、無音なので入れない（メモリの節約）
     built.forEach((b, i) => {
-      if (pads[i].l.some((x) => x !== 0)) stems.push({ id: `pad:${b.view.phraseId}`, kind: "pad", phraseId: b.view.phraseId, pcm: pads[i] });
+      if (pads[i].l.some((x) => x !== 0)) stems.push({ id: `pad:${b.view.phraseId}`, kind: "pad", phraseId: b.view.phraseId, channel: "pad", pcm: pads[i] });
     });
   }
   // 下地：選んだ曲のドラムだけを、刻まずに鳴らしっぱなし（ノリの軸になる）
   let bed: StemSet["bed"] = null;
   if (drumPhrase) {
     const bedPcm = await render(drumPhrase, song.bpm, { dry: song.params.dry, drumsOnly: true, swing });
-    const bedGain = BED_GAIN * song.params.bedVolume;
-    if (bedGain > 0) {
-      const bedKey = JSON.stringify([cache ? cache.idOf(bedPcm) : 0, bedGain, fxOn(song.fx.bed) ? song.fx.bed : null, collageOpts, song.bpm]);
+    // 音量（ドラムループの音量）は、ミキサーのフェーダー（@bed）で掛ける
+    {
+      const bedKey = JSON.stringify([cache ? cache.idOf(bedPcm) : 0, fxOn(song.fx.bed) ? song.fx.bed : null, collageOpts, song.bpm]);
       const bedStem = await cached(`bed|${bedKey}`, async () => {
         // 下地は1周ぶんの波形なので、曲の長さに並べてから掛ける（「いつ掛けるか」が曲の位置で決まるように）
         const full = renderCollage([], collageOpts);
-        layBed(full, bedPcm, bedGain);
+        layBed(full, bedPcm, BED_GAIN);
         return fxOn(song.fx.bed) ? await applyTrack(full, song.fx.bed, fxEnv!) : full;
       });
-      stems.push({ id: "bed", kind: "bed", pcm: bedStem });
+      stems.push({ id: "bed", kind: "bed", channel: "bed", pcm: bedStem });
     }
     bed = { phraseId: drumPhrase.id, name: `${drumPhrase.name}のドラム`, events: bedEvents(drumPhrase, totalSteps) };
   }
   // SFX：区切りを聞かせる（8小節ごとのライザー・インパクト、4小節ごとのリバースシンバル）
-  if (song.params.sfx > 0) {
-    const sfx = await cached(`sfx|${JSON.stringify([grid, song.params.sfx, glueSeed])}`, () => {
+  // 量（効果音の量）は掛け算だけなので、いちばん大きい量で作って、フェーダー（@sfx）で下げる
+  {
+    const sfx = await cached(`sfx|${JSON.stringify([grid, glueSeed])}`, () => {
       const out = renderCollage([], collageOpts);
-      addSfx(out, grid, song.params.sfx, createRng(glueSeed ^ 0x2f6b8a1d));
+      addSfx(out, grid, 1, createRng(glueSeed ^ 0x2f6b8a1d));
       return out;
     });
-    stems.push({ id: "sfx", kind: "sfx", pcm: sfx });
+    stems.push({ id: "sfx", kind: "sfx", channel: "sfx", pcm: sfx });
   }
   return {
     stems,
@@ -404,7 +428,7 @@ export async function buildStems(
     sampleRate,
     bpm: song.bpm,
     stepSamples,
-    faders: Object.fromEntries(lanes.map((l) => [l.phraseId, faderOf(l)])),
+    faders: songFaders({ lanes, params: song.params }),
     masterFx: song.fx.master,
   };
 }
@@ -414,7 +438,7 @@ export function sumStems(set: StemSet, faders: Record<string, number> = set.fade
   const n = set.stems[0]?.pcm.l.length ?? 1;
   const out: Pcm = { l: new Float32Array(n), r: new Float32Array(n) };
   for (const s of set.stems) {
-    const g = s.phraseId !== undefined ? (faders[s.phraseId] ?? 1) : 1;
+    const g = stemFader(s, faders);
     if (g <= 0) continue;
     for (let i = 0; i < n; i++) {
       out.l[i] += s.pcm.l[i] * g;
