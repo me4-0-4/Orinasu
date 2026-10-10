@@ -6,6 +6,7 @@ import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum
 import { createEmptySong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
 import { newGroup } from "./groups.ts";
+import { BuildCache } from "./buildCache.ts";
 import { transposeSemitones } from "./keySync.ts";
 import type { Pcm } from "./pcm.ts";
 
@@ -246,4 +247,54 @@ test("テイクFX：短く作っても、曲全体で作ったのと同じ位置
   let diff = 0;
   for (let i = 0; i < base.pcm.l.length; i++) diff = Math.max(diff, Math.abs(base.pcm.l[i] - withTake.pcm.l[i]));
   assert.ok(diff < 1e-3, `違い ${diff}`);
+});
+
+test("使い回し：同じ入力なら前と同じ波形。ミュートしても、変わっていないトラックは作り直さない", async () => {
+  const phrases = [phrase("a", 100), phrase("b", 120, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], bpm: 120, lengthBars: 4 };
+  song.lanes = syncLanes(song, seq);
+  song.lanes[1] = { ...song.lanes[1], fx: { chain: [newPlugin("drive", { amount: 0.5 })], envelopes: [] } };
+  const sr = 2000;
+  const pcms = new Map<string, Pcm>();
+  const render = async (p: Phrase, bpm: number): Promise<Pcm> => {
+    const key = `${p.id}|${bpm}`;
+    if (!pcms.has(key)) {
+      const len = Math.round((16 * 60 * sr) / bpm);
+      const l = new Float32Array(len).map((_, i) => (i % 400 < 20 ? 0.5 : 0.01));
+      pcms.set(key, { l, r: l.slice() });
+    }
+    return pcms.get(key)!;
+  };
+  const reverb = async (pcm: Pcm): Promise<Pcm> => pcm;
+  const cache = new BuildCache();
+  const plain = (await buildCollage(song, phrases, render, sr, reverb))!;
+  const first = (await buildCollage(song, phrases, render, sr, reverb, cache))!;
+  const again = (await buildCollage(song, phrases, render, sr, reverb, cache))!;
+  assert.deepEqual(first.pcm.l, plain.pcm.l, "使い回しの有無で、結果は同じ");
+  assert.deepEqual(again.pcm.l, first.pcm.l);
+  const sizeBefore = cache.size;
+  const muted = structuredClone(song);
+  muted.lanes![0].muted = true;
+  const viaCache = (await buildCollage(muted, phrases, render, sr, reverb, cache))!;
+  const direct = (await buildCollage(muted, phrases, render, sr, reverb))!;
+  assert.deepEqual(viaCache.pcm.l, direct.pcm.l, "ミュートしても、使い回しの有無で結果は同じ");
+  assert.ok(cache.size >= sizeBefore);
+});
+
+test("使い回しの入れ物：上限を超えたら古いものから捨てる。使ったものは残る", async () => {
+  const cache = new BuildCache(2);
+  let made = 0;
+  const make = (v: number) => () => {
+    made++;
+    return v;
+  };
+  await cache.getOrCompute("a", make(1));
+  await cache.getOrCompute("b", make(2));
+  await cache.getOrCompute("a", make(1)); // a を使った（新しい側へ）
+  await cache.getOrCompute("c", make(3)); // b が捨てられる
+  assert.equal(made, 3);
+  await cache.getOrCompute("a", make(1));
+  assert.equal(made, 3);
+  await cache.getOrCompute("b", make(2));
+  assert.equal(made, 4);
 });

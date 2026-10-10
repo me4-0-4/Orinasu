@@ -1,5 +1,6 @@
 import { LoopPlayer } from "../audio/loopPlayer";
 import { encodeWav } from "../audio/wav";
+import { BuildCache } from "../mix/buildCache";
 import {
   applySeeds,
   buildCollage,
@@ -110,6 +111,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const redoStack: SeedSnapshot[] = [];
   /** 最後に作ったときの、トラックの曲の更新時刻（フレーズを直したら作り直すため）。 */
   let builtStamps = "";
+  /** 曲を作り直すとき、前と同じ入力のトラックの波形を使い回す（ミュートなどで、変わっていないトラックを作り直さない）。 */
+  const buildCache = new BuildCache();
   let sel: Selection = { type: "song" };
   let busy = "";
   const renderCache = new Map<string, Promise<Pcm>>();
@@ -1193,7 +1196,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     busy = "作っています…";
     refresh();
     try {
-      const out = await buildCollage(song, deps.getPhrases(), render, sampleRate, deps.reverb);
+      const out = await buildCollage(song, deps.getPhrases(), render, sampleRate, deps.reverb, buildCache);
       if (token !== buildToken) return;
       result = out;
       builtStamps = stampsOf(song.lanes ?? []);

@@ -31,6 +31,9 @@ export const MASTER_BUS_DEFAULTS: MasterBusOptions = {
   limiterReleaseMs: 90,
 };
 
+/** コンプの計算を何サンプルごとにするか（0.4ミリ秒ほど。アタック・リリースよりずっと短い）。 */
+const BLOCK = 16;
+
 const toDb = (x: number): number => 20 * Math.log10(Math.max(x, 1e-9));
 const fromDb = (db: number): number => Math.pow(10, db / 20);
 
@@ -57,19 +60,29 @@ export function masterBus(pcm: Pcm, sampleRate: number, opts: Partial<MasterBusO
   const r = new Float32Array(n);
   if (n === 0) return { l, r };
 
-  // 1. コンプ：左右の大きい方を見て、同じだけ下げる（定位がずれないように）
-  const atk = Math.exp(-1 / ((o.attackMs / 1000) * sampleRate));
-  const rel = Math.exp(-1 / ((o.releaseMs / 1000) * sampleRate));
+  // 1. コンプ：左右の大きい方を見て、同じだけ下げる（定位がずれないように）。
+  //    重い計算（対数・べき乗）は、BLOCK サンプルごとに1回だけ。間は、音量をなめらかにつなぐ
+  const atk = Math.exp(-BLOCK / ((o.attackMs / 1000) * sampleRate));
+  const rel = Math.exp(-BLOCK / ((o.releaseMs / 1000) * sampleRate));
   const makeup = fromDb(o.makeupDb);
   let reduction = 0; // いま下げている量（dB、0以下）
-  for (let i = 0; i < n; i++) {
-    const target = compressorReductionDb(toDb(Math.max(Math.abs(pcm.l[i]), Math.abs(pcm.r[i]))), o);
+  let gain = makeup;
+  for (let s = 0; s < n; s += BLOCK) {
+    const e = Math.min(n, s + BLOCK);
+    let peak = 0;
+    for (let i = s; i < e; i++) peak = Math.max(peak, Math.abs(pcm.l[i]), Math.abs(pcm.r[i]));
+    const target = peak > 0 ? compressorReductionDb(toDb(peak), o) : 0;
     // 下げる方向は attack、戻る方向は release
     const k = target < reduction ? atk : rel;
     reduction = k * reduction + (1 - k) * target;
-    const g = fromDb(reduction) * makeup;
-    l[i] = pcm.l[i] * g;
-    r[i] = pcm.r[i] * g;
+    const next = fromDb(reduction) * makeup;
+    const step = (next - gain) / (e - s);
+    for (let i = s; i < e; i++) {
+      gain += step;
+      l[i] = pcm.l[i] * gain;
+      r[i] = pcm.r[i] * gain;
+    }
+    gain = next;
   }
 
   // 2. リミッター：上限を超える所の必要な下げ幅を先読みし、前後になだらかに下げる
