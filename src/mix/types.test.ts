@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, laneIsCustom, formatDuration, migrateSong, songSeconds, type Lane } from "./types.ts";
+import {
+  SONG_ID,
+  createEmptySong,
+  formatDuration,
+  isSavedSongId,
+  laneIsCustom,
+  migrateSong,
+  openedSong,
+  sameSongContent,
+  snapshotSong,
+  songSeconds,
+  type Lane,
+} from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
@@ -143,4 +155,29 @@ test("層の組み方：初期は「混ぜる」。古い掛け合い・交代�
   assert.equal(createEmptySong().params.turns, "mix");
   assert.equal(migrateSong({ params: { turns: "call" } }).params.turns, "call");
   assert.equal(migrateSong({ params: { turns: "mix" } }).params.turns, "mix");
+});
+
+test("保存した曲：写しは作業中の曲と中身が同じで、idと更新時刻だけ違う", () => {
+  const song = createEmptySong();
+  song.name = "テスト";
+  song.lanes = [{ phraseId: "p1", cutSeed: 1, rhythmSeed: 2, orderSeed: 3 }];
+  song.savedId = "saved_x_1";
+  const saved = snapshotSong(song, "saved_a_1", 123);
+  assert.equal(saved.id, "saved_a_1");
+  assert.equal(saved.updatedAt, 123);
+  assert.equal(saved.savedId, undefined);
+  assert.ok(isSavedSongId(saved.id));
+  assert.ok(sameSongContent(saved, song));
+  // 写しを直しても、元は変わらない
+  saved.lanes![0].cutSeed = 99;
+  assert.equal(song.lanes[0].cutSeed, 1);
+  assert.ok(!sameSongContent(saved, song));
+  // 開くと、作業中のid・どの保存した曲かが付く
+  const opened = openedSong(saved);
+  assert.equal(opened.id, SONG_ID);
+  assert.equal(opened.savedId, "saved_a_1");
+  assert.ok(sameSongContent(opened, saved));
+  // 読み込みで savedId は残るが、保存した曲のid以外は捨てる
+  assert.equal(migrateSong(opened).savedId, "saved_a_1");
+  assert.equal(migrateSong({ ...opened, savedId: "song" }).savedId, undefined);
 });

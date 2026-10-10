@@ -54,6 +54,8 @@ import {
   savePhrase,
   deletePhrase,
   loadUserPresets,
+  deleteSong,
+  loadSavedSongs,
   loadSong,
   saveSong,
   saveUserPreset,
@@ -265,6 +267,10 @@ document.addEventListener("visibilitychange", () => {
 const mixPanel = buildMixPanel({
   getPhrases: () => savedPhrases,
   onSongChange: persistSongSoon,
+  // 保存した曲は、読むときに今の形へ直す（migrateSong は id を作業中の曲にするので、保存時の id を戻す）
+  listSavedSongs: async () => (await loadSavedSongs()).map((raw) => ({ ...migrateSong(raw), id: raw.id })),
+  putSavedSong: saveSong,
+  deleteSavedSong: deleteSong,
   prepareAudio: async () => {
     await ensureAudio();
     stopPreview();
@@ -1175,6 +1181,7 @@ initCloud({
   onSynced: () => {
     void reloadPhraseList();
     void reloadUserPresets();
+    mixPanel.refreshLibrary();
   },
   // 別のアカウントに切り替えて端末のデータを消したら、刻む曲も空にする（前の人の曲を新しい人の所に保存しない）
   onCleared: () => {
