@@ -145,13 +145,25 @@ export const faderOf = (lane: Pick<Lane, "muted" | "volume">): number => (lane.m
 /** フェーダーの名前：層は曲の id、そのほかのチャンネルは @ をつけた名前。 */
 export const CHANNEL_FADERS = { bed: "@bed", pad: "@pad", sfx: "@sfx" } as const;
 
-/** 曲の設定から、全部のフェーダーの値（層ごとの音量・ミュートと、ドラムループ・パッド・効果音の量）。 */
-export function songFaders(song: Pick<Song, "lanes" | "params">): Record<string, number> {
+/**
+ * ソロ（その場だけの状態で、曲には保存しない）：ソロの層と、ドラムループ。
+ * 何かがソロのとき、ソロのもの以外は鳴らない（ミュート中でも、ソロにすれば鳴る）。効果音は、ソロのときは鳴らない。
+ */
+export interface SoloState {
+  lanes: ReadonlySet<string>;
+  bed: boolean;
+}
+
+/** 曲の設定から、全部のフェーダーの値（層ごとの音量・ミュート・ソロと、ドラムループ・パッド・効果音の量）。 */
+export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted">, solo?: SoloState): Record<string, number> {
+  const anySolo = !!solo && (solo.lanes.size > 0 || solo.bed);
+  const laneValue = (l: Lane): number => (solo?.lanes.has(l.phraseId) ? (l.volume ?? 1) : anySolo ? 0 : faderOf(l));
+  const bedAudible = solo?.bed || (!anySolo && !song.bedMuted);
   return {
-    ...Object.fromEntries((song.lanes ?? []).map((l) => [l.phraseId, faderOf(l)])),
-    [CHANNEL_FADERS.bed]: song.params.bedVolume,
+    ...Object.fromEntries((song.lanes ?? []).map((l) => [l.phraseId, laneValue(l)])),
+    [CHANNEL_FADERS.bed]: bedAudible ? song.params.bedVolume : 0,
     [CHANNEL_FADERS.pad]: song.params.pad,
-    [CHANNEL_FADERS.sfx]: song.params.sfx,
+    [CHANNEL_FADERS.sfx]: anySolo ? 0 : song.params.sfx,
   };
 }
 
@@ -428,7 +440,7 @@ export async function buildStems(
     sampleRate,
     bpm: song.bpm,
     stepSamples,
-    faders: songFaders({ lanes, params: song.params }),
+    faders: songFaders({ lanes, params: song.params, bedMuted: song.bedMuted }),
     masterFx: song.fx.master,
   };
 }

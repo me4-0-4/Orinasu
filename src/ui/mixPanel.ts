@@ -5,6 +5,7 @@ import { BuildCache } from "../mix/buildCache";
 import {
   applySeeds,
   buildStems,
+  CHANNEL_FADERS,
   mixdown,
   songFaders,
   collectSources,
@@ -404,14 +405,21 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     });
     box.appendChild(name);
     let mute: HTMLButtonElement | null = null;
+    let soloButton: HTMLButtonElement | null = null;
     if (kind === "lane") {
       mute = button("M", () => {
         const lane = laneOfKey(key);
         if (!lane) return;
         updateFader(key, (l) => ({ ...l, muted: !l.muted }));
       }, "arr-btn arr-mute", "ミュート");
-      box.appendChild(mute);
+    } else if (kind === "bed") {
+      mute = button("M", () => toggleBedMute(), "arr-btn arr-mute", "ミュート（音量はそのまま残る）");
     }
+    if (kind === "lane" || kind === "bed") {
+      soloButton = button("S", () => toggleSolo(key), "arr-btn arr-solo", "ソロ（これだけ鳴らす。ミュート中でも鳴る。曲には保存しない）");
+    }
+    if (mute) box.appendChild(mute);
+    if (soloButton) box.appendChild(soloButton);
     let vol: HTMLInputElement | null = null;
     if (kind !== "master") {
       vol = el("input", "arr-vol");
@@ -444,11 +452,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       const lane = laneOfKey(key);
       const selected = (sel.type === "track" && sel.key === key) || (sel.type === "hit" && sel.track === key);
       box.classList.toggle("selected", selected);
-      box.classList.toggle("muted", !!lane?.muted);
+      const faders = currentFaders();
+      box.classList.toggle("muted", kind === "lane" ? faders[lane?.phraseId ?? ""] === 0 : kind === "bed" ? faders[CHANNEL_FADERS.bed] === 0 : false);
       // ヘッダーは短い名前（ドラムループの元のフレーズは、乗せたときの説明とインスペクタで）
       name.textContent = `${lane?.locked ? "🔒 " : ""}${kind === "bed" ? "ドラムループ" : trackName(key)}`;
       name.title = `${trackName(key)}（タップで選ぶ）`;
-      if (mute) mute.classList.toggle("on", !!lane?.muted);
+      if (mute) mute.classList.toggle("on", kind === "bed" ? !!song.bedMuted : !!lane?.muted);
+      if (soloButton) soloButton.classList.toggle("on", kind === "bed" ? solo.bed : !!lane && solo.lanes.has(lane.phraseId));
       if (vol && document.activeElement !== vol) {
         vol.value = String(kind === "lane" ? (lane?.volume ?? 1) : kind === "bed" ? song.params.bedVolume : song.params.pad);
       }
@@ -879,8 +889,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     "preset-button",
     "このトラックのずらし・切り方・音量・ミュート・FX・テイクFXを消して、全体と同じにする",
   );
+  const soloInspect = button("ソロ", () => sel.type === "track" && toggleSolo(sel.key), "preset-button", "このトラックだけ鳴らす（曲には保存しない）");
   const laneButtons = el("div", "preset-row");
-  laneButtons.append(lockButton, muteButton, resetButton);
+  laneButtons.append(lockButton, muteButton, soloInspect, resetButton);
   const selLane = (): Lane | undefined => (sel.type === "track" ? laneOfKey(sel.key) : undefined);
   const laneVolume = reg(
     knob({
@@ -1147,8 +1158,32 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     deps.onSongChange(song);
   }
 
-  /** 全部のフェーダー（層のミュート・音量、ドラムループ・パッド・効果音の量）。いまの曲の設定から。 */
-  const currentFaders = (): Record<string, number> => songFaders(song);
+  /** ソロ（その場だけの状態。曲には保存しない）。 */
+  const solo: { lanes: Set<string>; bed: boolean } = { lanes: new Set(), bed: false };
+  /** 全部のフェーダー（層のミュート・音量・ソロ、ドラムループ・パッド・効果音の量）。いまの曲の設定から。 */
+  const currentFaders = (withSolo = true): Record<string, number> => songFaders(song, withSolo ? solo : undefined);
+
+  /** ソロを入れる／切る（ドラムループは key = "bed"）。 */
+  function toggleSolo(key: string): void {
+    if (key === "bed") {
+      solo.bed = !solo.bed;
+    } else {
+      const lane = laneOfKey(key);
+      if (!lane) return;
+      if (solo.lanes.has(lane.phraseId)) solo.lanes.delete(lane.phraseId);
+      else solo.lanes.add(lane.phraseId);
+    }
+    refresh();
+    applyFaders();
+  }
+
+  /** ドラムループのミュート（音量はそのまま残る）。 */
+  function toggleBedMute(): void {
+    if (song.bedMuted) delete song.bedMuted;
+    else song.bedMuted = true;
+    changed(false);
+    applyFaders();
+  }
 
   /** フェーダーの値を、ミキサーに伝える。ミキサーで鳴らせない曲は、作り直す。 */
   function applyFaders(): void {
@@ -1172,13 +1207,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     applyFaders();
   }
 
-  /** ステムを、いまのフェーダーでミックスダウンした波形（書き出しの音。同じ曲・同じフェーダーなら使い回す）。 */
+  /** ステムを、いまのフェーダーでミックスダウンした波形（同じ曲・同じフェーダーなら使い回す）。書き出しはソロを無視して全体を書き出す（withSolo = false）。 */
   let mixdownCache: { set: StemSet; key: string; pcm: Promise<Pcm> } | null = null;
-  function mixdownNow(): Promise<Pcm> {
+  function mixdownNow(withSolo = true): Promise<Pcm> {
     const set = result!;
-    const key = JSON.stringify(currentFaders());
+    const faders = currentFaders(withSolo);
+    const key = JSON.stringify(faders);
     if (mixdownCache && mixdownCache.set === set && mixdownCache.key === key) return mixdownCache.pcm;
-    const pcm = mixdown(set, deps.reverb, currentFaders());
+    const pcm = mixdown(set, deps.reverb, faders);
     mixdownCache = { set, key, pcm };
     return pcm;
   }
@@ -1234,7 +1270,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       result = out;
       builtStamps = stampsOf(song.lanes ?? []);
       setNotice(out ? "" : "刻むフレーズが見つからない。右の「素材」で選び直して");
-      live = out ? await mixer.load(out) : false;
+      live = out ? await mixer.load(out, currentFaders()) : false;
       if (token !== buildToken) return;
       // 鳴らしていれば、同じ位置から続ける
       const was = progressNow();
@@ -1337,7 +1373,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     busy = "書き出しています…";
     refresh();
     try {
-      const pcm = await mixdownNow();
+      const pcm = await mixdownNow(false);
       const bytes = encodeWav(repeatPcm(pcm, Number(loopSelect.value)), sampleRate);
       const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
       const a = document.createElement("a");
@@ -1509,6 +1545,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         lockButton.classList.toggle("on", !!lane.locked);
         muteButton.textContent = lane.muted ? "ミュート中" : "ミュート";
         muteButton.classList.toggle("on", !!lane.muted);
+        soloInspect.textContent = solo.lanes.has(lane.phraseId) ? "ソロ中" : "ソロ";
+        soloInspect.classList.toggle("on", solo.lanes.has(lane.phraseId));
         resetButton.disabled = !laneIsCustom(lane);
         show(laneCut, !music);
         const mixing = music && song.params.turns === "mix" && playingLanes > 1;
@@ -1620,6 +1658,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       buildToken++;
       result = null;
       live = false;
+      solo.lanes.clear();
+      solo.bed = false;
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;

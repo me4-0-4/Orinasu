@@ -358,3 +358,30 @@ test("チャンネルのフェーダー：ドラムループの音量・パッ�
   const zeroSet = (await buildStems(zero, phrases, steadyRender, sr))!;
   assert.ok(zeroSet.stems.some((s) => s.kind === "sfx") && zeroSet.stems.some((s) => s.kind === "bed"));
 });
+
+test("ソロ：ソロのものだけ鳴る（ミュート中でも）。ソロのとき、ほかの層・ドラムループ・効果音は止まる。ドラムループのミュートは音量を残す", () => {
+  const song = {
+    params: { ...createEmptySong().params, bedVolume: 0.8, sfx: 0.6, pad: 0.5 },
+    lanes: [
+      { phraseId: "a", cutSeed: 1, rhythmSeed: 1, orderSeed: 1, volume: 0.5 },
+      { phraseId: "b", cutSeed: 2, rhythmSeed: 2, orderSeed: 2, muted: true },
+      { phraseId: "c", cutSeed: 3, rhythmSeed: 3, orderSeed: 3 },
+    ],
+  };
+  // ソロなし：ミュートと音量のとおり
+  assert.deepEqual(songFaders(song), { a: 0.5, b: 0, c: 1, "@bed": 0.8, "@pad": 0.5, "@sfx": 0.6 });
+  // aだけソロ：ほかは止まる。ドラムループと効果音も止まる。パッドの量はそのまま（パッドは層のフェーダーに従う）
+  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: false }), { a: 0.5, b: 0, c: 0, "@bed": 0, "@pad": 0.5, "@sfx": 0 });
+  // ミュート中のbをソロにすると鳴る（音量1）
+  assert.equal(songFaders(song, { lanes: new Set(["b"]), bed: false }).b, 1);
+  // ドラムループもソロ：aと、ドラムループが鳴る
+  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: true }), { a: 0.5, b: 0, c: 0, "@bed": 0.8, "@pad": 0.5, "@sfx": 0 });
+  // ドラムループだけソロ：層は全部止まる
+  const bedOnly = songFaders(song, { lanes: new Set(), bed: true });
+  assert.deepEqual([bedOnly.a, bedOnly.b, bedOnly.c, bedOnly["@bed"], bedOnly["@sfx"]], [0, 0, 0, 0.8, 0]);
+  // ドラムループのミュート：音量は残る。ソロにすれば鳴る
+  assert.equal(songFaders({ ...song, bedMuted: true })["@bed"], 0);
+  assert.equal(songFaders({ ...song, bedMuted: true }, { lanes: new Set(), bed: true })["@bed"], 0.8);
+  // ソロが空なら、ソロなしと同じ
+  assert.deepEqual(songFaders(song, { lanes: new Set(), bed: false }), songFaders(song));
+});

@@ -156,13 +156,13 @@ export class StemMixer {
   }
 
   /** ステムを渡す。この曲をリアルタイムで鳴らせるなら true（マスターがリバーブだけ、AudioWorklet が使える）。false なら、呼び出し側が書き出しと同じミックスダウンを鳴らす。 */
-  async load(set: StemSet): Promise<boolean> {
+  async load(set: StemSet, faders: Record<string, number> = set.faders): Promise<boolean> {
     if (!(await loadMasterWorklet(this.ctx)) || liveReverbChain(set.masterFx) === null) {
       this.set = null;
       return false;
     }
     this.set = set;
-    this.faders = { ...set.faders };
+    this.faders = { ...faders };
     return true;
   }
 

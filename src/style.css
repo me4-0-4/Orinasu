@@ -1483,7 +1483,7 @@ body[data-tab="mix"] .app-footer {
 }
 .arr-body {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
 }
 .arr-body.empty {
   grid-template-columns: minmax(0, 1fr);
@@ -1570,6 +1570,11 @@ body[data-tab="mix"] .app-footer {
 .arr-mute.on {
   background: var(--accent-orange);
   border-color: var(--accent-orange);
+  color: #0c0d12;
+}
+.arr-solo.on {
+  background: var(--accent-yellow);
+  border-color: var(--accent-yellow);
   color: #0c0d12;
 }
 .arr-fx.on {
