@@ -1309,6 +1309,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       result = out;
       builtStamps = stampsOf(song.lanes ?? []);
       setNotice(out ? "" : "刻むフレーズが見つからない。右の「素材」で選び直して");
+      // ドラムループが無くなったら、そのソロも外す（見えないソロで、全部が無音にならないように）
+      if (!out?.bed) solo.bed = false;
       live = out ? await mixer.load(out, currentFaders()) : false;
       if (token !== buildToken) return;
       // 鳴らしていれば、同じ位置から続ける

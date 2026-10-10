@@ -171,7 +171,8 @@ export interface SoloState {
 
 /** 曲の設定から、全部のフェーダーの値（層ごとの音量・ミュート・ソロと、ドラムループ・パッド・効果音の量）。 */
 export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted">, solo?: SoloState): Record<string, number> {
-  const anySolo = !!solo && (solo.lanes.size > 0 || solo.bed);
+  // 外した素材のソロは数えない（ソロが残っていて、全部が無音になるのを避ける）
+  const anySolo = !!solo && (solo.bed || (song.lanes ?? []).some((l) => solo.lanes.has(l.phraseId)));
   const laneValue = (l: Lane): number => (solo?.lanes.has(l.phraseId) ? (l.volume ?? 1) : anySolo ? 0 : faderOf(l));
   const bedAudible = solo?.bed || (!anySolo && !song.bedMuted);
   return {

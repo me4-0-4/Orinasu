@@ -442,3 +442,18 @@ test("定位：ステムに定位を掛けた結果は、最初から定位を�
   assert.equal(migrateSong({ ...createEmptySong(), lanes: [lane(-9)] }).lanes![0].balance, -1);
   assert.equal(migrateSong({ ...createEmptySong(), lanes: [lane(0)] }).lanes![0].balance, undefined);
 });
+
+test("ソロ：存在しない層（外した素材）のソロは数えない。ソロが残っていても、全部が無音にならない", () => {
+  const song = {
+    params: createEmptySong().params,
+    lanes: [
+      { phraseId: "a", cutSeed: 1, rhythmSeed: 1, orderSeed: 1 },
+      { phraseId: "b", cutSeed: 2, rhythmSeed: 2, orderSeed: 2 },
+    ],
+  };
+  const levels = (f: Record<string, number>) => [f.a, f.b, f["@sfx"]];
+  // 外した素材 "gone" だけがソロのまま残っている → ソロなしと同じ
+  assert.deepEqual(levels(songFaders(song, { lanes: new Set(["gone"]), bed: false })), levels(songFaders(song)));
+  // 存在する層のソロは効く
+  assert.deepEqual(levels(songFaders(song, { lanes: new Set(["gone", "a"]), bed: false })), [1, 0, 0]);
+});
