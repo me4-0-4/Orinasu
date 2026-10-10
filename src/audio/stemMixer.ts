@@ -1,4 +1,4 @@
-import { CHANNEL_FADERS, type StemSet } from "../mix/collageSong";
+import { CHANNEL_FADERS, MASTER_FADER, type StemSet } from "../mix/collageSong";
 import { liveReverbChain } from "../mix/fx";
 import workletUrl from "./masterBusWorklet.ts?worker&url";
 import { reverbImpulse } from "./reverbWet";
@@ -38,7 +38,7 @@ export interface MixerGraph {
   /** when（コンテキストの時刻）から、曲の offsetSeconds の位置を鳴らし始める。 */
   start(when: number, offsetSeconds: number): void;
   stop(when?: number): void;
-  /** フェーダー（層の曲の id、または @bed・@pad・@sfx）を動かす。プチ音が出ないよう、短くなめらかに。 */
+  /** フェーダー（層の曲の id、または @bed・@pad・@sfx・@master）を動かす。プチ音が出ないよう、短くなめらかに。 */
   setFader(name: string, value: number, smooth?: boolean): void;
   dispose(): void;
 }
@@ -99,8 +99,13 @@ export function buildMixerGraph(ctx: BaseAudioContext, set: StemSet, out: AudioN
     channelCount: 2,
     channelCountMode: "explicit",
   });
+  // マスターのフェーダー：コンプ・リミッターのあと
+  const masterFader = ctx.createGain();
+  masterFader.gain.value = faders[MASTER_FADER] ?? 1;
+  gains.set(MASTER_FADER, masterFader);
   node.connect(master);
-  master.connect(out);
+  master.connect(masterFader);
+  masterFader.connect(out);
   owned.push(master);
 
   let started = false;

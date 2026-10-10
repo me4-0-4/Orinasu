@@ -421,13 +421,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (mute) box.appendChild(mute);
     if (soloButton) box.appendChild(soloButton);
     let vol: HTMLInputElement | null = null;
-    if (kind !== "master") {
+    {
       vol = el("input", "arr-vol");
       vol.type = "range";
       vol.min = "0";
       vol.max = kind === "lane" ? String(MAX_LANE_VOLUME) : "1";
       vol.step = "0.01";
-      vol.title = kind === "lane" ? "音量" : kind === "bed" ? "ドラムループの音量" : "パッドの量";
+      vol.title = kind === "lane" ? "音量" : kind === "bed" ? "ドラムループの音量" : kind === "master" ? "マスターの音量" : "パッドの量";
       vol.addEventListener("input", () => {
         const v = Number(vol!.value);
         if (kind === "lane") {
@@ -437,14 +437,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
           });
         } else if (kind === "bed") {
           setChannelParam("bedVolume", v);
+        } else if (kind === "master") {
+          setChannelParam("master", v);
         } else {
           setChannelParam("pad", v);
         }
       });
       vol.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
       box.appendChild(vol);
-    } else {
-      box.appendChild(el("span", "arr-vol-spacer"));
     }
     const fx = button("FX", () => openTrackFx(key), "arr-btn arr-fx", "このトラックのFXチェーンを開く");
     box.appendChild(fx);
@@ -460,7 +460,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       if (mute) mute.classList.toggle("on", kind === "bed" ? !!song.bedMuted : !!lane?.muted);
       if (soloButton) soloButton.classList.toggle("on", kind === "bed" ? solo.bed : !!lane && solo.lanes.has(lane.phraseId));
       if (vol && document.activeElement !== vol) {
-        vol.value = String(kind === "lane" ? (lane?.volume ?? 1) : kind === "bed" ? song.params.bedVolume : song.params.pad);
+        vol.value = String(kind === "lane" ? (lane?.volume ?? 1) : kind === "bed" ? song.params.bedVolume : kind === "master" ? song.params.master : song.params.pad);
       }
       fx.classList.toggle("on", trackHasFx(trackFx(key)));
       fx.textContent = trackHasFx(trackFx(key)) ? `FX ${trackFx(key).chain.filter((p) => !p.bypass).length}` : "FX";
@@ -1201,7 +1201,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   /** ドラムループの音量・パッドの量・効果音の量を変える（作り直さない）。 */
-  function setChannelParam(name: "bedVolume" | "pad" | "sfx", value: number): void {
+  function setChannelParam(name: "bedVolume" | "pad" | "sfx" | "master", value: number): void {
     song.params[name] = value;
     changed(false);
     applyFaders();

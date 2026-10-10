@@ -144,6 +144,8 @@ export const faderOf = (lane: Pick<Lane, "muted" | "volume">): number => (lane.m
 
 /** フェーダーの名前：層は曲の id、そのほかのチャンネルは @ をつけた名前。 */
 export const CHANNEL_FADERS = { bed: "@bed", pad: "@pad", sfx: "@sfx" } as const;
+/** マスターのフェーダー（コンプ・リミッターのあとに掛かる）。 */
+export const MASTER_FADER = "@master";
 
 /**
  * ソロ（その場だけの状態で、曲には保存しない）：ソロの層と、ドラムループ。
@@ -164,6 +166,7 @@ export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted">, so
     [CHANNEL_FADERS.bed]: bedAudible ? song.params.bedVolume : 0,
     [CHANNEL_FADERS.pad]: song.params.pad,
     [CHANNEL_FADERS.sfx]: anySolo ? 0 : song.params.sfx,
+    [MASTER_FADER]: song.params.master,
   };
 }
 
@@ -466,7 +469,16 @@ export async function mixdown(set: StemSet, reverb?: ReverbFn, faders: Record<st
   const fxEnv: FxEnv | null = reverb ? { stepSamples: set.stepSamples, sampleRate: set.sampleRate, bpm: set.bpm, reverb } : null;
   const mastered = fxEnv && !trackIsOff(set.masterFx) ? await applyTrack(mixed, set.masterFx!, fxEnv) : mixed;
   // 曲はくり返して鳴らすので、仕上げは、曲の頭を終わりからの続きとして処理する（再生中のミキサーと同じ音になる）
-  return limitPeak(masterBusLoop(mastered, set.sampleRate));
+  const out = limitPeak(masterBusLoop(mastered, set.sampleRate));
+  // マスターのフェーダー：コンプ・リミッターのあと（上限を超えない）
+  const master = faders[MASTER_FADER] ?? 1;
+  if (master !== 1) {
+    for (let i = 0; i < out.l.length; i++) {
+      out.l[i] *= master;
+      out.r[i] *= master;
+    }
+  }
+  return out;
 }
 
 /** 曲を作って、そのままミックスダウンした1本の波形で返す（ミュート・音量は曲の設定のとおり）。 */

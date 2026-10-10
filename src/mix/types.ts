@@ -78,6 +78,8 @@ export interface SongParams extends ShapeParams {
   pad: number;
   /** ポンピング（0〜1）：下地のキックに合わせて、刻んだ音を沈ませる深さ。 */
   pump: number;
+  /** マスターの音量（0〜1）。コンプ・リミッターのあとに掛ける。 */
+  master: number;
 }
 
 /**
@@ -175,6 +177,7 @@ export const DEFAULT_PARAMS: SongParams = {
   sfx: 0.6,
   pad: 0.5,
   pump: 0.5,
+  master: 1,
 };
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
@@ -271,7 +274,7 @@ export function migrateSong(raw: unknown): Song {
     if (isNum(p.reverb)) song.fx.master = { chain: p.reverb > 0 ? [newPlugin("reverb", { amount: Math.min(1, p.reverb) })] : [], envelopes: [] };
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
     if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
-    for (const key of ["bedVolume", "sfx", "pad", "pump"] as const) {
+    for (const key of ["bedVolume", "sfx", "pad", "pump", "master"] as const) {
       if (isNum(p[key])) song.params[key] = Math.min(1, Math.max(0, p[key]));
     }
     if (p.turns === "mix" || p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;

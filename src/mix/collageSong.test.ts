@@ -315,7 +315,7 @@ test("ステム：トラックごと（伸ばしも曲ごと）。ミュート�
   assert.ok(set.stems.filter((s) => s.kind === "pad").every((s) => s.phraseId !== undefined));
   assert.deepEqual(set.faders, songFaders(song));
   assert.deepEqual([set.faders.a, set.faders.b, set.faders.c], [1, 1, 1]);
-  assert.deepEqual(Object.keys(set.faders).filter((k) => k.startsWith("@")).sort(), ["@bed", "@pad", "@sfx"]);
+  assert.deepEqual(Object.keys(set.faders).filter((k) => k.startsWith("@")).sort(), ["@bed", "@master", "@pad", "@sfx"]);
   assert.equal(new Set(set.stems.map((s) => s.pcm.l.length)).size, 1, "全部同じ長さ（くり返すとき、ずれない）");
 
   // 最初からミュート／音量を設定した曲と、ステムにフェーダーを掛けた結果は、同じ
@@ -369,13 +369,13 @@ test("ソロ：ソロのものだけ鳴る（ミュート中でも）。ソロ�
     ],
   };
   // ソロなし：ミュートと音量のとおり
-  assert.deepEqual(songFaders(song), { a: 0.5, b: 0, c: 1, "@bed": 0.8, "@pad": 0.5, "@sfx": 0.6 });
+  assert.deepEqual(songFaders(song), { a: 0.5, b: 0, c: 1, "@bed": 0.8, "@pad": 0.5, "@sfx": 0.6, "@master": 1 });
   // aだけソロ：ほかは止まる。ドラムループと効果音も止まる。パッドの量はそのまま（パッドは層のフェーダーに従う）
-  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: false }), { a: 0.5, b: 0, c: 0, "@bed": 0, "@pad": 0.5, "@sfx": 0 });
+  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: false }), { a: 0.5, b: 0, c: 0, "@bed": 0, "@pad": 0.5, "@sfx": 0, "@master": 1 });
   // ミュート中のbをソロにすると鳴る（音量1）
   assert.equal(songFaders(song, { lanes: new Set(["b"]), bed: false }).b, 1);
   // ドラムループもソロ：aと、ドラムループが鳴る
-  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: true }), { a: 0.5, b: 0, c: 0, "@bed": 0.8, "@pad": 0.5, "@sfx": 0 });
+  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: true }), { a: 0.5, b: 0, c: 0, "@bed": 0.8, "@pad": 0.5, "@sfx": 0, "@master": 1 });
   // ドラムループだけソロ：層は全部止まる
   const bedOnly = songFaders(song, { lanes: new Set(), bed: true });
   assert.deepEqual([bedOnly.a, bedOnly.b, bedOnly.c, bedOnly["@bed"], bedOnly["@sfx"]], [0, 0, 0, 0.8, 0]);
@@ -384,4 +384,18 @@ test("ソロ：ソロのものだけ鳴る（ミュート中でも）。ソロ�
   assert.equal(songFaders({ ...song, bedMuted: true }, { lanes: new Set(), bed: true })["@bed"], 0.8);
   // ソロが空なら、ソロなしと同じ
   assert.deepEqual(songFaders(song, { lanes: new Set(), bed: false }), songFaders(song));
+});
+
+test("マスターのフェーダー：コンプ・リミッターのあとに掛かる（音量だけが変わり、音色は変わらない）", async () => {
+  const phrases = [drumPhrase("a"), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], lengthBars: 4, bpm: 120 };
+  song.lanes = syncLanes(song, seq);
+  const set = (await buildStems(song, phrases, steadyRender, 2000))!;
+  const full = await mixdown(set);
+  const half = await mixdown(set, undefined, { ...set.faders, "@master": 0.5 });
+  let max = 0;
+  for (let i = 0; i < full.l.length; i++) max = Math.max(max, Math.abs(half.l[i] - full.l[i] * 0.5));
+  assert.ok(max < 1e-7, `差 ${max}`);
+  assert.ok((await mixdown(set, undefined, { ...set.faders, "@master": 0 })).l.every((x) => x === 0));
+  assert.equal(songFaders({ ...song, params: { ...song.params, master: 0.3 } })["@master"], 0.3);
 });

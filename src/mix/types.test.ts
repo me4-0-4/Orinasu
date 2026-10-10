@@ -190,3 +190,10 @@ test("保存データ：ドラムループのミュートを読む。ソロは�
   const lanes = [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, solo: true }];
   assert.ok(!("solo" in migrateSong({ ...createEmptySong(), lanes }).lanes![0]));
 });
+
+test("保存データ：マスターの音量。無ければ1、範囲外は収める", () => {
+  assert.equal(migrateSong(createEmptySong()).params.master, 1);
+  assert.equal(migrateSong({ ...createEmptySong(), params: { ...createEmptySong().params, master: 0.4 } }).params.master, 0.4);
+  assert.equal(migrateSong({ ...createEmptySong(), params: { ...createEmptySong().params, master: 9 } }).params.master, 1);
+  assert.equal(migrateSong({ params: { busy: 0.4 } }).params.master, 1);
+});
