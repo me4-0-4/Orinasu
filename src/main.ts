@@ -1074,14 +1074,19 @@ window.addEventListener("keydown", (e) => {
       e.preventDefault();
       if (currentTab === "mix") mixPanel.togglePlay();
       else togglePlay();
+    } else if (currentTab === "mix" && target && ["range", "checkbox"].includes((target as HTMLInputElement).type) && mixPanel.key(e.code)) {
+      // スライダーを動かしたあとも、M・S・Home は使える
+      e.preventDefault();
     }
     return;
   }
   if (currentTab === "mix") {
-    // 刻むタブ：鍵盤は隠しているので音符は鳴らさない。スペースは刻んだ曲の再生⇔停止
+    // 刻むタブ：鍵盤は隠しているので音符は鳴らさない。スペースは刻んだ曲の再生⇔停止。M・S・Home はミキサーの操作
     if (e.code === "Space") {
       e.preventDefault();
       mixPanel.togglePlay();
+    } else if (mixPanel.key(e.code)) {
+      e.preventDefault();
     }
     return;
   }

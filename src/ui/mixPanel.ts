@@ -86,6 +86,8 @@ export interface MixPanel {
   tick: () => void;
   /** 再生⇔停止（スペースキー用）。 */
   togglePlay: () => void;
+  /** キー操作：M＝選んでいるトラックのミュート、S＝ソロ、Home＝先頭へ。使ったら true。 */
+  key: (code: string) => boolean;
 }
 
 /** いま右のインスペクタに出しているもの：曲・トラック・断片。 */
@@ -420,12 +422,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         const lane = laneOfKey(key);
         if (!lane) return;
         updateFader(key, (l) => ({ ...l, muted: !l.muted }));
-      }, "arr-btn arr-mute", "ミュート");
+      }, "arr-btn arr-mute", "ミュート（M キー。トラックを選んでおく）");
     } else if (kind === "bed") {
       mute = button("M", () => toggleBedMute(), "arr-btn arr-mute", "ミュート（音量はそのまま残る）");
     }
     if (kind === "lane" || kind === "bed") {
-      soloButton = button("S", () => toggleSolo(key), "arr-btn arr-solo", "ソロ（これだけ鳴らす。ミュート中でも鳴る。曲には保存しない）");
+      soloButton = button("S", () => toggleSolo(key), "arr-btn arr-solo", "ソロ（S キー。これだけ鳴らす。ミュート中でも鳴る。曲には保存しない）");
     }
     if (mute) box.appendChild(mute);
     if (soloButton) box.appendChild(soloButton);
@@ -1739,6 +1741,22 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     },
     togglePlay() {
       void togglePlay();
+    },
+    key(code) {
+      if (code === "Home") {
+        void seek(0);
+        return true;
+      }
+      if (code !== "KeyM" && code !== "KeyS") return false;
+      if (sel.type !== "track" || sel.key === "pad" || sel.key === "master") return false;
+      if (code === "KeyS") {
+        toggleSolo(sel.key);
+      } else if (sel.key === "bed") {
+        toggleBedMute();
+      } else {
+        updateFader(sel.key, (l) => ({ ...l, muted: !l.muted }));
+      }
+      return true;
     },
   };
   return api;
