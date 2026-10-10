@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
-import { applySeeds, bedEvents, buildCollage, collectSources, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
+import { applySeeds, bedEvents, buildCollage, buildStems, collectSources, faderOf, mixdown, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
 import { createEmptySong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
 import { newGroup } from "./groups.ts";
@@ -302,4 +302,33 @@ test("使い回しの入れ物：上限を超えたら古いものから捨て�
   assert.equal(made, 3);
   await cache.getOrCompute("b", make(2));
   assert.equal(made, 4);
+});
+
+test("ステム：トラックごと（伸ばしも曲ごと）。ミュート・音量はフェーダーで、作り直さなくても、最初から設定した曲と同じ音になる", async () => {
+  const phrases = [drumPhrase("a"), phrase("b", 100, 62), phrase("c", 100, 64)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b", "c"], lengthBars: 4, bpm: 120 };
+  song.lanes = syncLanes(song, seq);
+  const sr = 2000;
+  const set = (await buildStems(song, phrases, steadyRender, sr))!;
+  assert.deepEqual(set.stems.filter((s) => s.kind === "track").map((s) => s.phraseId), ["a", "b", "c"]);
+  assert.ok(set.stems.some((s) => s.kind === "bed") && set.stems.some((s) => s.kind === "sfx"));
+  assert.ok(set.stems.filter((s) => s.kind === "pad").every((s) => s.phraseId !== undefined));
+  assert.deepEqual(set.faders, { a: 1, b: 1, c: 1 });
+  assert.equal(new Set(set.stems.map((s) => s.pcm.l.length)).size, 1, "全部同じ長さ（くり返すとき、ずれない）");
+
+  // 最初からミュート／音量を設定した曲と、ステムにフェーダーを掛けた結果は、同じ
+  const muted = structuredClone(song);
+  muted.lanes![1].muted = true;
+  muted.lanes![2].volume = 0.4;
+  const direct = (await buildCollage(muted, phrases, steadyRender, sr))!;
+  const viaFaders = await mixdown(set, undefined, { a: 1, b: 0, c: 0.4 });
+  assert.equal(viaFaders.l.length, direct.pcm.l.length);
+  let max = 0;
+  for (let i = 0; i < viaFaders.l.length; i++) max = Math.max(max, Math.abs(viaFaders.l[i] - direct.pcm.l[i]));
+  assert.ok(max < 1e-6, `差 ${max}`);
+
+  // 全部ミュートしても、下地と効果音は残る。フェーダーが1のものだけで足している
+  const bedAndSfx = sumStems(set, { a: 0, b: 0, c: 0 });
+  assert.ok(bedAndSfx.l.some((x) => x !== 0));
+  assert.deepEqual([faderOf({}), faderOf({ muted: true, volume: 2 }), faderOf({ volume: 0.5 })], [1, 0, 0.5]);
 });

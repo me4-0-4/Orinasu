@@ -520,3 +520,28 @@ export function applyDrive(pcm: Pcm, d: number, c: number): Pcm {
   if (d < 0.01 && c < 0.01) return pcm;
   return drive(pcm, d, c);
 }
+
+/** リアルタイムのリバーブ1段ぶん（量×ウェットで送り、響きを足す）。 */
+export interface LiveReverb {
+  /** 送りの大きさ（0.5 × 量 × ウェット。書き出しと同じ式）。 */
+  send: number;
+  seconds: number;
+  toneHz: number;
+}
+
+/**
+ * マスターのFXチェーンを、再生中にそのまま掛けられるか。リバーブだけで、つまみが動かない（エンベロープなし）なら、
+ * その並びを返す（書き出しと同じ式）。ほかのプラグインがある・エンベロープで動く、なら null（その場合は書き出しと同じ計算で作り直す）。
+ * 何も掛からないチェーンは、空の並び。
+ */
+export function liveReverbChain(track: TrackFx | undefined): LiveReverb[] | null {
+  if (!track) return [];
+  const out: LiveReverb[] = [];
+  for (const p of live(track.chain)) {
+    if (p.kind !== "reverb") return null;
+    if (track.envelopes.some((e) => e.pluginId === p.id && e.active && e.points.length > 0)) return null;
+    if (p.amount < OFF || p.mix < OFF) continue; // applyTrack と同じく、飛ばす
+    out.push({ send: 0.5 * p.amount * p.mix, seconds: reverbSeconds(p.size), toneHz: reverbToneHz(p.tone) });
+  }
+  return out;
+}

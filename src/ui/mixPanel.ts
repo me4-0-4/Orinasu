@@ -1,9 +1,12 @@
 import { LoopPlayer } from "../audio/loopPlayer";
+import { StemMixer } from "../audio/stemMixer";
 import { encodeWav } from "../audio/wav";
 import { BuildCache } from "../mix/buildCache";
 import {
   applySeeds,
-  buildCollage,
+  buildStems,
+  faderOf,
+  mixdown,
   collectSources,
   hasDrums,
   pickDrum,
@@ -11,7 +14,7 @@ import {
   seedSnapshot,
   syncLanes,
   type ReverbFn,
-  type CollageResult,
+  type StemSet,
   type RenderOpts,
   type RerollPart,
   type SeedSnapshot,
@@ -101,7 +104,7 @@ type Selection =
  */
 export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let song: Song = createEmptySong();
-  let result: CollageResult | null = null;
+  let result: StemSet | null = null;
   /** 作り直しの途中で、新しい作り直しが始まったら古いほうを捨てるための番号。 */
   let buildToken = 0;
   let rebuildTimer: number | null = null;
@@ -118,7 +121,18 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const renderCache = new Map<string, Promise<Pcm>>();
   /** 素材から外したトラック（また選んだら、設定ごと戻す）。この画面を開いているあいだだけ覚える。 */
   const removedLanes = new Map<string, Lane>();
+  /** ミキサーで鳴らせない曲（マスターがリバーブ以外・AudioWorklet が使えない）のときに、ミックスダウンした波形を鳴らす。 */
   const player = new LoopPlayer(deps.audio.ctx, deps.audio.out);
+  /** 再生側のミキサー：トラックごとに鳴らし、ミュート・音量はフェーダーを動かすだけ（作り直さない）。 */
+  const mixer = new StemMixer(deps.audio.ctx, deps.audio.out);
+  /** いまの曲を、ミキサーで鳴らせるか。 */
+  let live = false;
+  const isPlaying = (): boolean => mixer.playing || player.playing;
+  const progressNow = (): number | null => (mixer.playing ? mixer.progress() : player.progress());
+  const stopAll = (): void => {
+    mixer.stop();
+    player.stop();
+  };
   const sampleRate = deps.audio.ctx.sampleRate;
 
   function stampsOf(lanes: Lane[]): string {
@@ -282,7 +296,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     o.value = String(n);
     loopSelect.appendChild(o);
   }
-  const exportButton = button("書き出し", () => saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
+  const exportButton = button("書き出し", () => void saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
   const exportBox = el("div", "tp-export");
   exportBox.append(exportButton, loopSelect);
   transport.append(playButton, posBox, bpmBox, lengthBox, chopBox, undoButton, redoButton, statusText, exportBox);
@@ -394,7 +408,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       mute = button("M", () => {
         const lane = laneOfKey(key);
         if (!lane) return;
-        updateLane(key, (l) => ({ ...l, muted: !l.muted }));
+        updateFader(key, (l) => ({ ...l, muted: !l.muted }));
       }, "arr-btn arr-mute", "ミュート");
       box.appendChild(mute);
     }
@@ -409,7 +423,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       vol.addEventListener("input", () => {
         const v = Number(vol!.value);
         if (kind === "lane") {
-          updateLane(key, (l) => {
+          updateFader(key, (l) => {
             const { volume: _v, ...rest } = l;
             return Math.abs(v - 1) < 1e-9 ? rest : { ...rest, volume: v };
           });
@@ -867,7 +881,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   // --- トラック ---
   const trackTitle = el("div", "ins-title");
   const lockButton = button("固定", () => sel.type === "track" && updateLane(sel.key, (l) => ({ ...l, locked: !l.locked }), false), "preset-button", "固定すると、刻み直してもこのトラックは変わらない");
-  const muteButton = button("ミュート", () => sel.type === "track" && updateLane(sel.key, (l) => ({ ...l, muted: !l.muted })), "preset-button");
+  const muteButton = button("ミュート", () => sel.type === "track" && updateFader(sel.key, (l) => ({ ...l, muted: !l.muted })), "preset-button");
   const resetButton = button(
     "全体に戻す",
     () =>
@@ -886,7 +900,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       get: () => selLane()?.volume ?? 1,
       set: (v) => {
         if (sel.type !== "track") return;
-        updateLane(sel.key, (l) => {
+        updateFader(sel.key, (l) => {
           const { volume: _v, ...rest } = l;
           return Math.abs(v - 1) < 1e-9 ? rest : { ...rest, volume: v };
         });
@@ -1150,6 +1164,30 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     deps.onSongChange(song);
   }
 
+  /** 層ごとのフェーダー（ミュート＝0、ふだんは音量）。いまの曲の設定から。 */
+  const currentFaders = (): Record<string, number> => Object.fromEntries((song.lanes ?? []).map((l) => [l.phraseId, faderOf(l)]));
+
+  /** ミュート・音量を変える：ミキサーなら、フェーダーを動かすだけ（作り直さない）。ミキサーで鳴らせない曲は、作り直す。 */
+  function updateFader(key: string, fn: (lane: Lane) => Lane): void {
+    updateLane(key, fn, false);
+    if (live) {
+      for (const l of song.lanes ?? []) mixer.setFader(l.phraseId, faderOf(l));
+    } else {
+      scheduleRebuild();
+    }
+  }
+
+  /** ステムを、いまのフェーダーでミックスダウンした波形（書き出しの音。同じ曲・同じフェーダーなら使い回す）。 */
+  let mixdownCache: { set: StemSet; key: string; pcm: Promise<Pcm> } | null = null;
+  function mixdownNow(): Promise<Pcm> {
+    const set = result!;
+    const key = JSON.stringify(currentFaders());
+    if (mixdownCache && mixdownCache.set === set && mixdownCache.key === key) return mixdownCache.pcm;
+    const pcm = mixdown(set, deps.reverb, currentFaders());
+    mixdownCache = { set, key, pcm };
+    return pcm;
+  }
+
   /** トラック（刻む曲）を変える。音に関わる変更なら作り直す。 */
   function updateLane(key: string, fn: (lane: Lane) => Lane, rebuildAfter = true): void {
     if (!song.lanes) return;
@@ -1196,19 +1234,32 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     busy = "作っています…";
     refresh();
     try {
-      const out = await buildCollage(song, deps.getPhrases(), render, sampleRate, deps.reverb, buildCache);
+      const out = await buildStems(song, deps.getPhrases(), render, sampleRate, deps.reverb, buildCache);
       if (token !== buildToken) return;
       result = out;
       builtStamps = stampsOf(song.lanes ?? []);
       setNotice(out ? "" : "刻むフレーズが見つからない。右の「素材」で選び直して");
-      if (player.playing) {
-        if (out) player.play(out.pcm, sampleRate, player.progress() ?? 0);
-        else player.stop();
+      live = out ? await mixer.load(out) : false;
+      if (token !== buildToken) return;
+      // 鳴らしていれば、同じ位置から続ける
+      const was = progressNow();
+      if (was !== null) {
+        if (!out) stopAll();
+        else if (live) {
+          player.stop();
+          mixer.play(was);
+        } else {
+          mixer.stop();
+          const pcm = await mixdownNow();
+          if (token !== buildToken) return;
+          player.play(pcm, sampleRate, was);
+        }
       }
     } catch (err) {
       if (token !== buildToken) return;
       console.error("曲の書き出しに失敗しました", err);
       result = null;
+      live = false;
       setNotice("曲を作れなかった。もう一度「刻む」を押して");
     }
     busy = "";
@@ -1263,32 +1314,55 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   async function togglePlay(): Promise<void> {
-    if (player.playing) {
-      player.stop();
+    if (isPlaying()) {
+      stopAll();
       refresh();
       return;
     }
     if (!result) return;
     await deps.prepareAudio();
-    player.play(result.pcm, sampleRate);
+    if (live) {
+      mixer.play(0);
+    } else {
+      // ミキサーで鳴らせない曲：ミックスダウンした波形を鳴らす
+      busy = "準備しています…";
+      refresh();
+      try {
+        player.play(await mixdownNow(), sampleRate);
+      } finally {
+        busy = "";
+      }
+    }
     refresh();
   }
 
-  function saveWav(): void {
+  /** 書き出し：ミキサーと同じ入力から、ミックスダウン（全体のエフェクト → コンプ・リミッター）した波形を、WAVにして保存する。 */
+  async function saveWav(): Promise<void> {
     if (!result) return;
-    const bytes = encodeWav(repeatPcm(result.pcm, Number(loopSelect.value)), sampleRate);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${song.name.trim() || "orinasu"}.wav`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    busy = "書き出しています…";
+    refresh();
+    try {
+      const pcm = await mixdownNow();
+      const bytes = encodeWav(repeatPcm(pcm, Number(loopSelect.value)), sampleRate);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${song.name.trim() || "orinasu"}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      console.error("WAVの書き出しに失敗しました", err);
+      setNotice("書き出せなかった。もう一度「書き出し」を押して");
+    } finally {
+      busy = "";
+      refresh();
+    }
   }
 
   /** 線の表示の行：トラック（刻む曲・ドラムループ・パッド・マスター）と、その下の表示中のエンベロープ。 */
-  function trackRows(res: CollageResult | null): Row[] {
+  function trackRows(res: StemSet | null): Row[] {
     const rows: Row[] = [];
     const envRows = (key: string): void => {
       const fx = trackFx(key);
@@ -1345,8 +1419,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (sel.type !== "hits") regrouping = null;
 
     // トランスポート
-    playButton.textContent = player.playing ? "■ 停止" : "▶ 再生";
-    playButton.classList.toggle("on", player.playing);
+    playButton.textContent = isPlaying() ? "■ 停止" : "▶ 再生";
+    playButton.classList.toggle("on", isPlaying());
     playButton.disabled = !result;
     if (document.activeElement !== bpmInput) bpmInput.value = String(song.bpm);
     for (const o of Array.from(lengthSelect.options)) {
@@ -1533,7 +1607,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   function updateTime(): void {
     const total = songSeconds(song);
-    const t = player.progress();
+    const t = progressNow();
     const steps = totalStepsNow();
     const step = t === null ? 0 : Math.min(steps - 1, Math.floor(t * steps));
     posMain.textContent = posName(step);
@@ -1546,10 +1620,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const api: MixPanel = {
     el: root,
     setSong(next) {
-      player.stop();
+      stopAll();
       song = next;
       buildToken++;
       result = null;
+      live = false;
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;
@@ -1572,13 +1647,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       else if (song.lanes && stampsOf(song.lanes) !== builtStamps) scheduleRebuild(); // フレーズタブで曲を直したら、作り直す
     },
     stop() {
-      if (!player.playing) return;
-      player.stop();
+      if (!isPlaying()) return;
+      stopAll();
       refresh();
     },
     tick() {
-      laneView.setProgress(player.progress());
-      if (player.playing) updateTime();
+      laneView.setProgress(progressNow());
+      if (isPlaying()) updateTime();
     },
     togglePlay() {
       void togglePlay();

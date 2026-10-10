@@ -1,122 +1,43 @@
 import type { Pcm } from "./pcm.ts";
+import { MASTER_BUS_DEFAULTS, MasterBusStream, type MasterBusOptions } from "./masterBusStream.ts";
 
-/** マスターの仕上げ（コンプ＋リミッター）の設定。 */
-export interface MasterBusOptions {
-  /** コンプが効き始める大きさ（dB）。 */
-  thresholdDb: number;
-  /** 圧縮の比（3なら、しきい値を3dB超えた分は1dBになる）。 */
-  ratio: number;
-  /** しきい値まわりをなめらかにつなぐ幅（dB）。 */
-  kneeDb: number;
-  attackMs: number;
-  releaseMs: number;
-  /** コンプで下がった分を戻す音量（dB）。 */
-  makeupDb: number;
-  /** リミッターの上限（0〜1）。これを超えないようにする。 */
-  ceiling: number;
-  /** リミッターの先読み（ミリ秒）。 */
-  lookaheadMs: number;
-  limiterReleaseMs: number;
-}
-
-export const MASTER_BUS_DEFAULTS: MasterBusOptions = {
-  thresholdDb: -18,
-  ratio: 3,
-  kneeDb: 8,
-  attackMs: 12,
-  releaseMs: 160,
-  makeupDb: 5,
-  ceiling: 0.95,
-  lookaheadMs: 2,
-  limiterReleaseMs: 90,
-};
-
-/** コンプの計算を何サンプルごとにするか（0.4ミリ秒ほど。アタック・リリースよりずっと短い）。 */
-const BLOCK = 16;
-
-const toDb = (x: number): number => 20 * Math.log10(Math.max(x, 1e-9));
-const fromDb = (db: number): number => Math.pow(10, db / 20);
-
-/** 入力の大きさ（dB）に対する、コンプで下げる量（dB、0以下）。ニー（なめらかな折れ）つき。 */
-export function compressorReductionDb(levelDb: number, o: Pick<MasterBusOptions, "thresholdDb" | "ratio" | "kneeDb">): number {
-  const over = levelDb - o.thresholdDb;
-  const slope = 1 / o.ratio - 1; // 0以下
-  const half = o.kneeDb / 2;
-  if (over <= -half) return 0;
-  if (over >= half) return slope * over;
-  const t = over + half;
-  return (slope * t * t) / (2 * o.kneeDb);
-}
+export { MASTER_BUS_DEFAULTS, compressorReductionDb, type MasterBusOptions } from "./masterBusStream.ts";
 
 /**
- * 曲全体の仕上げ。左右をそろえて動かすコンプ（大きい所を少し抑えて、全体を持ち上げる）→ 先読みリミッター
- * （上限を超えないように、先回りして滑らかに下げる）。元の波形は書き換えず、新しい波形を返す。
- * 無音のところは無音のまま。
+ * 曲全体の仕上げ（書き出し用）。ストリーム版（再生中に使うものと同じ計算）に、曲全体を流して、先読みの遅れを詰める。
+ * 左右をそろえて動かすコンプ → 先読みリミッター。元の波形は書き換えず、新しい波形を返す。無音のところは無音のまま。
  */
 export function masterBus(pcm: Pcm, sampleRate: number, opts: Partial<MasterBusOptions> = {}): Pcm {
-  const o = { ...MASTER_BUS_DEFAULTS, ...opts };
   const n = pcm.l.length;
-  const l = new Float32Array(n);
-  const r = new Float32Array(n);
-  if (n === 0) return { l, r };
+  if (n === 0) return { l: new Float32Array(0), r: new Float32Array(0) };
+  const stream = new MasterBusStream(sampleRate, { ...MASTER_BUS_DEFAULTS, ...opts });
+  // 先読みの遅れのぶん、後ろに無音をつけて流し、頭の遅れを捨てる
+  const padded = n + stream.latency;
+  const inL = new Float32Array(padded);
+  const inR = new Float32Array(padded);
+  inL.set(pcm.l);
+  inR.set(pcm.r);
+  stream.process(inL, inR, inL, inR);
+  return { l: inL.slice(stream.latency, stream.latency + n), r: inR.slice(stream.latency, stream.latency + n) };
+}
 
-  // 1. コンプ：左右の大きい方を見て、同じだけ下げる（定位がずれないように）。
-  //    重い計算（対数・べき乗）は、BLOCK サンプルごとに1回だけ。間は、音量をなめらかにつなぐ
-  const atk = Math.exp(-BLOCK / ((o.attackMs / 1000) * sampleRate));
-  const rel = Math.exp(-BLOCK / ((o.releaseMs / 1000) * sampleRate));
-  const makeup = fromDb(o.makeupDb);
-  let reduction = 0; // いま下げている量（dB、0以下）
-  let gain = makeup;
-  for (let s = 0; s < n; s += BLOCK) {
-    const e = Math.min(n, s + BLOCK);
-    let peak = 0;
-    for (let i = s; i < e; i++) peak = Math.max(peak, Math.abs(pcm.l[i]), Math.abs(pcm.r[i]));
-    const target = peak > 0 ? compressorReductionDb(toDb(peak), o) : 0;
-    // 下げる方向は attack、戻る方向は release
-    const k = target < reduction ? atk : rel;
-    reduction = k * reduction + (1 - k) * target;
-    const next = fromDb(reduction) * makeup;
-    const step = (next - gain) / (e - s);
-    for (let i = s; i < e; i++) {
-      gain += step;
-      l[i] = pcm.l[i] * gain;
-      r[i] = pcm.r[i] * gain;
-    }
-    gain = next;
-  }
+/** 助走の長さ（秒）。コンプ・リミッターの状態が落ち着くのに十分な長さ。 */
+const PREROLL_SECONDS = 2;
 
-  // 2. リミッター：上限を超える所の必要な下げ幅を先読みし、前後になだらかに下げる
-  const look = Math.max(1, Math.round((o.lookaheadMs / 1000) * sampleRate));
-  const need = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const peak = Math.max(Math.abs(l[i]), Math.abs(r[i]));
-    need[i] = peak > o.ceiling ? o.ceiling / peak : 1;
-  }
-  // 先読みの最小値 M[i] = min(need[i .. i+look-1])（単調キューで一度に求める）
-  const min = new Float32Array(n);
-  const queue = new Int32Array(n);
-  let head = 0;
-  let tail = 0;
-  for (let i = n - 1; i >= 0; i--) {
-    while (tail > head && need[queue[tail - 1]] >= need[i]) tail--;
-    queue[tail++] = i;
-    while (queue[head] > i + look - 1) head++;
-    min[i] = need[queue[head]];
-  }
-  // G[i] = M[i-look+1 .. i] の平均。どの i でも G[i] <= need[i]（上限を超えない）
-  const relK = 1 - Math.exp(-1 / ((o.limiterReleaseMs / 1000) * sampleRate));
-  let sum = 0;
-  let prev = 1;
-  for (let i = 0; i < n; i++) {
-    sum += min[i];
-    if (i >= look) sum -= min[i - look];
-    const count = Math.min(i + 1, look);
-    const avg = (sum + (look - count) * min[0]) / look; // 先頭より前は、最初の窓の値で埋める（先頭でも上限を守る）
-    // 戻りはゆっくり（低音が歪まないように）。下がる所は平均のなだらかさに任せる
-    const g = Math.min(avg, prev + (1 - prev) * relK);
-    prev = g;
-    l[i] *= g;
-    r[i] *= g;
-  }
-  return { l, r };
+/**
+ * くり返して鳴らす曲の仕上げ。曲の頭を、冷えた状態からではなく、直前（曲の終わり）からの続きとして処理する。
+ * 再生中のリアルタイム処理（ずっと続くループ）と、頭から同じ音になる。長さは変わらない。
+ */
+export function masterBusLoop(pcm: Pcm, sampleRate: number, opts: Partial<MasterBusOptions> = {}): Pcm {
+  const n = pcm.l.length;
+  const pre = Math.min(n, Math.round(PREROLL_SECONDS * sampleRate));
+  if (pre === 0) return masterBus(pcm, sampleRate, opts);
+  const l = new Float32Array(pre + n);
+  const r = new Float32Array(pre + n);
+  l.set(pcm.l.subarray(n - pre), 0);
+  r.set(pcm.r.subarray(n - pre), 0);
+  l.set(pcm.l, pre);
+  r.set(pcm.r, pre);
+  const out = masterBus({ l, r }, sampleRate, opts);
+  return { l: out.l.slice(pre), r: out.r.slice(pre) };
 }
