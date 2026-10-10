@@ -3,16 +3,16 @@ import { liveReverbChain } from "../mix/fx";
 import workletUrl from "./masterBusWorklet.ts?worker&url";
 import { reverbImpulse } from "./reverbWet";
 
-/** ステムの波形を、AudioBuffer にしたもの（同じ波形は使い回す。ミュートなどで作り直しても、コピーし直さない）。 */
-const bufferCache = new WeakMap<object, AudioBuffer>();
+/** ステムの波形を、再生用の AudioBuffer にしたものの入れ物（同じ波形は使い回す。作り直しても、同じ波形ならコピーし直さない）。 */
+export type BufferCache = Map<object, AudioBuffer>;
 
-function bufferOf(pcm: { l: Float32Array; r: Float32Array }, sampleRate: number): AudioBuffer {
-  let buffer = bufferCache.get(pcm);
+function bufferOf(cache: BufferCache, pcm: { l: Float32Array; r: Float32Array }, sampleRate: number): AudioBuffer {
+  let buffer = cache.get(pcm);
   if (!buffer || buffer.sampleRate !== sampleRate || buffer.length !== pcm.l.length) {
     buffer = new AudioBuffer({ numberOfChannels: 2, length: pcm.l.length, sampleRate });
     buffer.copyToChannel(pcm.l as Float32Array<ArrayBuffer>, 0);
     buffer.copyToChannel(pcm.r as Float32Array<ArrayBuffer>, 1);
-    bufferCache.set(pcm, buffer);
+    cache.set(pcm, buffer);
   }
   return buffer;
 }
@@ -57,6 +57,8 @@ export function buildMixerGraph(
   faders: Record<string, number> = set.faders,
   /** 音量メーター用に、フェーダーのあとの音量を測れるようにする（再生中の画面用。書き出しの検証では不要）。 */
   meters = false,
+  /** 再生用の AudioBuffer の入れ物。渡せば、同じ波形を使い回す（渡さなければ、この配線だけで使う）。 */
+  buffers: BufferCache = new Map(),
 ): MixerGraph {
   const chain = liveReverbChain(set.masterFx);
   if (!chain) throw new Error("マスターのエフェクトが、リアルタイムでは掛けられない形です");
@@ -86,7 +88,7 @@ export function buildMixerGraph(
   const sources: AudioBufferSourceNode[] = [];
   for (const stem of set.stems) {
     const src = ctx.createBufferSource();
-    src.buffer = bufferOf(stem.pcm, sampleRate);
+    src.buffer = bufferOf(buffers, stem.pcm, sampleRate);
     src.loop = true;
     // ステム → チャンネルのフェーダー → 層のフェーダー → 足す、の順（どちらも掛け算なので、順番で音は変わらない）
     const lane = stem.phraseId !== undefined ? faderNode(stem.phraseId, bus) : bus;
@@ -178,6 +180,8 @@ export class StemMixer {
   private set: StemSet | null = null;
   private faders: Record<string, number> = {};
   private graph: MixerGraph | null = null;
+  /** 鳴らしている間だけ持つ、再生用の波形のコピー（止めたら手放す。メモリを倍にしないため）。 */
+  private readonly buffers: BufferCache = new Map();
   private startedAt = 0;
   private duration = 0;
 
@@ -210,7 +214,10 @@ export class StemMixer {
     const set = this.set;
     if (!set || set.stems.length === 0) return;
     const old = this.graph;
-    const graph = buildMixerGraph(this.ctx, set, this.out, this.faders, true);
+    const graph = buildMixerGraph(this.ctx, set, this.out, this.faders, true, this.buffers);
+    // 入れ替えたあと、いまの曲で使わない波形のコピーは手放す
+    const keep = new Set<object>(set.stems.map((s) => s.pcm));
+    for (const key of [...this.buffers.keys()]) if (!keep.has(key)) this.buffers.delete(key);
     const frames = set.stems[0].pcm.l.length;
     this.duration = frames / set.sampleRate;
     const offset = Math.min(0.999, Math.max(0, startFraction)) * this.duration;
@@ -229,7 +236,10 @@ export class StemMixer {
     if (!g) return;
     this.graph = null;
     g.stop();
-    window.setTimeout(() => g.dispose(), 200);
+    window.setTimeout(() => {
+      g.dispose();
+      if (!this.graph) this.buffers.clear();
+    }, 200);
   }
 
   /** フェーダー（層のミュート・音量、ドラムループ・パッド・効果音の量）を動かす。 */
