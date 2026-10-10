@@ -40,6 +40,8 @@ export interface MixerGraph {
   stop(when?: number): void;
   /** フェーダー（層の曲の id、または @bed・@pad・@sfx・@master）を動かす。プチ音が出ないよう、短くなめらかに。 */
   setFader(name: string, value: number, smooth?: boolean): void;
+  /** いまの音量（ピーク、0〜1）。フェーダーの名前（層の曲の id、@bed・@pad・@master）ごと。メーター用。 */
+  levels(): Record<string, number>;
   dispose(): void;
 }
 
@@ -48,13 +50,28 @@ export interface MixerGraph {
  * 全体のリバーブは、曲の頭に余韻を重ねる書き出しと同じ音になる（ループなので、余韻は自然に頭へ続く）。
  * 呼ぶ前に loadMasterWorklet が true で、liveReverbChain(set.masterFx) が null でないこと。
  */
-export function buildMixerGraph(ctx: BaseAudioContext, set: StemSet, out: AudioNode, faders: Record<string, number> = set.faders): MixerGraph {
+export function buildMixerGraph(
+  ctx: BaseAudioContext,
+  set: StemSet,
+  out: AudioNode,
+  faders: Record<string, number> = set.faders,
+  /** 音量メーター用に、フェーダーのあとの音量を測れるようにする（再生中の画面用。書き出しの検証では不要）。 */
+  meters = false,
+): MixerGraph {
   const chain = liveReverbChain(set.masterFx);
   if (!chain) throw new Error("マスターのエフェクトが、リアルタイムでは掛けられない形です");
   const sampleRate = ctx.sampleRate;
   const bus = ctx.createGain();
   /** フェーダーの名前（層の曲の id、@bed・@pad・@sfx）ごとの音量ノード。 */
   const gains = new Map<string, GainNode>();
+  const taps = new Map<string, { node: AnalyserNode; buf: Float32Array<ArrayBuffer> }>();
+  const tap = (name: string, from: AudioNode): void => {
+    if (!meters) return;
+    const node = ctx.createAnalyser();
+    node.fftSize = 256;
+    from.connect(node);
+    taps.set(name, { node, buf: new Float32Array(node.fftSize) });
+  };
   const faderNode = (name: string, to: AudioNode): GainNode => {
     let g = gains.get(name);
     if (!g) {
@@ -62,6 +79,7 @@ export function buildMixerGraph(ctx: BaseAudioContext, set: StemSet, out: AudioN
       g.gain.value = faders[name] ?? 1;
       g.connect(to);
       gains.set(name, g);
+      tap(name, g);
     }
     return g;
   };
@@ -103,6 +121,7 @@ export function buildMixerGraph(ctx: BaseAudioContext, set: StemSet, out: AudioN
   const masterFader = ctx.createGain();
   masterFader.gain.value = faders[MASTER_FADER] ?? 1;
   gains.set(MASTER_FADER, masterFader);
+  tap(MASTER_FADER, masterFader);
   node.connect(master);
   master.connect(masterFader);
   masterFader.connect(out);
@@ -130,7 +149,18 @@ export function buildMixerGraph(ctx: BaseAudioContext, set: StemSet, out: AudioN
       if (smooth) g.gain.setTargetAtTime(value, ctx.currentTime, 0.008);
       else g.gain.value = value;
     },
+    levels() {
+      const out: Record<string, number> = {};
+      for (const [name, t] of taps) {
+        t.node.getFloatTimeDomainData(t.buf);
+        let peak = 0;
+        for (let i = 0; i < t.buf.length; i++) peak = Math.max(peak, Math.abs(t.buf[i]));
+        out[name] = peak;
+      }
+      return out;
+    },
     dispose() {
+      for (const t of taps.values()) t.node.disconnect();
       for (const s of sources) s.disconnect();
       for (const g of gains.values()) g.disconnect();
       for (const n of owned) n.disconnect();
@@ -180,7 +210,7 @@ export class StemMixer {
     const set = this.set;
     if (!set || set.stems.length === 0) return;
     const old = this.graph;
-    const graph = buildMixerGraph(this.ctx, set, this.out, this.faders);
+    const graph = buildMixerGraph(this.ctx, set, this.out, this.faders, true);
     const frames = set.stems[0].pcm.l.length;
     this.duration = frames / set.sampleRate;
     const offset = Math.min(0.999, Math.max(0, startFraction)) * this.duration;
@@ -206,6 +236,11 @@ export class StemMixer {
   setFader(name: string, value: number): void {
     this.faders[name] = value;
     this.graph?.setFader(name, value);
+  }
+
+  /** いまの音量メーターの値（フェーダーの名前ごとのピーク）。鳴っていなければ空。 */
+  levels(): Record<string, number> {
+    return this.graph?.levels() ?? {};
   }
 
   /** いま曲のどこか（0〜1）。鳴っていなければ null。 */

@@ -6,6 +6,7 @@ import {
   applySeeds,
   buildStems,
   CHANNEL_FADERS,
+  MASTER_FADER,
   mixdown,
   songFaders,
   collectSources,
@@ -385,11 +386,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   /** トラックヘッダーの1行（つまみを動かしている最中に作り直さないよう、行の並びが変わったときだけ作り直す）。 */
   let headerSignature = "";
   let headerRefreshers: (() => void)[] = [];
+  /** トラックヘッダーの音量メーター。name はフェーダーの名前（層の曲の id、@bed・@pad・@master）。 */
+  let headerMeters: { name: () => string; bar: HTMLElement; shown: number }[] = [];
   function renderHeaders(rows: Row[]): void {
     const signature = JSON.stringify(rows.map((r) => [r.type, r.key]));
     if (signature !== headerSignature) {
       headerSignature = signature;
       headerRefreshers = [];
+      headerMeters = [];
       headerCol.innerHTML = "";
       const ruler = el("div", "arr-head-ruler", "トラック");
       ruler.style.height = `${HEAD_H}px`;
@@ -453,6 +457,16 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     }
     const fx = button("FX", () => openTrackFx(key), "arr-btn arr-fx", "このトラックのFXチェーンを開く");
     box.appendChild(fx);
+    // 音量メーター（再生中の、フェーダーのあとの音量）
+    const meter = el("div", "arr-meter");
+    const bar = el("i");
+    meter.appendChild(bar);
+    box.appendChild(meter);
+    headerMeters.push({
+      name: () => (kind === "lane" ? (laneOfKey(key)?.phraseId ?? "") : kind === "bed" ? CHANNEL_FADERS.bed : kind === "pad" ? CHANNEL_FADERS.pad : MASTER_FADER),
+      bar,
+      shown: 0,
+    });
     headerRefreshers.push(() => {
       const lane = laneOfKey(key);
       const selected = (sel.type === "track" && sel.key === key) || (sel.type === "hit" && sel.track === key);
@@ -1655,6 +1669,20 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     fxWindow.refresh();
   }
 
+  /** 音量メーターを動かす（毎フレーム）。対数（dB）で、-60dB〜0dB。下がるときはゆっくり。 */
+  function updateMeters(): void {
+    const levels = mixer.playing ? mixer.levels() : {};
+    for (const m of headerMeters) {
+      const raw = levels[m.name()] ?? 0;
+      const db = 20 * Math.log10(Math.max(raw, 1e-6));
+      const frac = Math.min(1, Math.max(0, (db + 60) / 60));
+      m.shown = Math.max(frac, m.shown - 0.03);
+      m.bar.style.width = `${(m.shown * 100).toFixed(1)}%`;
+      const shownDb = m.shown * 60 - 60;
+      m.bar.className = shownDb > -0.5 ? "clip" : shownDb > -6 ? "hot" : "";
+    }
+  }
+
   function updateTime(): void {
     const total = songSeconds(song);
     const t = positionNow();
@@ -1706,6 +1734,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     },
     tick() {
       laneView.setProgress(positionNow(), !isPlaying());
+      updateMeters();
       if (isPlaying()) updateTime();
     },
     togglePlay() {

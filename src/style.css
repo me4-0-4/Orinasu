@@ -1509,6 +1509,7 @@ body[data-tab="mix"] .app-footer {
   box-sizing: border-box;
 }
 .arr-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1517,6 +1518,28 @@ body[data-tab="mix"] .app-footer {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   border-left: 3px solid transparent;
   min-width: 0;
+}
+/* 音量メーター（ヘッダーの下の細いバー） */
+.arr-meter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  pointer-events: none;
+}
+.arr-meter > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent-green);
+}
+.arr-meter > i.hot {
+  background: var(--accent-yellow);
+}
+.arr-meter > i.clip {
+  background: var(--accent-orange);
 }
 .arr-head.selected {
   background: rgba(62, 230, 176, 0.1);
