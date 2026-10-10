@@ -928,6 +928,24 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       },
     }),
   );
+  const laneBalance = reg(
+    knob({
+      label: "定位",
+      min: -1,
+      max: 1,
+      step: 0.01,
+      format: (v) => (Math.abs(v) < 0.005 ? "中央" : v < 0 ? `左 ${Math.round(-v * 100)}%` : `右 ${Math.round(v * 100)}%`),
+      hint: () => "このトラックの左右の位置（ミキサーのパン。断片ごとのパンとは別）",
+      get: () => selLane()?.balance ?? 0,
+      set: (v) => {
+        if (sel.type !== "track") return;
+        updateFader(sel.key, (l) => {
+          const { balance: _b, ...rest } = l;
+          return Math.abs(v) < 0.005 ? rest : { ...rest, balance: v };
+        });
+      },
+    }),
+  );
   const laneCut = reg(
     choice<string>({
       label: "切り方",
@@ -969,7 +987,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }));
   const laneShapeSection = section("laneShape", "刻み方（このトラックだけ・全体からのずらし）", shiftNote, ...laneShape.map((s) => s.c.el));
   const laneGroup = el("div", "ins-group");
-  laneGroup.append(laneButtons, laneVolume.el, laneCut.el, laneShapeSection);
+  laneGroup.append(laneButtons, laneVolume.el, laneBalance.el, laneCut.el, laneShapeSection);
   const bedGroup = el("div", "ins-group");
   const drumOptions = (): [string, string][] => [["", "なし"], ...deps.getPhrases().filter(hasDrums).map((p): [string, string] => [p.id, `${p.name}のドラム`])];
   const bedDrum = reg(

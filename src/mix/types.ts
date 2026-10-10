@@ -30,6 +30,8 @@ export interface Lane {
   mode?: CutMode;
   /** 音量（0〜1.5）。無ければ1。 */
   volume?: number;
+  /** 定位（-1で左、0で真ん中、1で右）。無ければ真ん中。ミキサーのパン（断片ごとのパンとは別）。 */
+  balance?: number;
   muted?: boolean;
   /** この層（トラック）のエフェクト：FXチェーンとエンベロープ。無ければ掛けない（マスターのエフェクトは別に掛かる）。 */
   fx?: TrackFx;
@@ -192,7 +194,7 @@ export function effectiveParams(global: SongParams, lane: Pick<Lane, "shift" | "
 /** 層が全体と違う設定を持っているか（ずらし・切り方・音量・ミュート）。 */
 export function laneIsCustom(lane: Lane): boolean {
   const shifted = SHAPE_KEYS.some((k) => Math.abs(lane.shift?.[k] ?? 0) > 1e-9);
-  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted || trackHasFx(lane.fx) || (lane.takes?.length ?? 0) > 0;
+  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || lane.balance !== undefined || !!lane.muted || trackHasFx(lane.fx) || (lane.takes?.length ?? 0) > 0;
 }
 
 /**
@@ -299,6 +301,7 @@ function sanitizeLane(raw: Lane, legacy: LegacyContext): Lane {
   if (raw.muted) lane.muted = true;
   if (raw.mode === "transient" || raw.mode === "divide") lane.mode = raw.mode;
   if (isNum(raw.volume)) lane.volume = Math.min(MAX_LANE_VOLUME, Math.max(0, raw.volume));
+  if (isNum(raw.balance) && Math.abs(raw.balance) > 1e-9) lane.balance = Math.min(1, Math.max(-1, raw.balance));
   // 前の形の「選んだ断片だけ」のエフェクトは、断片ごとのテイクFXになる
   const takes = sanitizeTakes(raw.takes);
   if (typeof raw.fx === "object" && raw.fx !== null) {

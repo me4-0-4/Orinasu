@@ -1,4 +1,4 @@
-import { CHANNEL_FADERS, MASTER_FADER, type StemSet } from "../mix/collageSong";
+import { CHANNEL_FADERS, MASTER_FADER, balanceFader, type StemSet } from "../mix/collageSong";
 import { liveReverbChain } from "../mix/fx";
 import workletUrl from "./masterBusWorklet.ts?worker&url";
 import { reverbImpulse } from "./reverbWet";
@@ -38,7 +38,7 @@ export interface MixerGraph {
   /** when（コンテキストの時刻）から、曲の offsetSeconds の位置を鳴らし始める。 */
   start(when: number, offsetSeconds: number): void;
   stop(when?: number): void;
-  /** フェーダー（層の曲の id、または @bed・@pad・@sfx・@master）を動かす。プチ音が出ないよう、短くなめらかに。 */
+  /** フェーダー（層の曲の id、~層の曲の id（定位）、または @bed・@pad・@sfx・@master）を動かす。プチ音が出ないよう、短くなめらかに。 */
   setFader(name: string, value: number, smooth?: boolean): void;
   /** いまの音量（ピーク、0〜1）。フェーダーの名前（層の曲の id、@bed・@pad・@master）ごと。メーター用。 */
   levels(): Record<string, number>;
@@ -66,6 +66,8 @@ export function buildMixerGraph(
   const bus = ctx.createGain();
   /** フェーダーの名前（層の曲の id、@bed・@pad・@sfx）ごとの音量ノード。 */
   const gains = new Map<string, GainNode>();
+  /** 層の定位（フェーダーの名前は balanceFader(層の曲の id)）。 */
+  const panners = new Map<string, StereoPannerNode>();
   const taps = new Map<string, { node: AnalyserNode; buf: Float32Array<ArrayBuffer> }>();
   const tap = (name: string, from: AudioNode): void => {
     if (!meters) return;
@@ -91,7 +93,20 @@ export function buildMixerGraph(
     src.buffer = bufferOf(buffers, stem.pcm, sampleRate);
     src.loop = true;
     // ステム → チャンネルのフェーダー → 層のフェーダー → 足す、の順（どちらも掛け算なので、順番で音は変わらない）
-    const lane = stem.phraseId !== undefined ? faderNode(stem.phraseId, bus) : bus;
+    let laneTo: AudioNode = bus;
+    if (stem.phraseId !== undefined) {
+      // 層のフェーダー → 層の定位 → 足す
+      const panName = balanceFader(stem.phraseId);
+      let panner = panners.get(panName);
+      if (!panner) {
+        panner = ctx.createStereoPanner();
+        panner.pan.value = faders[panName] ?? 0;
+        panner.connect(bus);
+        panners.set(panName, panner);
+      }
+      laneTo = panner;
+    }
+    const lane = stem.phraseId !== undefined ? faderNode(stem.phraseId, laneTo) : bus;
     const target = stem.channel ? faderNode(CHANNEL_FADERS[stem.channel], lane) : lane;
     src.connect(target);
     sources.push(src);
@@ -146,10 +161,10 @@ export function buildMixerGraph(
       }
     },
     setFader(name, value, smooth = true) {
-      const g = gains.get(name);
-      if (!g) return;
-      if (smooth) g.gain.setTargetAtTime(value, ctx.currentTime, 0.008);
-      else g.gain.value = value;
+      const param = gains.get(name)?.gain ?? panners.get(name)?.pan;
+      if (!param) return;
+      if (smooth) param.setTargetAtTime(value, ctx.currentTime, 0.008);
+      else param.value = value;
     },
     levels() {
       const out: Record<string, number> = {};
@@ -165,6 +180,7 @@ export function buildMixerGraph(
       for (const t of taps.values()) t.node.disconnect();
       for (const s of sources) s.disconnect();
       for (const g of gains.values()) g.disconnect();
+      for (const n of panners.values()) n.disconnect();
       for (const n of owned) n.disconnect();
     },
   };

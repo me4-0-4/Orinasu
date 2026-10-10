@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
-import { applySeeds, bedEvents, buildCollage, buildStems, collectSources, faderOf, mixdown, songFaders, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
-import { createEmptySong, type Song } from "./types.ts";
+import { applySeeds, bedEvents, buildCollage, balanceFader, buildStems, collectSources, faderOf, mixdown, panGains, songFaders, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
+import { createEmptySong, migrateSong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
 import { newGroup } from "./groups.ts";
 import { BuildCache } from "./buildCache.ts";
@@ -368,14 +368,16 @@ test("ソロ：ソロのものだけ鳴る（ミュート中でも）。ソロ�
       { phraseId: "c", cutSeed: 3, rhythmSeed: 3, orderSeed: 3 },
     ],
   };
+  // 定位（~で始まる名前）はここでは見ない
+  const levels = (f: Record<string, number>) => Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith("~")));
   // ソロなし：ミュートと音量のとおり
-  assert.deepEqual(songFaders(song), { a: 0.5, b: 0, c: 1, "@bed": 0.8, "@pad": 0.5, "@sfx": 0.6, "@master": 1 });
+  assert.deepEqual(levels(songFaders(song)), { a: 0.5, b: 0, c: 1, "@bed": 0.8, "@pad": 0.5, "@sfx": 0.6, "@master": 1 });
   // aだけソロ：ほかは止まる。ドラムループと効果音も止まる。パッドの量はそのまま（パッドは層のフェーダーに従う）
-  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: false }), { a: 0.5, b: 0, c: 0, "@bed": 0, "@pad": 0.5, "@sfx": 0, "@master": 1 });
+  assert.deepEqual(levels(songFaders(song, { lanes: new Set(["a"]), bed: false })), { a: 0.5, b: 0, c: 0, "@bed": 0, "@pad": 0.5, "@sfx": 0, "@master": 1 });
   // ミュート中のbをソロにすると鳴る（音量1）
   assert.equal(songFaders(song, { lanes: new Set(["b"]), bed: false }).b, 1);
   // ドラムループもソロ：aと、ドラムループが鳴る
-  assert.deepEqual(songFaders(song, { lanes: new Set(["a"]), bed: true }), { a: 0.5, b: 0, c: 0, "@bed": 0.8, "@pad": 0.5, "@sfx": 0, "@master": 1 });
+  assert.deepEqual(levels(songFaders(song, { lanes: new Set(["a"]), bed: true })), { a: 0.5, b: 0, c: 0, "@bed": 0.8, "@pad": 0.5, "@sfx": 0, "@master": 1 });
   // ドラムループだけソロ：層は全部止まる
   const bedOnly = songFaders(song, { lanes: new Set(), bed: true });
   assert.deepEqual([bedOnly.a, bedOnly.b, bedOnly.c, bedOnly["@bed"], bedOnly["@sfx"]], [0, 0, 0, 0.8, 0]);
@@ -398,4 +400,45 @@ test("マスターのフェーダー：コンプ・リミッターのあとに�
   assert.ok(max < 1e-7, `差 ${max}`);
   assert.ok((await mixdown(set, undefined, { ...set.faders, "@master": 0 })).l.every((x) => x === 0));
   assert.equal(songFaders({ ...song, params: { ...song.params, master: 0.3 } })["@master"], 0.3);
+});
+
+test("定位：Web Audio のパンと同じ式。真ん中は何も変えない。左いっぱいは右の音も左に寄る", () => {
+  assert.ok(Math.abs(panGains(0).gainL) < 1e-12 && Math.abs(panGains(0).gainR - 1) < 1e-12);
+  // 左いっぱい（-1）：左 = 左 + 右、右 = 0
+  assert.ok(Math.abs(panGains(-1).gainL - 1) < 1e-12 && Math.abs(panGains(-1).gainR) < 1e-12);
+  // 右いっぱい（1）：左 = 0、右 = 右 + 左
+  assert.ok(Math.abs(panGains(1).gainL) < 1e-12 && Math.abs(panGains(1).gainR - 1) < 1e-12);
+  // 途中は、二乗の和が1（音量が変わらない）
+  for (const p of [-0.7, -0.2, 0.3, 0.9]) {
+    const { gainL, gainR } = panGains(p);
+    assert.ok(Math.abs(gainL ** 2 + gainR ** 2 - 1) < 1e-12);
+  }
+});
+
+test("定位：ステムに定位を掛けた結果は、最初から定位を設定した曲と同じ。真ん中なら音は変わらない。保存・読み込みもできる", async () => {
+  const phrases = [drumPhrase("a"), phrase("b", 100, 62)];
+  const song: Song = { ...createEmptySong(), materialIds: ["a", "b"], lengthBars: 4, bpm: 120 };
+  song.lanes = syncLanes(song, seq);
+  const sr = 2000;
+  const set = (await buildStems(song, phrases, steadyRender, sr))!;
+  assert.equal(set.faders[balanceFader("a")], 0);
+  const center = await mixdown(set);
+  assert.deepEqual(await mixdown(set, undefined, { ...set.faders, [balanceFader("a")]: 0 }), center);
+  const panned = structuredClone(song);
+  panned.lanes![1].balance = -0.6;
+  const direct = (await buildCollage(panned, phrases, steadyRender, sr))!;
+  const via = await mixdown(set, undefined, songFaders(panned));
+  let max = 0;
+  let different = 0;
+  for (let i = 0; i < via.l.length; i++) {
+    max = Math.max(max, Math.abs(via.l[i] - direct.pcm.l[i]), Math.abs(via.r[i] - direct.pcm.r[i]));
+    different = Math.max(different, Math.abs(via.l[i] - center.l[i]));
+  }
+  assert.ok(max < 1e-6, `差 ${max}`);
+  assert.ok(different > 1e-3, "定位を動かすと、音が変わる");
+  // 保存・読み込み：真ん中は保存しない。範囲外は収める
+  const lane = (balance: number) => ({ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, balance });
+  assert.equal(migrateSong({ ...createEmptySong(), lanes: [lane(0.4)] }).lanes![0].balance, 0.4);
+  assert.equal(migrateSong({ ...createEmptySong(), lanes: [lane(-9)] }).lanes![0].balance, -1);
+  assert.equal(migrateSong({ ...createEmptySong(), lanes: [lane(0)] }).lanes![0].balance, undefined);
 });

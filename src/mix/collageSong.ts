@@ -146,6 +146,19 @@ export const faderOf = (lane: Pick<Lane, "muted" | "volume">): number => (lane.m
 export const CHANNEL_FADERS = { bed: "@bed", pad: "@pad", sfx: "@sfx" } as const;
 /** マスターのフェーダー（コンプ・リミッターのあとに掛かる）。 */
 export const MASTER_FADER = "@master";
+/** 層の定位（-1〜1）の名前。層の曲の id の前に ~ をつける。 */
+export const balanceFader = (phraseId: string): string => `~${phraseId}`;
+
+/**
+ * 定位のゲイン。Web Audio の StereoPannerNode（ステレオ入力）と同じ式（再生中のミキサーと、書き出しが同じ音になる）：
+ * pan ≤ 0 のとき  左 = 入力の左 + 入力の右 × gainL、右 = 入力の右 × gainR
+ * pan > 0 のとき  左 = 入力の左 × gainL、右 = 入力の右 + 入力の左 × gainR
+ * 真ん中（0）は何も変わらない。
+ */
+export function panGains(pan: number): { gainL: number; gainR: number } {
+  const x = pan <= 0 ? pan + 1 : pan;
+  return { gainL: Math.cos((x * Math.PI) / 2), gainR: Math.sin((x * Math.PI) / 2) };
+}
 
 /**
  * ソロ（その場だけの状態で、曲には保存しない）：ソロの層と、ドラムループ。
@@ -163,6 +176,7 @@ export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted">, so
   const bedAudible = solo?.bed || (!anySolo && !song.bedMuted);
   return {
     ...Object.fromEntries((song.lanes ?? []).map((l) => [l.phraseId, laneValue(l)])),
+    ...Object.fromEntries((song.lanes ?? []).map((l) => [balanceFader(l.phraseId), l.balance ?? 0])),
     [CHANNEL_FADERS.bed]: bedAudible ? song.params.bedVolume : 0,
     [CHANNEL_FADERS.pad]: song.params.pad,
     [CHANNEL_FADERS.sfx]: anySolo ? 0 : song.params.sfx,
@@ -455,9 +469,30 @@ export function sumStems(set: StemSet, faders: Record<string, number> = set.fade
   for (const s of set.stems) {
     const g = stemFader(s, faders);
     if (g <= 0) continue;
-    for (let i = 0; i < n; i++) {
-      out.l[i] += s.pcm.l[i] * g;
-      out.r[i] += s.pcm.r[i] * g;
+    const pan = s.phraseId !== undefined ? (faders[balanceFader(s.phraseId)] ?? 0) : 0;
+    if (pan === 0) {
+      for (let i = 0; i < n; i++) {
+        out.l[i] += s.pcm.l[i] * g;
+        out.r[i] += s.pcm.r[i] * g;
+      }
+    } else {
+      // 定位は、音量を掛けたあとに（どちらも掛け算と足し算だけなので、順番で結果は変わらない）
+      const { gainL, gainR } = panGains(pan);
+      if (pan < 0) {
+        for (let i = 0; i < n; i++) {
+          const l = s.pcm.l[i] * g;
+          const r = s.pcm.r[i] * g;
+          out.l[i] += l + r * gainL;
+          out.r[i] += r * gainR;
+        }
+      } else {
+        for (let i = 0; i < n; i++) {
+          const l = s.pcm.l[i] * g;
+          const r = s.pcm.r[i] * g;
+          out.l[i] += l * gainL;
+          out.r[i] += r + l * gainR;
+        }
+      }
     }
   }
   return out;
