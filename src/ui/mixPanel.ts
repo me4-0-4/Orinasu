@@ -27,6 +27,9 @@ import {
   MIN_BPM,
   createEmptySong,
   formatDuration,
+  openedSong,
+  sameSongContent,
+  snapshotSong,
   effectiveParams,
   laneIsCustom,
   setLaneShape,
@@ -39,6 +42,7 @@ import {
 } from "../mix/types";
 import type { Phrase } from "../phrase/types";
 import { randomSeed } from "../theory/rng";
+import { makeId } from "../phrase/types";
 import { ENV_H, HEAD_H, ROW_H, buildLaneView, type Row } from "./laneView";
 import { buildFxWindow } from "./fxWindow";
 import { ENV_PARAM_LABELS, FX_LABELS, FX_SHORT, emptyTrack, trackHasFx, type EnvPoint, type TrackFx } from "../mix/fx";
@@ -50,6 +54,10 @@ export interface MixPanelDeps {
   getPhrases: () => Phrase[];
   /** 曲が変わったので保存してほしい。 */
   onSongChange: (song: Song) => void;
+  /** 名前を付けて残した曲（新しい順）。 */
+  listSavedSongs: () => Promise<Song[]>;
+  putSavedSong: (song: Song) => Promise<void>;
+  deleteSavedSong: (id: string) => Promise<void>;
   /** 鳴らす前に呼ぶ：音を出す準備と、ほかの音（演奏・フレーズの再生）を止める。 */
   prepareAudio: () => Promise<void>;
   audio: { ctx: AudioContext; out: AudioNode };
@@ -725,7 +733,116 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     }),
   );
 
+  // --- 曲：保存した曲（名前を付けて残す） ---
+  /** 保存した曲の一覧（新しい順）。保存・削除のたびに読み直す。 */
+  let library: Song[] = [];
+  const libraryList = el("div", "mix-list");
+  const libraryEmpty = el("div", "layer-empty", "まだ保存した曲はない");
+  const libraryStatus = el("div", "ins-meta");
+  libraryStatus.setAttribute("role", "status");
+  const saveButton = button("保存", () => void saveToLibrary(false), "preset-button", "いまの曲を、名前を付けて残す");
+  const saveNewButton = button("別の曲として保存", () => void saveToLibrary(true), "preset-button", "開いている曲は上書きせず、新しい曲として残す");
+  const newSongButton = button("新しい曲", () => startNewSong(), "preset-button", "空の曲から始める（いまの曲は、保存していなければ消える）");
+  const libraryButtons = el("div", "preset-row");
+  libraryButtons.append(saveButton, saveNewButton, newSongButton);
+
+  const currentSaved = (): Song | undefined => (song.savedId ? library.find((s) => s.id === song.savedId) : undefined);
+  /** いまの曲が、保存していない変更を持っているか（刻んでいなければ失うものがない）。 */
+  const hasUnsavedWork = (): boolean => !!song.lanes && !library.some((s) => sameSongContent(s, song));
+
+  async function loadLibrary(): Promise<void> {
+    try {
+      library = await deps.listSavedSongs();
+    } catch (err) {
+      console.error("保存した曲を読み込めませんでした", err);
+      libraryStatus.textContent = "保存した曲を読み込めなかった";
+    }
+    renderLibrary();
+  }
+
+  function renderLibrary(): void {
+    libraryList.innerHTML = "";
+    libraryEmpty.hidden = library.length > 0;
+    const stamp = (t: number): string =>
+      new Date(t).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    for (const saved of library) {
+      const row = el("div", "layer-row saved-song-row");
+      row.classList.toggle("active", saved.id === song.savedId);
+      const info = el("div", "saved-song-info");
+      info.append(
+        el("div", "saved-song-name", saved.name || "無題の曲"),
+        el("div", "ins-meta", `${saved.bpm}BPM・${saved.lengthBars}小節・${saved.lanes?.length ?? 0}トラック・${stamp(saved.updatedAt)}${saved.id === song.savedId ? "・開いている曲" : ""}`),
+      );
+      row.append(info, button("開く", () => openFromLibrary(saved), "preset-button", "この曲を開く（いまの曲と入れ替わる）"), button("削除", () => void deleteFromLibrary(saved), "preset-button", "この保存した曲を消す"));
+      libraryList.appendChild(row);
+    }
+    saveButton.textContent = currentSaved() ? "上書き保存" : "保存";
+    saveNewButton.hidden = !currentSaved();
+  }
+
+  async function saveToLibrary(asNew: boolean): Promise<void> {
+    if (!song.lanes) {
+      libraryStatus.textContent = "まだ刻んでいないので、保存する曲がない（先に「刻む」）";
+      return;
+    }
+    const target = !asNew ? currentSaved() : undefined;
+    const saved = snapshotSong(song, target?.id ?? makeId("saved"));
+    try {
+      await deps.putSavedSong(saved);
+    } catch (err) {
+      console.error("曲を保存できませんでした", err);
+      libraryStatus.textContent = "保存できなかった";
+      return;
+    }
+    song.savedId = saved.id;
+    touch(); // 作業中の曲にも、どの保存した曲から来たかを残す
+    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を${target ? "上書き" : ""}保存した`;
+    await loadLibrary();
+  }
+
+  function openFromLibrary(saved: Song): void {
+    if (hasUnsavedWork() && !window.confirm("いまの曲は保存されていない。開くと入れ替わるけど、いい？")) return;
+    const next = openedSong(saved);
+    pruneMissing(next); // 消したフレーズは外す
+    api.setSong(next);
+    touch();
+    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を開いた`;
+  }
+
+  function startNewSong(): void {
+    if (hasUnsavedWork() && !window.confirm("いまの曲は保存されていない。新しい曲にすると消えるけど、いい？")) return;
+    api.setSong(createEmptySong());
+    touch();
+    libraryStatus.textContent = "";
+  }
+
+  async function deleteFromLibrary(saved: Song): Promise<void> {
+    if (!window.confirm(`保存した曲「${saved.name || "無題の曲"}」を削除する？`)) return;
+    try {
+      await deps.deleteSavedSong(saved.id);
+    } catch (err) {
+      console.error("保存した曲を削除できませんでした", err);
+      libraryStatus.textContent = "削除できなかった";
+      return;
+    }
+    if (song.savedId === saved.id) {
+      delete song.savedId; // いまの曲は残す。次の「保存」は新しい曲になる
+      touch();
+    }
+    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を削除した`;
+    await loadLibrary();
+  }
+
   songPanel.append(
+    section(
+      "library",
+      "保存した曲",
+      note("いまの曲は自動で残る。名前を付けて取っておきたい曲は「保存」。曲の中身は刻み方（種と設定）なので、素材のフレーズを直すと、保存した曲の音も変わる"),
+      libraryButtons,
+      libraryStatus,
+      libraryEmpty,
+      libraryList,
+    ),
     section("material", "素材", note("刻むフレーズを選ぶ。1つのフレーズが、1つのトラックになる"), materialEmpty, materialList),
     section(
       "chop",
@@ -1002,6 +1119,26 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   root.append(split, fxWindow.el);
 
   // ------------------------------------------------------------------ 動作
+
+  /** 消えたフレーズを、素材・トラック・ドラムループ・グループから外す。 */
+  function pruneMissing(target: Song): void {
+    // 消えたフレーズは素材から外す
+    const alive = new Set(deps.getPhrases().map((p) => p.id));
+    target.materialIds = target.materialIds.filter((id) => alive.has(id));
+    if (target.lanes) {
+      target.lanes = target.lanes.filter((l) => alive.has(l.phraseId));
+      if (target.lanes.length === 0) delete target.lanes; // 刻む前と同じ状態に（読み込み直したときと同じふるまい）
+    }
+    // ドラムループの曲が消えたら、「なし」ではなく「自動」（ドラムのある最初の素材）に戻す
+    if (target.drumId && !alive.has(target.drumId)) delete target.drumId;
+    // 消えたフレーズの断片はグループから外し、空になったグループは消す
+    if (target.groups) {
+      target.groups = target.groups
+        .map((g) => ({ ...g, members: g.members.filter((m) => alive.has(m.phraseId)) }))
+        .filter((g) => g.members.length > 0);
+      if (target.groups.length === 0) delete target.groups;
+    }
+  }
 
   function touch(): void {
     song.updatedAt = Date.now();
@@ -1401,7 +1538,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   setNotice("");
   refresh();
 
-  return {
+  const api: MixPanel = {
     el: root,
     setSong(next) {
       player.stop();
@@ -1417,24 +1554,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       renderMaterials();
       refresh();
       if (song.lanes) void rebuild();
+      void loadLibrary();
     },
     refreshMaterials() {
-      // 消えたフレーズは素材から外す
-      const alive = new Set(deps.getPhrases().map((p) => p.id));
-      song.materialIds = song.materialIds.filter((id) => alive.has(id));
-      if (song.lanes) {
-        song.lanes = song.lanes.filter((l) => alive.has(l.phraseId));
-        if (song.lanes.length === 0) delete song.lanes; // 刻む前と同じ状態に（読み込み直したときと同じふるまい）
-      }
-      // ドラムループの曲が消えたら、「なし」ではなく「自動」（ドラムのある最初の素材）に戻す
-      if (song.drumId && !alive.has(song.drumId)) delete song.drumId;
-      // 消えたフレーズの断片はグループから外し、空になったグループは消す
-      if (song.groups) {
-        song.groups = song.groups
-          .map((g) => ({ ...g, members: g.members.filter((m) => alive.has(m.phraseId)) }))
-          .filter((g) => g.members.length > 0);
-        if (song.groups.length === 0) delete song.groups;
-      }
+      pruneMissing(song);
       renderMaterials();
       refresh();
       if (song.lanes && !result) void rebuild(); // 起動直後は、フレーズが読み込まれてから曲を作り直す
@@ -1453,4 +1576,5 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       void togglePlay();
     },
   };
+  return api;
 }

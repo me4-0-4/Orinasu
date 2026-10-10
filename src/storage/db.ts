@@ -1,6 +1,6 @@
 import type { SynthParams } from "../audio/synthParams";
 import type { Phrase } from "../phrase/types";
-import type { Song } from "../mix/types";
+import { isSavedSongId, type Song } from "../mix/types";
 
 export interface UserPreset {
   id: string;
@@ -120,7 +120,10 @@ export async function loadUserPresets(): Promise<UserPreset[]> {
   return result.sort((a, b) => a.updatedAt - b.updatedAt);
 }
 
-/** 刻んだ曲（選んだ曲・BPM・刻み方の計画）。いまは端末内だけに保存する（クラウド同期は未対応）。 */
+/**
+ * 刻んだ曲（選んだ曲・BPM・刻み方の計画）。いまは端末内だけに保存する（クラウド同期は未対応）。
+ * 作業中の曲（SONG_ID）も、名前を付けて残した曲（saved_…）も、同じ保存場所に入れる。
+ */
 export async function saveSong(song: Song): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
@@ -141,6 +144,29 @@ export async function loadSong(id: string): Promise<Song | null> {
   });
   db.close();
   return result;
+}
+
+/** 名前を付けて残した曲を、新しい順に全部読む（作業中の曲は含めない）。 */
+export async function loadSavedSongs(): Promise<Song[]> {
+  const db = await openDb();
+  const result = await new Promise<Song[]>((resolve, reject) => {
+    const req = db.transaction(SONG_STORE, "readonly").objectStore(SONG_STORE).getAll();
+    req.onsuccess = () => resolve(req.result as Song[]);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return result.filter((s) => isSavedSongId(s.id)).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function deleteSong(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(SONG_STORE, "readwrite");
+    tx.objectStore(SONG_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
 }
 
 /** 端末内のフレーズと自分の音色を全部消す。別のアカウントでログインしたときに前の人のデータを残さないために使う。 */

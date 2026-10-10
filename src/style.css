@@ -1819,3 +1819,17 @@ body[data-tab="mix"] .app-footer {
 .ins-group-row {
   align-items: center;
 }
+
+/* 刻む：保存した曲の一覧 */
+.saved-song-row {
+  flex-wrap: wrap;
+}
+.saved-song-info {
+  flex: 1;
+  min-width: 0;
+}
+.saved-song-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

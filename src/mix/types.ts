@@ -106,10 +106,48 @@ export interface Song {
   /** グループ：選んだ断片のまとまり（まとめて刻み方・ミュート・FXを変える）。 */
   groups?: HitGroup[];
   params: SongParams;
+  /** 「保存した曲」から開いた曲なら、そのid（「保存」で上書きする先）。作業中の曲にだけ付く。 */
+  savedId?: string;
   updatedAt: number;
 }
 
+/** 作業中の曲（自動で保存される）のid。 */
 export const SONG_ID = "song";
+/** 「保存した曲」のidの頭。作業中の曲と同じ保存場所に、別のidで入れる。 */
+export const SAVED_SONG_PREFIX = "saved_";
+
+/** 保存した曲か（作業中の曲ではなく、名前を付けて残した曲）。 */
+export const isSavedSongId = (id: string): boolean => id.startsWith(SAVED_SONG_PREFIX);
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, canonical(v)]),
+    );
+  }
+  return value;
+}
+
+/** 2つの曲の中身が同じか（id・更新時刻・どの保存した曲から開いたか、は見ない）。 */
+export function sameSongContent(a: Song, b: Song): boolean {
+  const strip = ({ id: _id, updatedAt: _u, savedId: _s, ...rest }: Song) => rest;
+  return JSON.stringify(canonical(strip(a))) === JSON.stringify(canonical(strip(b)));
+}
+
+/** 作業中の曲を、名前を付けて残すための写し（idは保存先のid）。 */
+export function snapshotSong(song: Song, id: string, now = Date.now()): Song {
+  const { savedId: _s, ...rest } = structuredClone(song);
+  return { ...rest, id, updatedAt: now };
+}
+
+/** 保存した曲を、作業中の曲として開くための写し。 */
+export function openedSong(saved: Song): Song {
+  return { ...structuredClone(saved), id: SONG_ID, savedId: saved.id };
+}
 
 export const MIN_BPM = 40;
 export const MAX_BPM = 240;
@@ -209,6 +247,7 @@ export function migrateSong(raw: unknown): Song {
   if (isNum(r.beatsPerBar) && r.beatsPerBar >= 1 && r.beatsPerBar <= 12) song.beatsPerBar = Math.round(r.beatsPerBar);
   if (isNum(r.lengthBars) && LENGTH_OPTIONS.includes(r.lengthBars)) song.lengthBars = r.lengthBars;
   if (typeof r.drumId === "string" || r.drumId === null) song.drumId = r.drumId;
+  if (typeof r.savedId === "string" && isSavedSongId(r.savedId)) song.savedId = r.savedId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(
       (l): l is Lane =>
