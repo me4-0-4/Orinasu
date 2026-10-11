@@ -4,10 +4,10 @@ import { totalBeats, type Phrase } from "../phrase/types.ts";
 import { layBed, renderCollage, type CollageLane } from "./collage.ts";
 import { applyTrack, chainTailSeconds, trackIsOff, type FxEnv, type FxPlugin, type TrackFx } from "./fx.ts";
 import { applyGroups, groupOf } from "./groups.ts";
-import { addSfx, fourOnFloor, kickSteps, pump, renderPad, type Grid, type PadSource } from "./glue.ts";
+import { addSfx, fourOnFloor, kickSteps, pump, renderPadStems, type Grid, type PadSource } from "./glue.ts";
 import { phraseKey, transposeSemitones } from "./keySync.ts";
 import { BuildCache } from "./buildCache.ts";
-import { masterBus } from "./masterBus.ts";
+import { masterBusLoop } from "./masterBus.ts";
 import { limitPeak, type Pcm } from "./pcm.ts";
 import { STEPS_PER_BEAT, holdFraction, planOrder, planRhythm, type LaneEvent } from "./sequencer.ts";
 import { cutSlices, type Slice } from "./slicer.ts";
@@ -112,6 +112,86 @@ export interface CollageResult {
   keyName: string | null;
 }
 
+/** ミキサーに並ぶ1本分の波形（ステム）。マスターに行く前の、そのトラックだけの音。 */
+export interface Stem {
+  id: string;
+  kind: "track" | "pad" | "bed" | "sfx";
+  /** track・pad：どの層のものか（層の曲の id）。この層のフェーダー（ミュート・音量）が掛かる。 */
+  phraseId?: string;
+  /** pad・bed・sfx：そのチャンネルのフェーダー（パッドの量・ドラムループの音量・効果音の量）も掛かる。 */
+  channel?: "pad" | "bed" | "sfx";
+  pcm: Pcm;
+}
+
+/** 曲を作った結果を、ミキサーに渡せる形にしたもの。フェーダーを動かすだけなら、作り直さずに足し直せる。 */
+export interface StemSet {
+  stems: Stem[];
+  lanes: LaneView[];
+  bed: CollageResult["bed"];
+  totalSteps: number;
+  keyName: string | null;
+  sampleRate: number;
+  bpm: number;
+  stepSamples: number;
+  /** 層ごとのフェーダー（ミュート＝0、ふだんは音量）。層の曲の id で引く。 */
+  faders: Record<string, number>;
+  /** 全体のエフェクト（マスター）。 */
+  masterFx: TrackFx | undefined;
+}
+
+/** 層のフェーダー：ミュートなら0、そうでなければ音量（無ければ1）。 */
+export const faderOf = (lane: Pick<Lane, "muted" | "volume">): number => (lane.muted ? 0 : (lane.volume ?? 1));
+
+/** フェーダーの名前：層は曲の id、そのほかのチャンネルは @ をつけた名前。 */
+export const CHANNEL_FADERS = { bed: "@bed", pad: "@pad", sfx: "@sfx" } as const;
+/** マスターのフェーダー（コンプ・リミッターのあとに掛かる）。 */
+export const MASTER_FADER = "@master";
+/** 層の定位（-1〜1）の名前。層の曲の id の前に ~ をつける。 */
+export const balanceFader = (phraseId: string): string => `~${phraseId}`;
+
+/**
+ * 定位のゲイン。Web Audio の StereoPannerNode（ステレオ入力）と同じ式（再生中のミキサーと、書き出しが同じ音になる）：
+ * pan ≤ 0 のとき  左 = 入力の左 + 入力の右 × gainL、右 = 入力の右 × gainR
+ * pan > 0 のとき  左 = 入力の左 × gainL、右 = 入力の右 + 入力の左 × gainR
+ * 真ん中（0）は何も変わらない。
+ */
+export function panGains(pan: number): { gainL: number; gainR: number } {
+  const x = pan <= 0 ? pan + 1 : pan;
+  return { gainL: Math.cos((x * Math.PI) / 2), gainR: Math.sin((x * Math.PI) / 2) };
+}
+
+/**
+ * ソロ（その場だけの状態で、曲には保存しない）：ソロの層と、ドラムループ。
+ * 何かがソロのとき、ソロのもの以外は鳴らない（ミュート中でも、ソロにすれば鳴る）。効果音は、ソロのときは鳴らない。
+ */
+export interface SoloState {
+  lanes: ReadonlySet<string>;
+  bed: boolean;
+}
+
+/** 曲の設定から、全部のフェーダーの値（層ごとの音量・ミュート・ソロと、ドラムループ・パッド・効果音の量）。 */
+export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted">, solo?: SoloState): Record<string, number> {
+  // 外した素材のソロは数えない（ソロが残っていて、全部が無音になるのを避ける）
+  const anySolo = !!solo && (solo.bed || (song.lanes ?? []).some((l) => solo.lanes.has(l.phraseId)));
+  const laneValue = (l: Lane): number => (solo?.lanes.has(l.phraseId) ? (l.volume ?? 1) : anySolo ? 0 : faderOf(l));
+  const bedAudible = solo?.bed || (!anySolo && !song.bedMuted);
+  return {
+    ...Object.fromEntries((song.lanes ?? []).map((l) => [l.phraseId, laneValue(l)])),
+    ...Object.fromEntries((song.lanes ?? []).map((l) => [balanceFader(l.phraseId), l.balance ?? 0])),
+    [CHANNEL_FADERS.bed]: bedAudible ? song.params.bedVolume : 0,
+    [CHANNEL_FADERS.pad]: song.params.pad,
+    [CHANNEL_FADERS.sfx]: anySolo ? 0 : song.params.sfx,
+    [MASTER_FADER]: song.params.master,
+  };
+}
+
+/** 1つのステムに掛かるフェーダーの値：層のフェーダー × チャンネルのフェーダー。 */
+export function stemFader(stem: Pick<Stem, "phraseId" | "channel">, faders: Record<string, number>): number {
+  const lane = stem.phraseId !== undefined ? (faders[stem.phraseId] ?? 1) : 1;
+  const channel = stem.channel ? (faders[CHANNEL_FADERS[stem.channel]] ?? 1) : 1;
+  return lane * channel;
+}
+
 export interface RenderOpts {
   dry: boolean;
   drumsOnly?: boolean;
@@ -147,7 +227,8 @@ function mixInto(out: Pcm, add: Pcm): void {
   }
 }
 
-export async function buildCollage(
+/** 曲を作って、ミキサーに渡せるステムにする（ミュート・音量は、ここでは掛けない）。 */
+export async function buildStems(
   song: Song,
   phrases: Phrase[],
   render: (phrase: Phrase, bpm: number, opts: RenderOpts) => Promise<Pcm>,
@@ -156,7 +237,7 @@ export async function buildCollage(
   reverb?: ReverbFn,
   /** 前と同じ入力のトラック（と伸ばし）の波形を使い回す入れ物。無ければ毎回ぜんぶ作る。 */
   cache?: BuildCache,
-): Promise<CollageResult | null> {
+): Promise<StemSet | null> {
   const cached = <T>(key: string, make: () => Promise<T> | T): Promise<T> => (cache ? cache.getOrCompute(key, make) : Promise.resolve(make()));
   const fxOn = (fx: TrackFx | undefined): fx is TrackFx => !!reverb && !trackIsOff(fx);
   const sources = collectSources(song, phrases);
@@ -209,14 +290,13 @@ export async function buildCollage(
       }
       const key = phraseKey(phrase);
       const keyShift = key && baseKey ? transposeSemitones(key, baseKey) : 0;
-      const gain = lane.muted ? 0 : 0.9 * (lane.volume ?? 1);
+      // 音量とミュートは、ミキサー（フェーダー）で掛ける。ここでは基準の 0.9 だけ
+      const gain = 0.9;
       // グループの編集（音程・パン・長さ・強さ・逆再生・ミュート）を当てはめる
       const grouped = applyGroups(lane.phraseId, events, song.groups);
       const collage: CollageLane = { pcm, slices, events: grouped.play, keyShift, gain, holdFraction: holdFraction(params.hold, song.params.style) };
       const stepsPerBarSrc = song.beatsPerBar * STEPS_PER_BEAT;
-      const pad: PadSource | null = lane.muted
-        ? null
-        : { pcm, srcBars: Math.max(1, Math.floor((totalBeats(phrase) * STEPS_PER_BEAT) / stepsPerBarSrc)), keyShift };
+      const pad: PadSource = { pcm, srcBars: Math.max(1, Math.floor((totalBeats(phrase) * STEPS_PER_BEAT) / stepsPerBarSrc)), keyShift };
       const view: LaneView = {
         phraseId: phrase.id,
         name: phrase.name,
@@ -225,7 +305,7 @@ export async function buildCollage(
         events: grouped.view,
         sliceCount: slices.length,
       };
-      return { collage, view, pad, fx: lane.muted ? undefined : lane.fx, takes: lane.muted || !reverb ? [] : (lane.takes ?? []) };
+      return { collage, view, pad, fx: lane.fx, takes: reverb ? (lane.takes ?? []) : [] };
     }),
   );
   const swing = song.params.swing;
@@ -240,12 +320,17 @@ export async function buildCollage(
     const g = groupOf(song.groups, { phraseId, step });
     return g && chainOn(g.fx) ? { id: g.id, chain: g.fx } : null;
   };
-  const plain = built.filter(
-    (b) =>
-      !fxOn(b.fx) &&
-      !b.takes.some((t) => chainOn(t.chain)) &&
-      !b.collage.events.some((e) => groupFxOf(b.view.phraseId, e.step)),
-  );
+  // ポンピング：下地のキックに合わせて、刻んだ音と伸ばしを沈ませる（キックが無ければ4つ打ち）。下地とSFXは沈ませない。
+  // 沈ませるのは、ステム（トラック・伸ばし）ごと。足し算なので、全部を足してから沈ませるのと同じ
+  const drumId = pickDrum(song, phrases);
+  const drumPhrase = drumId ? phrases.find((p) => p.id === drumId && hasDrums(p)) : undefined;
+  const kicks = drumPhrase ? kickSteps(drumPhrase, totalSteps) : [];
+  const pumpKicks = kicks.length > 0 ? kicks : fourOnFloor(totalSteps);
+  const pumpKey = JSON.stringify([song.params.pump, pumpKicks]);
+  const pumped = (pcm: Pcm): Pcm => {
+    pump(pcm, pumpKicks, grid, song.params.pump);
+    return pcm;
+  };
   // トラックの波形の使い回し：このトラックの結果が何で決まるか（波形・断片・打つ予定・音程・音量・書き出しの条件）を名前にする
   const laneSig = (b: (typeof built)[number]): string =>
     JSON.stringify([
@@ -257,15 +342,19 @@ export async function buildCollage(
       b.collage.holdFraction,
       collageOpts,
     ]);
-  const mixed = renderCollage([], collageOpts);
-  for (const b of plain) mixInto(mixed, await cached(`plain|${laneSig(b)}`, () => renderCollage([b.collage], collageOpts)));
+  const stems: Stem[] = [];
   for (const b of built) {
-    if (plain.includes(b)) continue;
-    // エフェクトのあるトラック（テイクFX・グループFX・トラックFXまで含めて）は、同じ入力なら丸ごと使い回す
-    const fxKey = `fx|${laneSig(b)}|${JSON.stringify([b.view.phraseId, b.fx, b.takes, song.groups, song.bpm, !!reverb])}`;
-    mixInto(
-      mixed,
-      await cached(fxKey, async () => {
+    const plain =
+      !fxOn(b.fx) &&
+      !b.takes.some((t) => chainOn(t.chain)) &&
+      !b.collage.events.some((e) => groupFxOf(b.view.phraseId, e.step));
+    let pcm: Pcm;
+    if (plain) {
+      pcm = await cached(`plain|${laneSig(b)}|${pumpKey}`, () => pumped(renderCollage([b.collage], collageOpts)));
+    } else {
+      // エフェクトのあるトラック（テイクFX・グループFX・トラックFXまで含めて）は、同じ入力なら丸ごと使い回す
+      const fxKey = `fx|${laneSig(b)}|${JSON.stringify([b.view.phraseId, b.fx, b.takes, song.groups, song.bpm, !!reverb])}|${pumpKey}`;
+      pcm = await cached(fxKey, async () => {
         const takes = new Map(b.takes.filter((t) => chainOn(t.chain)).map((t) => [t.step, t.chain]));
         const groupIdOf = (e: LaneEvent): string | null => groupFxOf(b.view.phraseId, e.step)?.id ?? null;
         const plainEvents = b.collage.events.filter((e) => !takes.has(e.step) && !groupIdOf(e));
@@ -296,9 +385,10 @@ export async function buildCollage(
           const chain = song.groups?.find((g) => g.id === gid)?.fx ?? [];
           mixInto(lanePcm, await applyTrack(pcm, { chain, envelopes: [] }, fxEnv!));
         }
-        return fxOn(b.fx) ? await applyTrack(lanePcm, b.fx, fxEnv!) : lanePcm;
-      }),
-    );
+        return pumped(fxOn(b.fx) ? await applyTrack(lanePcm, b.fx, fxEnv!) : lanePcm);
+      });
+    }
+    stems.push({ id: `track:${b.view.phraseId}`, kind: "track", phraseId: b.view.phraseId, pcm });
   }
 
   /** テイクFXの断片：断片の位置から、FXの余韻が収まるまでの短い波形を作って、FXを掛ける（曲より長くなるなら曲の長さで）。 */
@@ -317,37 +407,126 @@ export async function buildCollage(
 
   // 仕上げ（つなぎ）の偶然は、いちばん上の層の種から（刻み直すと変わり、形のつまみでは変わらない）
   const glueSeed = lanes[0].cutSeed;
-  // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）
-  const padSources = built.map((b) => b.pad).filter((p): p is PadSource => p !== null);
-  const padKey = JSON.stringify([padSources.map((p) => [cache ? cache.idOf(p.pcm) : 0, p.srcBars, p.keyShift]), song.params.pad, glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm]);
-  const pad = await cached(`pad|${padKey}`, async () => {
-    const raw = renderPad(padSources, grid, song.params.pad, createRng(glueSeed ^ 0x51ed270b));
-    return song.params.pad > 0 && fxOn(song.fx.pad) ? await applyTrack(raw, song.fx.pad, fxEnv!) : raw;
-  });
-  mixInto(mixed, pad);
+  // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）。曲（トラック）ごとのステムにして、その層のフェーダーに従わせる
+  // 量（パッドの量）は掛け算だけなので、いちばん大きい量で作って、ミキサーのフェーダー（@pad）で下げる
+  {
+    const padKey = JSON.stringify([built.map((b) => [cache ? cache.idOf(b.pad.pcm) : 0, b.pad.srcBars, b.pad.keyShift]), glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm, pumpKey]);
+    const pads = await cached(`pad|${padKey}`, async () => {
+      const raw = renderPadStems(built.map((b) => b.pad), grid, 1, createRng(glueSeed ^ 0x51ed270b));
+      const out: Pcm[] = [];
+      for (const r of raw) out.push(pumped(fxOn(song.fx.pad) ? await applyTrack(r, song.fx.pad, fxEnv!) : r));
+      return out;
+    });
+    // 偶然で一度も選ばれなかった曲の伸ばしは、無音なので入れない（メモリの節約）
+    built.forEach((b, i) => {
+      if (pads[i].l.some((x) => x !== 0)) stems.push({ id: `pad:${b.view.phraseId}`, kind: "pad", phraseId: b.view.phraseId, channel: "pad", pcm: pads[i] });
+    });
+  }
   // 下地：選んだ曲のドラムだけを、刻まずに鳴らしっぱなし（ノリの軸になる）
-  const drumId = pickDrum(song, phrases);
-  const drumPhrase = drumId ? phrases.find((p) => p.id === drumId && hasDrums(p)) : undefined;
-  let bed: CollageResult["bed"] = null;
-  // ポンピング：下地のキックに合わせて、刻んだ音と伸ばしを沈ませる（キックが無ければ4つ打ち）。下地とSFXは沈ませない
-  const kicks = drumPhrase ? kickSteps(drumPhrase, totalSteps) : [];
-  pump(mixed, kicks.length > 0 ? kicks : fourOnFloor(totalSteps), grid, song.params.pump);
+  let bed: StemSet["bed"] = null;
   if (drumPhrase) {
-    let bedPcm = await render(drumPhrase, song.bpm, { dry: song.params.dry, drumsOnly: true, swing });
-    if (fxOn(song.fx.bed)) {
-      // 下地は1周ぶんの波形なので、曲の長さに並べてから掛ける（「いつ掛けるか」が曲の位置で決まるように）
-      const full: Pcm = { l: new Float32Array(mixed.l.length), r: new Float32Array(mixed.r.length) };
-      layBed(full, bedPcm, BED_GAIN * song.params.bedVolume);
-      mixInto(mixed, await applyTrack(full, song.fx.bed, fxEnv!));
-    } else {
-      layBed(mixed, bedPcm, BED_GAIN * song.params.bedVolume);
+    const bedPcm = await render(drumPhrase, song.bpm, { dry: song.params.dry, drumsOnly: true, swing });
+    // 音量（ドラムループの音量）は、ミキサーのフェーダー（@bed）で掛ける
+    {
+      const bedKey = JSON.stringify([cache ? cache.idOf(bedPcm) : 0, fxOn(song.fx.bed) ? song.fx.bed : null, collageOpts, song.bpm]);
+      const bedStem = await cached(`bed|${bedKey}`, async () => {
+        // 下地は1周ぶんの波形なので、曲の長さに並べてから掛ける（「いつ掛けるか」が曲の位置で決まるように）
+        const full = renderCollage([], collageOpts);
+        layBed(full, bedPcm, BED_GAIN);
+        return fxOn(song.fx.bed) ? await applyTrack(full, song.fx.bed, fxEnv!) : full;
+      });
+      stems.push({ id: "bed", kind: "bed", channel: "bed", pcm: bedStem });
     }
     bed = { phraseId: drumPhrase.id, name: `${drumPhrase.name}のドラム`, events: bedEvents(drumPhrase, totalSteps) };
   }
   // SFX：区切りを聞かせる（8小節ごとのライザー・インパクト、4小節ごとのリバースシンバル）
-  addSfx(mixed, grid, song.params.sfx, createRng(glueSeed ^ 0x2f6b8a1d));
-  // 全体のエフェクト：最後に、曲全体に掛ける
-  // そのあと、仕上げのコンプ＋リミッター（音圧をそろえて、割れないようにする）
-  const pcm = limitPeak(masterBus(fxOn(song.fx.master) ? await applyTrack(mixed, song.fx.master, fxEnv!) : mixed, sampleRate));
-  return { pcm, lanes: built.map((b) => b.view), bed, totalSteps, keyName: baseKey ? keyShortName(baseKey) : null };
+  // 量（効果音の量）は掛け算だけなので、いちばん大きい量で作って、フェーダー（@sfx）で下げる
+  {
+    const sfx = await cached(`sfx|${JSON.stringify([grid, glueSeed])}`, () => {
+      const out = renderCollage([], collageOpts);
+      addSfx(out, grid, 1, createRng(glueSeed ^ 0x2f6b8a1d));
+      return out;
+    });
+    stems.push({ id: "sfx", kind: "sfx", channel: "sfx", pcm: sfx });
+  }
+  return {
+    stems,
+    lanes: built.map((b) => b.view),
+    bed,
+    totalSteps,
+    keyName: baseKey ? keyShortName(baseKey) : null,
+    sampleRate,
+    bpm: song.bpm,
+    stepSamples,
+    faders: songFaders({ lanes, params: song.params, bedMuted: song.bedMuted }),
+    masterFx: song.fx.master,
+  };
+}
+
+/** フェーダー（層ごとの音量・ミュート）を掛けて、ステムを全部足す。マスターのエフェクトの前の音。 */
+export function sumStems(set: StemSet, faders: Record<string, number> = set.faders): Pcm {
+  const n = set.stems[0]?.pcm.l.length ?? 1;
+  const out: Pcm = { l: new Float32Array(n), r: new Float32Array(n) };
+  for (const s of set.stems) {
+    const g = stemFader(s, faders);
+    if (g <= 0) continue;
+    const pan = s.phraseId !== undefined ? (faders[balanceFader(s.phraseId)] ?? 0) : 0;
+    if (pan === 0) {
+      for (let i = 0; i < n; i++) {
+        out.l[i] += s.pcm.l[i] * g;
+        out.r[i] += s.pcm.r[i] * g;
+      }
+    } else {
+      // 定位は、音量を掛けたあとに（どちらも掛け算と足し算だけなので、順番で結果は変わらない）
+      const { gainL, gainR } = panGains(pan);
+      if (pan < 0) {
+        for (let i = 0; i < n; i++) {
+          const l = s.pcm.l[i] * g;
+          const r = s.pcm.r[i] * g;
+          out.l[i] += l + r * gainL;
+          out.r[i] += r * gainR;
+        }
+      } else {
+        for (let i = 0; i < n; i++) {
+          const l = s.pcm.l[i] * g;
+          const r = s.pcm.r[i] * g;
+          out.l[i] += l * gainL;
+          out.r[i] += r + l * gainR;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** ミックスダウン：ステムを足して、全体のエフェクト → 仕上げのコンプ＋リミッター（音圧をそろえて、割れないようにする）。書き出しの音になる。 */
+export async function mixdown(set: StemSet, reverb?: ReverbFn, faders: Record<string, number> = set.faders): Promise<Pcm> {
+  const mixed = sumStems(set, faders);
+  const fxEnv: FxEnv | null = reverb ? { stepSamples: set.stepSamples, sampleRate: set.sampleRate, bpm: set.bpm, reverb } : null;
+  const mastered = fxEnv && !trackIsOff(set.masterFx) ? await applyTrack(mixed, set.masterFx!, fxEnv) : mixed;
+  // 曲はくり返して鳴らすので、仕上げは、曲の頭を終わりからの続きとして処理する（再生中のミキサーと同じ音になる）
+  const out = limitPeak(masterBusLoop(mastered, set.sampleRate));
+  // マスターのフェーダー：コンプ・リミッターのあと（上限を超えない）
+  const master = faders[MASTER_FADER] ?? 1;
+  if (master !== 1) {
+    for (let i = 0; i < out.l.length; i++) {
+      out.l[i] *= master;
+      out.r[i] *= master;
+    }
+  }
+  return out;
+}
+
+/** 曲を作って、そのままミックスダウンした1本の波形で返す（ミュート・音量は曲の設定のとおり）。 */
+export async function buildCollage(
+  song: Song,
+  phrases: Phrase[],
+  render: (phrase: Phrase, bpm: number, opts: RenderOpts) => Promise<Pcm>,
+  sampleRate: number,
+  reverb?: ReverbFn,
+  cache?: BuildCache,
+): Promise<CollageResult | null> {
+  const set = await buildStems(song, phrases, render, sampleRate, reverb, cache);
+  if (!set) return null;
+  return { pcm: await mixdown(set, reverb), lanes: set.lanes, bed: set.bed, totalSteps: set.totalSteps, keyName: set.keyName };
 }

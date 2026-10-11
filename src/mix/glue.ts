@@ -136,9 +136,25 @@ export interface PadSource {
  * 太鼓の音がにじまないよう、低すぎる所と高すぎる所を削る。どの曲を使うかは、4小節ごとに偶然で決める。
  */
 export function renderPad(sources: PadSource[], grid: Grid, amount: number, rng: Rng): Pcm {
+  const stems = renderPadStems(sources, grid, amount, rng);
+  const out = stems[0] ?? { l: new Float32Array(Math.max(1, Math.round(grid.totalSteps * grid.stepSamples))), r: new Float32Array(Math.max(1, Math.round(grid.totalSteps * grid.stepSamples))) };
+  for (let k = 1; k < stems.length; k++) {
+    for (let i = 0; i < out.l.length; i++) {
+      out.l[i] += stems[k].l[i];
+      out.r[i] += stems[k].r[i];
+    }
+  }
+  return out;
+}
+
+/**
+ * 伸ばしを、使った曲（トラック）ごとに分けて返す（sources と同じ並び）。全部足すと renderPad と同じ。
+ * どの曲を使うかの偶然は全部の曲で決めるので、ミュートなどでほかの曲の伸ばしが変わらない。
+ */
+export function renderPadStems(sources: PadSource[], grid: Grid, amount: number, rng: Rng): Pcm[] {
   const total = Math.max(1, Math.round(grid.totalSteps * grid.stepSamples));
-  const out: Pcm = { l: new Float32Array(total), r: new Float32Array(total) };
-  if (amount <= 0 || sources.length === 0) return out;
+  const outs: Pcm[] = sources.map(() => ({ l: new Float32Array(total), r: new Float32Array(total) }));
+  if (amount <= 0 || sources.length === 0) return outs;
   const sr = grid.sampleRate;
   const grain = Math.max(16, Math.round(0.12 * sr));
   const hop = Math.max(1, Math.round(grain / 4));
@@ -150,7 +166,9 @@ export function renderPad(sources: PadSource[], grid: Grid, amount: number, rng:
   for (let at = -grain; at < total; at += hop) {
     const center = Math.max(0, at + grain / 2);
     const bar = Math.floor(center / barSamples);
-    const src = sources[pick[Math.min(units - 1, Math.floor(bar / UNIT_BARS))]];
+    const which = pick[Math.min(units - 1, Math.floor(bar / UNIT_BARS))];
+    const src = sources[which];
+    const out = outs[which];
     const ratio = Math.pow(2, src.keyShift / 12);
     const sb = bar % Math.max(1, src.srcBars);
     const from = Math.round(sb * barSamples);
@@ -171,8 +189,8 @@ export function renderPad(sources: PadSource[], grid: Grid, amount: number, rng:
     }
   }
   // 低い所（キックのにじみ）と高い所（ハットのにじみ）を削って、和音だけ残す
-  bandLimit(out, 180, 1800, sr);
-  return out;
+  for (const out of outs) bandLimit(out, 180, 1800, sr);
+  return outs;
 }
 
 /** 1次のハイパスとローパスを2回ずつ掛ける（ゆるいバンドパス）。 */

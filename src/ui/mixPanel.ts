@@ -1,9 +1,14 @@
 import { LoopPlayer } from "../audio/loopPlayer";
+import { StemMixer } from "../audio/stemMixer";
 import { encodeWav } from "../audio/wav";
 import { BuildCache } from "../mix/buildCache";
 import {
   applySeeds,
-  buildCollage,
+  buildStems,
+  CHANNEL_FADERS,
+  MASTER_FADER,
+  mixdown,
+  songFaders,
   collectSources,
   hasDrums,
   pickDrum,
@@ -11,7 +16,7 @@ import {
   seedSnapshot,
   syncLanes,
   type ReverbFn,
-  type CollageResult,
+  type StemSet,
   type RenderOpts,
   type RerollPart,
   type SeedSnapshot,
@@ -81,6 +86,8 @@ export interface MixPanel {
   tick: () => void;
   /** 再生⇔停止（スペースキー用）。 */
   togglePlay: () => void;
+  /** キー操作：M＝選んでいるトラックのミュート、S＝ソロ、Home＝先頭へ。使ったら true。 */
+  key: (code: string) => boolean;
 }
 
 /** いま右のインスペクタに出しているもの：曲・トラック・断片。 */
@@ -101,7 +108,7 @@ type Selection =
  */
 export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let song: Song = createEmptySong();
-  let result: CollageResult | null = null;
+  let result: StemSet | null = null;
   /** 作り直しの途中で、新しい作り直しが始まったら古いほうを捨てるための番号。 */
   let buildToken = 0;
   let rebuildTimer: number | null = null;
@@ -118,7 +125,22 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const renderCache = new Map<string, Promise<Pcm>>();
   /** 素材から外したトラック（また選んだら、設定ごと戻す）。この画面を開いているあいだだけ覚える。 */
   const removedLanes = new Map<string, Lane>();
+  /** ミキサーで鳴らせない曲（マスターがリバーブ以外・AudioWorklet が使えない）のときに、ミックスダウンした波形を鳴らす。 */
   const player = new LoopPlayer(deps.audio.ctx, deps.audio.out);
+  /** 再生側のミキサー：トラックごとに鳴らし、ミュート・音量はフェーダーを動かすだけ（作り直さない）。 */
+  const mixer = new StemMixer(deps.audio.ctx, deps.audio.out);
+  /** いまの曲を、ミキサーで鳴らせるか。 */
+  let live = false;
+  const isPlaying = (): boolean => mixer.playing || player.playing;
+  const progressNow = (): number | null => (mixer.playing ? mixer.progress() : player.progress());
+  /** 「ここから鳴らす」位置（0〜1）。上の小節の帯をタップして決める。止めると、ここに戻る。 */
+  let startFraction = 0;
+  /** 画面に出す位置：鳴っていればその位置、止まっていて印があれば印の位置。 */
+  const positionNow = (): number | null => progressNow() ?? (startFraction > 0 ? startFraction : null);
+  const stopAll = (): void => {
+    mixer.stop();
+    player.stop();
+  };
   const sampleRate = deps.audio.ctx.sampleRate;
 
   function stampsOf(lanes: Lane[]): string {
@@ -282,7 +304,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     o.value = String(n);
     loopSelect.appendChild(o);
   }
-  const exportButton = button("書き出し", () => saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
+  const exportButton = button("書き出し", () => void saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
   const exportBox = el("div", "tp-export");
   exportBox.append(exportButton, loopSelect);
   transport.append(playButton, posBox, bpmBox, lengthBox, chopBox, undoButton, redoButton, statusText, exportBox);
@@ -290,6 +312,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   // ------------------------------------------------------------------ アレンジ画面（トラックヘッダー＋線）
 
   const laneView = buildLaneView({
+    onSeek: (fraction) => void seek(fraction),
     onHit: (track, step, add) => {
       if (step === null) {
         if (add || multiMode) return; // 足して選んでいる最中は、空いた所のタップで選び直さない
@@ -365,11 +388,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   /** トラックヘッダーの1行（つまみを動かしている最中に作り直さないよう、行の並びが変わったときだけ作り直す）。 */
   let headerSignature = "";
   let headerRefreshers: (() => void)[] = [];
+  /** トラックヘッダーの音量メーター。name はフェーダーの名前（層の曲の id、@bed・@pad・@master）。 */
+  let headerMeters: { name: () => string; bar: HTMLElement; shown: number }[] = [];
   function renderHeaders(rows: Row[]): void {
     const signature = JSON.stringify(rows.map((r) => [r.type, r.key]));
     if (signature !== headerSignature) {
       headerSignature = signature;
       headerRefreshers = [];
+      headerMeters = [];
       headerCol.innerHTML = "";
       const ruler = el("div", "arr-head-ruler", "トラック");
       ruler.style.height = `${HEAD_H}px`;
@@ -390,55 +416,72 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     });
     box.appendChild(name);
     let mute: HTMLButtonElement | null = null;
+    let soloButton: HTMLButtonElement | null = null;
     if (kind === "lane") {
       mute = button("M", () => {
         const lane = laneOfKey(key);
         if (!lane) return;
-        updateLane(key, (l) => ({ ...l, muted: !l.muted }));
-      }, "arr-btn arr-mute", "ミュート");
-      box.appendChild(mute);
+        updateFader(key, (l) => ({ ...l, muted: !l.muted }));
+      }, "arr-btn arr-mute", "ミュート（M キー。トラックを選んでおく）");
+    } else if (kind === "bed") {
+      mute = button("M", () => toggleBedMute(), "arr-btn arr-mute", "ミュート（音量はそのまま残る）");
     }
+    if (kind === "lane" || kind === "bed") {
+      soloButton = button("S", () => toggleSolo(key), "arr-btn arr-solo", "ソロ（S キー。これだけ鳴らす。ミュート中でも鳴る。曲には保存しない）");
+    }
+    if (mute) box.appendChild(mute);
+    if (soloButton) box.appendChild(soloButton);
     let vol: HTMLInputElement | null = null;
-    if (kind !== "master") {
+    {
       vol = el("input", "arr-vol");
       vol.type = "range";
       vol.min = "0";
       vol.max = kind === "lane" ? String(MAX_LANE_VOLUME) : "1";
       vol.step = "0.01";
-      vol.title = kind === "lane" ? "音量" : kind === "bed" ? "ドラムループの音量" : "パッドの量";
+      vol.title = kind === "lane" ? "音量" : kind === "bed" ? "ドラムループの音量" : kind === "master" ? "マスターの音量" : "パッドの量";
       vol.addEventListener("input", () => {
         const v = Number(vol!.value);
         if (kind === "lane") {
-          updateLane(key, (l) => {
+          updateFader(key, (l) => {
             const { volume: _v, ...rest } = l;
             return Math.abs(v - 1) < 1e-9 ? rest : { ...rest, volume: v };
           });
         } else if (kind === "bed") {
-          song.params.bedVolume = v;
-          changed();
+          setChannelParam("bedVolume", v);
+        } else if (kind === "master") {
+          setChannelParam("master", v);
         } else {
-          song.params.pad = v;
-          changed();
+          setChannelParam("pad", v);
         }
       });
       vol.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
       box.appendChild(vol);
-    } else {
-      box.appendChild(el("span", "arr-vol-spacer"));
     }
     const fx = button("FX", () => openTrackFx(key), "arr-btn arr-fx", "このトラックのFXチェーンを開く");
     box.appendChild(fx);
+    // 音量メーター（再生中の、フェーダーのあとの音量）
+    const meter = el("div", "arr-meter");
+    const bar = el("i");
+    meter.appendChild(bar);
+    box.appendChild(meter);
+    headerMeters.push({
+      name: () => (kind === "lane" ? (laneOfKey(key)?.phraseId ?? "") : kind === "bed" ? CHANNEL_FADERS.bed : kind === "pad" ? CHANNEL_FADERS.pad : MASTER_FADER),
+      bar,
+      shown: 0,
+    });
     headerRefreshers.push(() => {
       const lane = laneOfKey(key);
       const selected = (sel.type === "track" && sel.key === key) || (sel.type === "hit" && sel.track === key);
       box.classList.toggle("selected", selected);
-      box.classList.toggle("muted", !!lane?.muted);
+      const faders = currentFaders();
+      box.classList.toggle("muted", kind === "lane" ? faders[lane?.phraseId ?? ""] === 0 : kind === "bed" ? faders[CHANNEL_FADERS.bed] === 0 : false);
       // ヘッダーは短い名前（ドラムループの元のフレーズは、乗せたときの説明とインスペクタで）
       name.textContent = `${lane?.locked ? "🔒 " : ""}${kind === "bed" ? "ドラムループ" : trackName(key)}`;
       name.title = `${trackName(key)}（タップで選ぶ）`;
-      if (mute) mute.classList.toggle("on", !!lane?.muted);
+      if (mute) mute.classList.toggle("on", kind === "bed" ? !!song.bedMuted : !!lane?.muted);
+      if (soloButton) soloButton.classList.toggle("on", kind === "bed" ? solo.bed : !!lane && solo.lanes.has(lane.phraseId));
       if (vol && document.activeElement !== vol) {
-        vol.value = String(kind === "lane" ? (lane?.volume ?? 1) : kind === "bed" ? song.params.bedVolume : song.params.pad);
+        vol.value = String(kind === "lane" ? (lane?.volume ?? 1) : kind === "bed" ? song.params.bedVolume : kind === "master" ? song.params.master : song.params.pad);
       }
       fx.classList.toggle("on", trackHasFx(trackFx(key)));
       fx.textContent = trackHasFx(trackFx(key)) ? `FX ${trackFx(key).chain.filter((p) => !p.bypass).length}` : "FX";
@@ -681,10 +724,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     knob({
       label: "音量",
       get: () => song.params.bedVolume,
-      set: (v) => {
-        song.params.bedVolume = v;
-        changed();
-      },
+      set: (v) => setChannelParam("bedVolume", v),
     }),
   );
   const pumpKnob = reg(
@@ -704,10 +744,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     knob({
       label: "効果音",
       get: () => song.params.sfx,
-      set: (v) => {
-        song.params.sfx = v;
-        changed();
-      },
+      set: (v) => setChannelParam("sfx", v),
       hint: () => "8小節ごとにライザーとインパクト・クラッシュ、4小節ごとにリバースシンバル",
     }),
   );
@@ -715,10 +752,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     knob({
       label: "パッド",
       get: () => song.params.pad,
-      set: (v) => {
-        song.params.pad = v;
-        changed();
-      },
+      set: (v) => setChannelParam("pad", v),
       hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らし続ける（断片の間をつなぐ）",
     }),
   );
@@ -867,7 +901,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   // --- トラック ---
   const trackTitle = el("div", "ins-title");
   const lockButton = button("固定", () => sel.type === "track" && updateLane(sel.key, (l) => ({ ...l, locked: !l.locked }), false), "preset-button", "固定すると、刻み直してもこのトラックは変わらない");
-  const muteButton = button("ミュート", () => sel.type === "track" && updateLane(sel.key, (l) => ({ ...l, muted: !l.muted })), "preset-button");
+  const muteButton = button("ミュート", () => sel.type === "track" && updateFader(sel.key, (l) => ({ ...l, muted: !l.muted })), "preset-button");
   const resetButton = button(
     "全体に戻す",
     () =>
@@ -876,8 +910,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     "preset-button",
     "このトラックのずらし・切り方・音量・ミュート・FX・テイクFXを消して、全体と同じにする",
   );
+  const soloInspect = button("ソロ", () => sel.type === "track" && toggleSolo(sel.key), "preset-button", "このトラックだけ鳴らす（曲には保存しない）");
   const laneButtons = el("div", "preset-row");
-  laneButtons.append(lockButton, muteButton, resetButton);
+  laneButtons.append(lockButton, muteButton, soloInspect, resetButton);
   const selLane = (): Lane | undefined => (sel.type === "track" ? laneOfKey(sel.key) : undefined);
   const laneVolume = reg(
     knob({
@@ -886,9 +921,27 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       get: () => selLane()?.volume ?? 1,
       set: (v) => {
         if (sel.type !== "track") return;
-        updateLane(sel.key, (l) => {
+        updateFader(sel.key, (l) => {
           const { volume: _v, ...rest } = l;
           return Math.abs(v - 1) < 1e-9 ? rest : { ...rest, volume: v };
+        });
+      },
+    }),
+  );
+  const laneBalance = reg(
+    knob({
+      label: "定位",
+      min: -1,
+      max: 1,
+      step: 0.01,
+      format: (v) => (Math.abs(v) < 0.005 ? "中央" : v < 0 ? `左 ${Math.round(-v * 100)}%` : `右 ${Math.round(v * 100)}%`),
+      hint: () => "このトラックの左右の位置（ミキサーのパン。断片ごとのパンとは別）",
+      get: () => selLane()?.balance ?? 0,
+      set: (v) => {
+        if (sel.type !== "track") return;
+        updateFader(sel.key, (l) => {
+          const { balance: _b, ...rest } = l;
+          return Math.abs(v) < 0.005 ? rest : { ...rest, balance: v };
         });
       },
     }),
@@ -934,7 +987,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }));
   const laneShapeSection = section("laneShape", "刻み方（このトラックだけ・全体からのずらし）", shiftNote, ...laneShape.map((s) => s.c.el));
   const laneGroup = el("div", "ins-group");
-  laneGroup.append(laneButtons, laneVolume.el, laneCut.el, laneShapeSection);
+  laneGroup.append(laneButtons, laneVolume.el, laneBalance.el, laneCut.el, laneShapeSection);
   const bedGroup = el("div", "ins-group");
   const drumOptions = (): [string, string][] => [["", "なし"], ...deps.getPhrases().filter(hasDrums).map((p): [string, string] => [p.id, `${p.name}のドラム`])];
   const bedDrum = reg(
@@ -948,20 +1001,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       },
     }),
   );
-  const bedVol = reg(knob({ label: "音量", get: () => song.params.bedVolume, set: (v) => {
-    song.params.bedVolume = v;
-    changed();
-  } }));
+  const bedVol = reg(knob({ label: "音量", get: () => song.params.bedVolume, set: (v) => setChannelParam("bedVolume", v) }));
   const bedPump = reg(knob({ label: "サイドチェイン", get: () => song.params.pump, set: (v) => {
     song.params.pump = v;
     changed();
   }, hint: () => "このキックに合わせて、刻んだ音とパッドを沈ませる" }));
   bedGroup.append(bedDrum.el, bedVol.el, bedPump.el);
   const padGroup = el("div", "ins-group");
-  const padAmount = reg(knob({ label: "量", get: () => song.params.pad, set: (v) => {
-    song.params.pad = v;
-    changed();
-  }, hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らす" }));
+  const padAmount = reg(knob({ label: "量", get: () => song.params.pad, set: (v) => setChannelParam("pad", v), hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らす" }));
   padGroup.append(padAmount.el);
   const fxSummary = el("div", "ins-fx");
   const fxList = el("div", "ins-fx-list");
@@ -1150,6 +1197,67 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     deps.onSongChange(song);
   }
 
+  /** ソロ（その場だけの状態。曲には保存しない）。 */
+  const solo: { lanes: Set<string>; bed: boolean } = { lanes: new Set(), bed: false };
+  /** 全部のフェーダー（層のミュート・音量・ソロ、ドラムループ・パッド・効果音の量）。いまの曲の設定から。 */
+  const currentFaders = (withSolo = true): Record<string, number> => songFaders(song, withSolo ? solo : undefined);
+
+  /** ソロを入れる／切る（ドラムループは key = "bed"）。 */
+  function toggleSolo(key: string): void {
+    if (key === "bed") {
+      solo.bed = !solo.bed;
+    } else {
+      const lane = laneOfKey(key);
+      if (!lane) return;
+      if (solo.lanes.has(lane.phraseId)) solo.lanes.delete(lane.phraseId);
+      else solo.lanes.add(lane.phraseId);
+    }
+    refresh();
+    applyFaders();
+  }
+
+  /** ドラムループのミュート（音量はそのまま残る）。 */
+  function toggleBedMute(): void {
+    if (song.bedMuted) delete song.bedMuted;
+    else song.bedMuted = true;
+    changed(false);
+    applyFaders();
+  }
+
+  /** フェーダーの値を、ミキサーに伝える。ミキサーで鳴らせない曲は、作り直す。 */
+  function applyFaders(): void {
+    if (live) {
+      for (const [name, value] of Object.entries(currentFaders())) mixer.setFader(name, value);
+    } else {
+      scheduleRebuild();
+    }
+  }
+
+  /** ミュート・音量を変える：ミキサーなら、フェーダーを動かすだけ（作り直さない）。 */
+  function updateFader(key: string, fn: (lane: Lane) => Lane): void {
+    updateLane(key, fn, false);
+    applyFaders();
+  }
+
+  /** ドラムループの音量・パッドの量・効果音の量を変える（作り直さない）。 */
+  function setChannelParam(name: "bedVolume" | "pad" | "sfx" | "master", value: number): void {
+    song.params[name] = value;
+    changed(false);
+    applyFaders();
+  }
+
+  /** ステムを、いまのフェーダーでミックスダウンした波形（同じ曲・同じフェーダーなら使い回す）。書き出しはソロを無視して全体を書き出す（withSolo = false）。 */
+  let mixdownCache: { set: StemSet; key: string; pcm: Promise<Pcm> } | null = null;
+  function mixdownNow(withSolo = true): Promise<Pcm> {
+    const set = result!;
+    const faders = currentFaders(withSolo);
+    const key = JSON.stringify(faders);
+    if (mixdownCache && mixdownCache.set === set && mixdownCache.key === key) return mixdownCache.pcm;
+    const pcm = mixdown(set, deps.reverb, faders);
+    mixdownCache = { set, key, pcm };
+    return pcm;
+  }
+
   /** トラック（刻む曲）を変える。音に関わる変更なら作り直す。 */
   function updateLane(key: string, fn: (lane: Lane) => Lane, rebuildAfter = true): void {
     if (!song.lanes) return;
@@ -1196,19 +1304,34 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     busy = "作っています…";
     refresh();
     try {
-      const out = await buildCollage(song, deps.getPhrases(), render, sampleRate, deps.reverb, buildCache);
+      const out = await buildStems(song, deps.getPhrases(), render, sampleRate, deps.reverb, buildCache);
       if (token !== buildToken) return;
       result = out;
       builtStamps = stampsOf(song.lanes ?? []);
       setNotice(out ? "" : "刻むフレーズが見つからない。右の「素材」で選び直して");
-      if (player.playing) {
-        if (out) player.play(out.pcm, sampleRate, player.progress() ?? 0);
-        else player.stop();
+      // ドラムループが無くなったら、そのソロも外す（見えないソロで、全部が無音にならないように）
+      if (!out?.bed) solo.bed = false;
+      live = out ? await mixer.load(out, currentFaders()) : false;
+      if (token !== buildToken) return;
+      // 鳴らしていれば、同じ位置から続ける
+      const was = progressNow();
+      if (was !== null) {
+        if (!out) stopAll();
+        else if (live) {
+          player.stop();
+          mixer.play(was);
+        } else {
+          mixer.stop();
+          const pcm = await mixdownNow();
+          if (token !== buildToken) return;
+          player.play(pcm, sampleRate, was);
+        }
       }
     } catch (err) {
       if (token !== buildToken) return;
       console.error("曲の書き出しに失敗しました", err);
       result = null;
+      live = false;
       setNotice("曲を作れなかった。もう一度「刻む」を押して");
     }
     busy = "";
@@ -1263,32 +1386,67 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   async function togglePlay(): Promise<void> {
-    if (player.playing) {
-      player.stop();
+    if (isPlaying()) {
+      stopAll();
       refresh();
       return;
     }
     if (!result) return;
     await deps.prepareAudio();
-    player.play(result.pcm, sampleRate);
+    if (live) {
+      mixer.play(startFraction);
+    } else {
+      // ミキサーで鳴らせない曲：ミックスダウンした波形を鳴らす
+      busy = "準備しています…";
+      refresh();
+      try {
+        player.play(await mixdownNow(), sampleRate, startFraction);
+      } finally {
+        busy = "";
+      }
+    }
     refresh();
   }
 
-  function saveWav(): void {
+  /** 位置を選ぶ（上の小節の帯）：鳴っていればそこから続け、止まっていれば「ここから鳴らす」印にする。 */
+  async function seek(fraction: number): Promise<void> {
     if (!result) return;
-    const bytes = encodeWav(repeatPcm(result.pcm, Number(loopSelect.value)), sampleRate);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${song.name.trim() || "orinasu"}.wav`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    startFraction = Math.min(1, Math.max(0, fraction));
+    if (isPlaying()) {
+      if (live) mixer.play(startFraction);
+      else player.play(await mixdownNow(), sampleRate, startFraction);
+    }
+    laneView.setProgress(positionNow(), !isPlaying());
+    updateTime();
+  }
+
+  /** 書き出し：ミキサーと同じ入力から、ミックスダウン（全体のエフェクト → コンプ・リミッター）した波形を、WAVにして保存する。 */
+  async function saveWav(): Promise<void> {
+    if (!result) return;
+    busy = "書き出しています…";
+    refresh();
+    try {
+      const pcm = await mixdownNow(false);
+      const bytes = encodeWav(repeatPcm(pcm, Number(loopSelect.value)), sampleRate);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${song.name.trim() || "orinasu"}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      console.error("WAVの書き出しに失敗しました", err);
+      setNotice("書き出せなかった。もう一度「書き出し」を押して");
+    } finally {
+      busy = "";
+      refresh();
+    }
   }
 
   /** 線の表示の行：トラック（刻む曲・ドラムループ・パッド・マスター）と、その下の表示中のエンベロープ。 */
-  function trackRows(res: CollageResult | null): Row[] {
+  function trackRows(res: StemSet | null): Row[] {
     const rows: Row[] = [];
     const envRows = (key: string): void => {
       const fx = trackFx(key);
@@ -1322,7 +1480,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       rows.push({ ...base, type: "track", key: "bed", kind: "bed", name: res.bed.name, events: res.bed.events, selected: sel.type === "track" && sel.key === "bed" });
       envRows("bed");
     }
-    if (res && song.params.pad > 0) {
+    if (res && res.stems.some((s) => s.kind === "pad")) {
       rows.push({ ...base, type: "track", key: "pad", kind: "pad", name: "パッド", events: [], selected: sel.type === "track" && sel.key === "pad" });
       envRows("pad");
     }
@@ -1345,8 +1503,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (sel.type !== "hits") regrouping = null;
 
     // トランスポート
-    playButton.textContent = player.playing ? "■ 停止" : "▶ 再生";
-    playButton.classList.toggle("on", player.playing);
+    playButton.textContent = isPlaying() ? "■ 停止" : "▶ 再生";
+    playButton.classList.toggle("on", isPlaying());
     playButton.disabled = !result;
     if (document.activeElement !== bpmInput) bpmInput.value = String(song.bpm);
     for (const o of Array.from(lengthSelect.options)) {
@@ -1440,6 +1598,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         lockButton.classList.toggle("on", !!lane.locked);
         muteButton.textContent = lane.muted ? "ミュート中" : "ミュート";
         muteButton.classList.toggle("on", !!lane.muted);
+        soloInspect.textContent = solo.lanes.has(lane.phraseId) ? "ソロ中" : "ソロ";
+        soloInspect.classList.toggle("on", solo.lanes.has(lane.phraseId));
         resetButton.disabled = !laneIsCustom(lane);
         show(laneCut, !music);
         const mixing = music && song.params.turns === "mix" && playingLanes > 1;
@@ -1531,9 +1691,23 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     fxWindow.refresh();
   }
 
+  /** 音量メーターを動かす（毎フレーム）。対数（dB）で、-60dB〜0dB。下がるときはゆっくり。 */
+  function updateMeters(): void {
+    const levels = mixer.playing ? mixer.levels() : {};
+    for (const m of headerMeters) {
+      const raw = levels[m.name()] ?? 0;
+      const db = 20 * Math.log10(Math.max(raw, 1e-6));
+      const frac = Math.min(1, Math.max(0, (db + 60) / 60));
+      m.shown = Math.max(frac, m.shown - 0.03);
+      m.bar.style.width = `${(m.shown * 100).toFixed(1)}%`;
+      const shownDb = m.shown * 60 - 60;
+      m.bar.className = shownDb > -0.5 ? "clip" : shownDb > -6 ? "hot" : "";
+    }
+  }
+
   function updateTime(): void {
     const total = songSeconds(song);
-    const t = player.progress();
+    const t = positionNow();
     const steps = totalStepsNow();
     const step = t === null ? 0 : Math.min(steps - 1, Math.floor(t * steps));
     posMain.textContent = posName(step);
@@ -1546,10 +1720,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const api: MixPanel = {
     el: root,
     setSong(next) {
-      player.stop();
+      stopAll();
       song = next;
       buildToken++;
       result = null;
+      live = false;
+      solo.lanes.clear();
+      solo.bed = false;
+      startFraction = 0;
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;
@@ -1572,16 +1750,33 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       else if (song.lanes && stampsOf(song.lanes) !== builtStamps) scheduleRebuild(); // フレーズタブで曲を直したら、作り直す
     },
     stop() {
-      if (!player.playing) return;
-      player.stop();
+      if (!isPlaying()) return;
+      stopAll();
       refresh();
     },
     tick() {
-      laneView.setProgress(player.progress());
-      if (player.playing) updateTime();
+      laneView.setProgress(positionNow(), !isPlaying());
+      updateMeters();
+      if (isPlaying()) updateTime();
     },
     togglePlay() {
       void togglePlay();
+    },
+    key(code) {
+      if (code === "Home") {
+        void seek(0);
+        return true;
+      }
+      if (code !== "KeyM" && code !== "KeyS") return false;
+      if (sel.type !== "track" || sel.key === "pad" || sel.key === "master") return false;
+      if (code === "KeyS") {
+        toggleSolo(sel.key);
+      } else if (sel.key === "bed") {
+        toggleBedMute();
+      } else {
+        updateFader(sel.key, (l) => ({ ...l, muted: !l.muted }));
+      }
+      return true;
     },
   };
   return api;

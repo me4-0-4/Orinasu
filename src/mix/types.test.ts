@@ -181,3 +181,19 @@ test("保存した曲：写しは作業中の曲と中身が同じで、idと更
   assert.equal(migrateSong(opened).savedId, "saved_a_1");
   assert.equal(migrateSong({ ...opened, savedId: "song" }).savedId, undefined);
 });
+
+test("保存データ：ドラムループのミュートを読む。ソロは保存しない", () => {
+  const song = migrateSong({ ...createEmptySong(), bedMuted: true });
+  assert.equal(song.bedMuted, true);
+  assert.equal(migrateSong({ ...createEmptySong(), bedMuted: "x" }).bedMuted, undefined);
+  assert.equal(migrateSong(createEmptySong()).bedMuted, undefined);
+  const lanes = [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, solo: true }];
+  assert.ok(!("solo" in migrateSong({ ...createEmptySong(), lanes }).lanes![0]));
+});
+
+test("保存データ：マスターの音量。無ければ1、範囲外は収める", () => {
+  assert.equal(migrateSong(createEmptySong()).params.master, 1);
+  assert.equal(migrateSong({ ...createEmptySong(), params: { ...createEmptySong().params, master: 0.4 } }).params.master, 0.4);
+  assert.equal(migrateSong({ ...createEmptySong(), params: { ...createEmptySong().params, master: 9 } }).params.master, 1);
+  assert.equal(migrateSong({ params: { busy: 0.4 } }).params.master, 1);
+});

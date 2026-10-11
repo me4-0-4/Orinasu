@@ -3,7 +3,7 @@ import { foldTail } from "../mix/loopFold";
 import type { Pcm } from "../mix/pcm";
 
 /** リバーブの響き（雑音が消えていく形）。明るさで高い所を削る。毎回同じ響きになるよう、種は固定。 */
-function reverbImpulse(ctx: BaseAudioContext, seconds: number, toneHz: number): AudioBuffer {
+export function reverbImpulse(ctx: BaseAudioContext, seconds: number, toneHz: number): AudioBuffer {
   const length = Math.max(1, Math.ceil(ctx.sampleRate * seconds));
   const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
   const rand = createRng(20260101);
