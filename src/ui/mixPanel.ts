@@ -38,6 +38,10 @@ import {
   snapshotSong,
   effectiveParams,
   laneIsCustom,
+  randomLaneShift,
+  randomShape,
+  randomizableKeys,
+  SHAPE_KEYS,
   setLaneShape,
   songSeconds,
   type ChopStyle,
@@ -47,7 +51,7 @@ import {
   type TurnStyle,
 } from "../mix/types";
 import type { Phrase } from "../phrase/types";
-import { randomSeed } from "../theory/rng";
+import { createRng, randomSeed } from "../theory/rng";
 import { makeId } from "../phrase/types";
 import { ENV_H, HEAD_H, ROW_H, buildLaneView, type Row } from "./laneView";
 import { buildFxWindow } from "./fxWindow";
@@ -693,7 +697,59 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     ["motion", "音程の動き", () => (song.params.style === "music" ? "繰り返しの1オクターブ上げ、フィルの終わりの階段" : "断片の高さを近い高さへ動かす"), "both"],
     ["pan", "パン", () => "刻んだ所を左右に交互に振る", "music"],
     ["fx", "フィルの加工", () => "フィルに、フィルター・テープストップ・音質下げ・逆再生のどれかを掛ける割合", "music"],
+    ["repeat", "くり返し", (v) => `打つ所の約${Math.round(v * 100)}%で、前と同じ断片をもう一度打つ（連打）`, "music"],
+    ["fills", "フィル", (v) => (v >= 1 ? "4小節ごと（と最後）の小節を、フィルにする" : v <= 0 ? "フィルなし。同じパターンを続ける" : `4小節ごと（と最後）の約${Math.round(v * 100)}%を、フィルにする`), "music"],
+    ["vary", "変化", (v) => (v <= 0 ? "決めたパターンを、そのままくり返す" : `小節の約${Math.round(v * 100)}%を、新しいパターンに替える（偶然の度合い）`), "music"],
   ];
+  // --- 形のランダム化（ひとつ前の形に戻せる） ---
+  let shapeBackup: { params: Partial<Record<ShapeKey, number>>; shifts: (Partial<Record<ShapeKey, number>> | undefined)[] } | null = null;
+  // 刻み方の「混ぜる」かどうか（曲を作るときと同じ数え方：ミュートしたトラックも数える）
+  const mixingNow = (): boolean => song.params.style === "music" && song.params.turns === "mix" && (song.lanes ?? []).length > 1;
+  /** 層に効くつまみ：「混ぜる」のときは、層の密度（その層の断片の選ばれやすさ）だけ。 */
+  const laneKeysNow = (): ShapeKey[] => (mixingNow() ? ["busy"] : randomizableKeys(song.params.style));
+  function backupShape(): void {
+    const params: Partial<Record<ShapeKey, number>> = {};
+    for (const key of SHAPE_KEYS) params[key] = song.params[key];
+    shapeBackup = { params, shifts: (song.lanes ?? []).map((l) => (l.shift ? { ...l.shift } : undefined)) };
+  }
+  function restoreShape(): void {
+    if (!shapeBackup) return;
+    const b = shapeBackup;
+    shapeBackup = null;
+    for (const key of SHAPE_KEYS) if (b.params[key] !== undefined) song.params[key] = b.params[key]!;
+    if (song.lanes && song.lanes.length === b.shifts.length) {
+      song.lanes = song.lanes.map((l, i) => {
+        const { shift: _s, ...rest } = l;
+        return b.shifts[i] ? { ...rest, shift: b.shifts[i] } : rest;
+      });
+    }
+    changed();
+  }
+  const withShift = (lane: Lane, shift: Partial<Record<ShapeKey, number>>, keys: ShapeKey[]): Lane => {
+    const next = { ...lane.shift };
+    for (const key of keys) delete next[key]; // 今回選び直すつまみのずらしだけ入れ替える
+    Object.assign(next, shift);
+    const { shift: _old, ...rest } = lane;
+    return Object.keys(next).length === 0 ? rest : { ...rest, shift: next };
+  };
+  function randomizeSong(): void {
+    backupShape();
+    Object.assign(song.params, randomShape(randomizableKeys(song.params.style), createRng(randomSeed())));
+    changed();
+  }
+  function randomizeLanes(only?: string): void {
+    if (!song.lanes) return;
+    backupShape();
+    const rng = createRng(randomSeed());
+    const keys = laneKeysNow();
+    song.lanes = song.lanes.map((l) => (only === undefined || laneKey(l) === only ? withShift(l, randomLaneShift(song.params, keys, rng), keys) : l));
+    changed();
+  }
+  const randomSongButton = button("形をランダムに", () => randomizeSong(), "preset-button", "密度・休み・くり返し・フィル・変化などを、音楽として成り立つ範囲でランダムに選ぶ（ひとつ前の形に戻せる）");
+  const randomLanesButton = button("トラックごとにランダムに", () => randomizeLanes(), "preset-button", "全体からのずらしを、トラックごとにランダムに選ぶ（「混ぜる」のときは、各トラックの密度だけ）");
+  const restoreSongButton = button("ひとつ前の形に戻す", () => restoreShape(), "preset-button", "ランダムにする前の形（全体とトラックのずらし）に戻す");
+  const shapeButtons = el("div", "preset-row");
+  shapeButtons.append(randomSongButton, randomLanesButton, restoreSongButton);
   const songShape = shapeDefs.map(([key, label, hint, mode]) => ({ mode, c: shapeKnob(key, label, () => hint(song.params[key])) }));
   const swingKnob = reg(
     knob({
@@ -890,6 +946,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       turnsChoice.el,
       cutChoice.el,
       ...songShape.map((s) => s.c.el),
+      shapeButtons,
       swingKnob.el,
     ),
     section("drums", "ドラムループ", drumChoice.el, bedKnob.el, pumpKnob.el),
@@ -966,6 +1023,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   );
   const shiftNote = note("");
   const laneShape = shapeDefs.map(([key, label, , mode]) => ({
+    key,
     mode,
     c: reg(
       knob({
@@ -985,7 +1043,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       }),
     ),
   }));
-  const laneShapeSection = section("laneShape", "刻み方（このトラックだけ・全体からのずらし）", shiftNote, ...laneShape.map((s) => s.c.el));
+  const randomLaneButton = button("このトラックをランダムに", () => sel.type === "track" && randomizeLanes(sel.key), "preset-button", "このトラックの、全体からのずらしをランダムに選ぶ（ひとつ前の形に戻せる）");
+  const restoreLaneButton = button("ひとつ前の形に戻す", () => restoreShape(), "preset-button", "ランダムにする前の形（全体とトラックのずらし）に戻す");
+  const laneRandomRow = el("div", "preset-row");
+  laneRandomRow.append(randomLaneButton, restoreLaneButton);
+  const laneShapeSection = section("laneShape", "刻み方（このトラックだけ・全体からのずらし）", shiftNote, ...laneShape.map((s) => s.c.el), laneRandomRow);
   const laneGroup = el("div", "ins-group");
   laneGroup.append(laneButtons, laneVolume.el, laneBalance.el, laneCut.el, laneShapeSection);
   const bedGroup = el("div", "ins-group");
@@ -1565,11 +1627,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     if (sel.type === "group") crumb(groupById(sel.id)?.name ?? "グループ");
 
     const music = song.params.style === "music";
-    const playingLanes = (song.lanes ?? []).filter((l) => !l.muted).length;
     if (sel.type === "song") {
       show(turnsChoice, music && song.materialIds.length > 1);
       show(cutChoice, !music);
       for (const s of songShape) show(s.c, s.mode === "both" || (s.mode === "music") === music);
+      randomLanesButton.disabled = !song.lanes;
+      restoreSongButton.disabled = !shapeBackup;
       const drum = drumNow();
       show(bedKnob, !!drum);
       if (document.activeElement !== nameInput) nameInput.value = song.name;
@@ -1602,12 +1665,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         soloInspect.classList.toggle("on", solo.lanes.has(lane.phraseId));
         resetButton.disabled = !laneIsCustom(lane);
         show(laneCut, !music);
-        const mixing = music && song.params.turns === "mix" && playingLanes > 1;
+        const mixing = mixingNow();
         shiftNote.textContent = mixing
-          ? "いまは「混ぜる」なので、刻み方は全体のつまみで決まる（ここのずらしは効かない）"
+          ? "いまは「混ぜる」なので、リズムは全体のつまみで決まる。ここで効くのは「密度」だけ（このトラックの断片が選ばれる多さ）"
           : "全体のつまみからの差として持つ。全体を動かすと、差を保ったまま一緒に動く";
         shiftNote.classList.toggle("ins-warn", mixing);
-        for (const s of laneShape) show(s.c, s.mode === "both" || (s.mode === "music") === music);
+        for (const s of laneShape) show(s.c, mixing ? s.key === "busy" : s.mode === "both" || (s.mode === "music") === music);
+        restoreLaneButton.disabled = !shapeBackup;
       }
       renderFxSummary(key);
     } else if (sel.type === "hits") {
@@ -1731,6 +1795,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;
+      shapeBackup = null;
       removedLanes.clear();
       sel = { type: "song" };
       setNotice("");

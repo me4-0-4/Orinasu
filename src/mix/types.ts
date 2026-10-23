@@ -40,8 +40,8 @@ export interface Lane {
 }
 
 /** 層ごとにずらせる形のつまみ。 */
-export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold" | "crisp" | "pan" | "fx";
-export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold", "crisp", "pan", "fx"];
+export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold" | "crisp" | "pan" | "fx" | "repeat" | "fills" | "vary";
+export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold", "crisp", "pan", "fx", "repeat", "fills", "vary"];
 export const MAX_LANE_VOLUME = 1.5;
 
 /**
@@ -172,6 +172,9 @@ export const DEFAULT_PARAMS: SongParams = {
   crisp: 0.5,
   pan: 0.5,
   fx: 0.7,
+  repeat: 0.3,
+  fills: 1,
+  vary: 0,
   dry: true,
   swing: 0,
   turns: "mix",
@@ -189,6 +192,53 @@ export function effectiveParams(global: SongParams, lane: Pick<Lane, "shift" | "
   const out: SongParams = { ...global, mode: lane.mode ?? global.mode };
   for (const key of SHAPE_KEYS) out[key] = clamp01(global[key] + (lane.shift?.[key] ?? 0));
   return out;
+}
+
+/** ランダム化で選ぶ範囲（[最小, 最大]）。どの値も、音楽として成り立つ範囲に収める。断片の長さ（size）は、切り方が大きく変わるので対象にしない。 */
+const RANDOM_RANGES: Record<Exclude<ShapeKey, "size">, [number, number]> = {
+  busy: [0.3, 0.85],
+  breaks: [0, 0.25],
+  onBeat: [0, 0.6],
+  motion: [0, 0.6],
+  hold: [0.3, 1],
+  crisp: [0, 1],
+  pan: [0, 0.8],
+  fx: [0, 1],
+  repeat: [0.1, 0.6],
+  fills: [0.6, 1],
+  vary: [0, 0.6],
+};
+
+/** そのモードで効くつまみ（ランダム化の対象）。 */
+export function randomizableKeys(style: ChopStyle): ShapeKey[] {
+  return style === "music"
+    ? ["busy", "breaks", "onBeat", "motion", "crisp", "pan", "fx", "repeat", "fills", "vary"]
+    : ["busy", "breaks", "onBeat", "motion", "hold"];
+}
+
+const round2 = (x: number): number => Math.round(x * 100) / 100;
+
+/** 全体の形を、範囲の中でランダムに選ぶ（keys のつまみだけ）。 */
+export function randomShape(keys: ShapeKey[], rng: () => number): Partial<Record<ShapeKey, number>> {
+  const out: Partial<Record<ShapeKey, number>> = {};
+  for (const key of keys) {
+    if (key === "size") continue;
+    const [lo, hi] = RANDOM_RANGES[key];
+    out[key] = round2(lo + (hi - lo) * rng());
+  }
+  return out;
+}
+
+/** 層の「ずらし」を、全体の値からランダムに選ぶ（±0.3まで。ずらした結果は 0〜1 に収める）。 */
+export function randomLaneShift(global: SongParams, keys: ShapeKey[], rng: () => number): Partial<Record<ShapeKey, number>> {
+  const shift: Partial<Record<ShapeKey, number>> = {};
+  for (const key of keys) {
+    if (key === "size") continue;
+    const target = clamp01(global[key] + (rng() * 2 - 1) * 0.3);
+    const d = round2(target - global[key]);
+    if (Math.abs(d) >= 0.01) shift[key] = d;
+  }
+  return shift;
 }
 
 /** 層が全体と違う設定を持っているか（ずらし・切り方・音量・ミュート）。 */

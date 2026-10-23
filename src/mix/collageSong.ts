@@ -253,6 +253,9 @@ export async function buildStems(
   const mixing = song.params.style === "music" && song.params.turns === "mix" && lanes.length > 1;
   // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種と形は、いちばん上の層のもの（形は全体のつまみ）
   const lead = lanes[0];
+  // 混ぜるとき、層の「密度」は、その層の断片が選ばれる多さになる（全部の層が同じ密度なら、重みは付けない）
+  const weights = lanes.map((l) => 0.25 + 0.75 * effectiveParams(song.params, l).busy);
+  const srcWeights = weights.every((w) => Math.abs(w - weights[0]) < 1e-9) ? undefined : weights;
   const built = await Promise.all(
     lanes.map(async (lane, i) => {
       const turn = { laneIndex: i, laneCount: lanes.length };
@@ -278,6 +281,8 @@ export async function buildStems(
           laneCount: turn.laneCount,
           turns: song.params.turns,
           srcRng: mixing ? createRng(lead.orderSeed ^ 0x2545f491) : undefined,
+          srcWeights: mixing ? srcWeights : undefined,
+          varyRng: createRng(seeds.rhythmSeed ^ 0x7f4a7c15),
           params,
           cutRng: createRng(seeds.cutSeed),
           rhythmRng: createRng(seeds.rhythmSeed),
