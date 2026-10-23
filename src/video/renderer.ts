@@ -1,6 +1,6 @@
 import type { Feat } from "./features.ts";
 import type { Timeline, VEvent } from "./timeline.ts";
-import { brush, circle, DOT, fmtT, hex2rgb, isDark, line, MIN, MONO, noise, palette, PANELS, SANS, type PanelDef, type Palette, type Rect } from "./panels.ts";
+import { brush, circle, DOT, fmtT, hex2rgb, isDark, line, MIN, MONO, noise, palette, PANELS, rt, SANS, type PanelDef, type Palette, type Rect } from "./panels.ts";
 import { Layout, type FrameStyle, type Geom, type Treatment, type VideoSettings } from "./settings.ts";
 import { matReady, srcSize, type Material } from "./materials.ts";
 
@@ -160,6 +160,9 @@ function treat(kind: string, x: number, y: number, w: number, h: number, P: Pale
       for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const gx = at(c + 1, r - 1) + 2 * at(c + 1, r) + at(c + 1, r + 1) - at(c - 1, r - 1) - 2 * at(c - 1, r) - at(c - 1, r + 1), gy = at(c - 1, r + 1) + 2 * at(c, r + 1) + at(c + 1, r + 1) - at(c - 1, r - 1) - 2 * at(c, r - 1) - at(c + 1, r - 1); put(d, r * cols + c, Math.hypot(gx, gy) > .35 ? DK : LT); } });
   } else if (kind === "led") ledify(x, y, w, h, P, u);
 }
+/** パネルごとの、いま描いている中身（替わったら状態を捨てる）と、描けなかった中身（エラーは1回だけ出す）。 */
+const kindOf = new Map<number, string>();
+const failed = new Set<string>();
 /** 毎コマ変わる処理（前のコマを使う・フィルで伸びる）。これは覚えずに、毎回掛ける。 */
 const LIVE = new Set(["mosh", "stretch"]);
 const tileCache = new Map<string, HTMLCanvasElement>();
@@ -276,11 +279,27 @@ function drawFrame(f: Feat): void {
     const r = o.rect, x = r.x + g.gap / 2, y = r.y + g.gap / 2, w = r.w - g.gap, h = r.h - g.gap;
     if (w < u * 3 || h < u * 3) return;
     const pc = L.eff(o.leaf, "color"), P = pc ? Object.assign({}, P0, { a1: pc }) : P0, def = PANELS[pk];
+    // 中身を別のパネルに替えたら、前のパネルの粒などの状態は捨てる（形の違う状態を読んで壊れないように）
+    if (kindOf.get(o.leaf.id) !== pk) {
+      delete rt.parts[o.leaf.id];
+      delete rt.sy[o.leaf.id];
+      kindOf.set(o.leaf.id, pk);
+    }
     ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
-    chrome(ctx, x, y, w, h, P, u, L.eff(o.leaf, "style"));
-    const cr = label(ctx, x, y, w, h, P, u, def, f);
-    if (cr.w > u && cr.h > u) def.draw(ctx, cr, f, P, u, o.leaf);
-    ctx.restore();
+    try {
+      chrome(ctx, x, y, w, h, P, u, L.eff(o.leaf, "style"));
+      const cr = label(ctx, x, y, w, h, P, u, def, f);
+      if (cr.w > u && cr.h > u) def.draw(ctx, cr, f, P, u, o.leaf);
+    } catch (err) {
+      // 1枚のパネルが壊れても、ほかは描き続ける（状態を捨てて、次のコマでやり直す）
+      delete rt.parts[o.leaf.id];
+      if (!failed.has(pk)) {
+        failed.add(pk);
+        console.error(`パネル「${def.ja}」を描けませんでした`, err);
+      }
+    } finally {
+      ctx.restore();
+    }
     const led = L.eff(o.leaf, "led"); if (led == null ? (fx.led || def.led) : led) ledify(x, y, w, h, P, u);
   });
   drawTop(f, P0, g, u);

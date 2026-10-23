@@ -353,12 +353,21 @@ export const PANELS: Record<string, PanelDef> = {
       }));
     } },
 
-  ticker: { ja: "電光", en: "TICKER", g: "文字", led: true, draw(ctx, c, f, P, u) {
+  ticker: { ja: "電光", en: "TICKER", g: "文字", led: true, draw(ctx, c, f, P, u, lf) {
       const notes = f.active.filter(a => a.tr < 2).map(a => pname(a.p)).join(" ") || "・";
       const txt = rt.lang === "ja" ? `${rt.song.name}　第${f.bar + 1}小節　${notes}　${BPM}BPM　${rt.song.keyJa}　　` : `${rt.song.name}  BAR ${f.bar + 1}  ${notes}  ${BPM}BPM  ${rt.song.key}    `;
-      const fs = Math.min(c.h * .62, u * 9); ctx.font = `${fs}px ${DOT}`; const tw = ctx.measureText(txt).width;
-      let x = c.x - ((f.S * u * 1.6) % tw); ctx.fillStyle = P.a1; ctx.textBaseline = "middle";
-      while (x < c.x + c.w) { ctx.fillText(txt, x, c.y + c.h / 2); x += tw; }
+      const fs = Math.min(c.h * .62, u * 9); ctx.font = `${fs}px ${DOT}`;
+      // 流れる位置は、経った時間だけ前に進める（曲の位置から計算しないので、頭に戻っても・巻き戻しても戻らない）
+      const st = rt.parts[lf.id] || (rt.parts[lf.id] = { x: 0, items: [] as { text: string; at: number }[] });
+      st.x += Math.max(0, rt.frameDt) * u * 1.6 * BPM / 15;
+      const width = (t: string): number => Math.max(fs, ctx.measureText(t).width);
+      // 文字は、右端から入ってくるときの内容（小節・音名）でつなげていく
+      if (!st.items.length) st.items.push({ text: txt, at: st.x });
+      let last = st.items[st.items.length - 1];
+      while (last.at + width(last.text) < st.x + c.w + fs) { last = { text: txt, at: last.at + width(last.text) }; st.items.push(last); }
+      while (st.items.length > 1 && st.items[0].at + width(st.items[0].text) < st.x) st.items.shift();
+      ctx.fillStyle = P.a1; ctx.textBaseline = "middle";
+      for (const it of st.items) ctx.fillText(it.text, c.x + it.at - st.x, c.y + c.h / 2);
       ctx.textBaseline = "alphabetic";
     } },
 
