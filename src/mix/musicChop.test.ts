@@ -4,7 +4,7 @@ import { createRng } from "../theory/rng.ts";
 import { musicSlices, musicSlotSteps, planMusicLane, type MusicLaneInput } from "./musicChop.ts";
 
 const SPB = 16; // 1小節＝16分×16
-const shape = { busy: 0.6, breaks: 0, onBeat: 0, size: 0.5, motion: 0, hold: 1, crisp: 0, pan: 0, fx: 0, repeat: 0.3, fills: 1, vary: 0 };
+const shape = { busy: 0.6, breaks: 0, onBeat: 0, size: 0.5, motion: 0, hold: 1, crisp: 0, pan: 0, fx: 0 };
 const input = (over: Partial<MusicLaneInput> = {}, seed = 1): MusicLaneInput => ({
   totalSteps: 8 * SPB,
   stepsPerBar: SPB,
@@ -47,13 +47,15 @@ test("コードを守る：b小節目の断片は、元の (b % 元の小節数)
   }
 });
 
-test("型をくり返す：4小節のまとまりの1〜3小節目は同じパターン（1小節パターンのとき）、4小節目はフィル", () => {
+test("型をくり返す：4小節のまとまりの1・2小節目は同じパターン（1小節パターンのとき）、3小節目は同じ打ちを残して詰め、4小節目はフィル", () => {
   let checked = 0;
   for (let seed = 1; seed <= 30; seed++) {
     const ev = planMusicLane(input({ totalSteps: 4 * SPB, srcBars: 1 }, seed));
     const pat = (b: number) => JSON.stringify(ev.filter((e) => Math.floor(e.step / SPB) === b).map((e) => [e.step - b * SPB, e.slice]));
     assert.equal(pat(0), pat(1));
-    assert.equal(pat(1), pat(2));
+    const hits = (b: number) => ev.filter((e) => Math.floor(e.step / SPB) === b).map((e) => [e.step - b * SPB, e.slice].join());
+    for (const h of hits(0)) assert.ok(hits(2).includes(h), `詰めても元の打ちは残る: ${h}`);
+    assert.ok(hits(2).length >= hits(0).length);
     if (pat(3) !== pat(0)) checked++;
   }
   assert.ok(checked > 20, String(checked));
@@ -161,13 +163,13 @@ test("強さ：小節の頭がいちばん強く、裏ほど弱い。フィル�
   }
 });
 
-test("盛り上げ：8小節の後ろ4小節は前の4小節より打つ数が多く、8小節目のフィルは長い（前から始まる）", () => {
+test("盛り上げ：8小節の後ろ4小節は前の4小節（の頭2小節）より打つ数が多く、8小節目のフィルは長い（前から始まる）", () => {
   let denser = 0;
   let longer = 0;
   for (let seed = 1; seed <= 20; seed++) {
     const ev = planMusicLane(input({ slotSteps: 1 }, seed));
     const count = (from: number, to: number) => ev.filter((e) => e.step >= from * SPB && e.step < to * SPB).length;
-    if (count(4, 7) > count(0, 3)) denser++;
+    if (count(4, 7) > count(0, 2)) denser++;
     // フィルの所（gate 0.9 か ちりばめ）の始まり
     const fillStart = (bar: number) => {
       const f = ev.filter((e) => Math.floor(e.step / SPB) === bar && e.gate !== undefined && e.gate !== 1 && e.gate !== 0.65);
@@ -223,70 +225,9 @@ test("混ぜる：全部の層で1つのリズム。打つ所は層どうしで�
   }
 });
 
-/** 小節ごとの、小節の頭からの打つ位置と断片の並び。 */
-function barShapes(ev: ReturnType<typeof planMusicLane>, bars: number): string[] {
-  return Array.from({ length: bars }, (_, b) =>
-    ev.filter((e) => Math.floor(e.step / SPB) === b).map((e) => `${e.step - b * SPB}:${e.slice % slots(2)}`).join(","),
-  );
-}
-
-test("フィル0：4小節目も、フィルにならず同じパターンを続ける。フィル1なら、4小節目は崩れる", () => {
-  let differs = 0;
-  for (let seed = 1; seed <= 20; seed++) {
-    const none = barShapes(planMusicLane(input({ totalSteps: 4 * SPB, params: { ...shape, fills: 0 } }, seed)), 4);
-    assert.equal(none[3], none[0], `seed ${seed}`);
-    const on = barShapes(planMusicLane(input({ totalSteps: 4 * SPB, params: { ...shape, fills: 1 } }, seed)), 4);
-    if (on[3] !== on[0]) differs++;
+test("交代：曲が短くても、どのトラックにも番が回る（8小節で3トラック）", () => {
+  for (let i = 0; i < 3; i++) {
+    const ev = planMusicLane(input({ laneIndex: i, laneCount: 3, turns: "swap" }, 4));
+    assert.ok(ev.length > 0, `トラック${i}が鳴らない`);
   }
-  assert.ok(differs >= 15, `${differs}`);
-});
-
-test("変化0：同じパターンをくり返す。変化1：小節ごとに別のパターンになる", () => {
-  const still = new Set<string>();
-  const varied = new Set<string>();
-  for (let seed = 1; seed <= 10; seed++) {
-    const a = barShapes(planMusicLane(input({ totalSteps: 3 * SPB, params: { ...shape, fills: 0 }, varyRng: createRng(seed) }, seed)), 3);
-    assert.equal(a[1], a[0]);
-    assert.equal(a[2], a[0]);
-    const b = barShapes(planMusicLane(input({ totalSteps: 3 * SPB, params: { ...shape, fills: 0, vary: 1 }, varyRng: createRng(seed) }, seed)), 3);
-    still.add(a[0]);
-    for (const x of b) varied.add(x);
-  }
-  assert.ok(varied.size > still.size * 2, `${varied.size} vs ${still.size}`);
-});
-
-test("変化は、同じ種なら同じ結果になる（刻み直さない限り、曲は変わらない）", () => {
-  const run = () => planMusicLane(input({ params: { ...shape, vary: 0.7 }, varyRng: createRng(9) }, 5));
-  assert.deepEqual(run(), run());
-});
-
-test("くり返し：大きいほど、前と同じ断片の連打が増える", () => {
-  const count = (repeat: number): number => {
-    let n = 0;
-    for (let seed = 1; seed <= 30; seed++) {
-      const ev = planMusicLane(input({ totalSteps: 4 * SPB, params: { ...shape, busy: 1, repeat, fills: 0 } }, seed));
-      for (let i = 1; i < ev.length; i++) if (ev[i].slice === ev[i - 1].slice) n++;
-    }
-    return n;
-  };
-  assert.ok(count(0.8) > count(0) + 20, `${count(0.8)} vs ${count(0)}`);
-});
-
-test("混ぜる：層の重みが大きいほど、その層の断片が選ばれる", () => {
-  const share = (weights?: number[]): number => {
-    let mine = 0;
-    let all = 0;
-    for (let seed = 1; seed <= 30; seed++) {
-      const base = { totalSteps: 8 * SPB, laneCount: 2, turns: "mix" as const, params: { ...shape, busy: 1 }, srcWeights: weights, srcRng: createRng(seed ^ 5) };
-      const a = planMusicLane(input({ ...base, laneIndex: 0, srcRng: createRng(seed ^ 5) }, seed)).length;
-      const b = planMusicLane(input({ ...base, laneIndex: 1, srcRng: createRng(seed ^ 5) }, seed)).length;
-      mine += a;
-      all += a + b;
-    }
-    return mine / all;
-  };
-  const even = share();
-  assert.ok(Math.abs(share([1, 1]) - even) < 1e-9, "重みが同じなら、重み無しと同じ");
-  assert.ok(share([0.9, 0.1]) > even + 0.2, `${share([0.9, 0.1])} vs ${even}`);
-  assert.ok(share([0.1, 0.9]) < even - 0.2);
 });

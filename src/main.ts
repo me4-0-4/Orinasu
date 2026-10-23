@@ -55,7 +55,8 @@ import {
   deletePhrase,
   loadUserPresets,
   deleteSong,
-  loadAllSongs,
+  loadSavedSongs,
+  loadSong,
   saveSong,
   saveUserPreset,
   deleteUserPreset,
@@ -67,7 +68,7 @@ import { buildUserPresets } from "./ui/userPresets";
 import { buildMixPanel } from "./ui/mixPanel";
 import { renderPhrase } from "./audio/renderPhrase";
 import { reverbWet } from "./audio/reverbWet";
-import { createEmptySong, type Song } from "./mix/types";
+import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = "";
@@ -238,30 +239,38 @@ const recorder = new Recorder(transport, activeLayer);
 
 // --- 刻む（選んだ曲を1本の波形にして、切り貼りして鳴らす） ---------------------
 
-// 曲を切り替えても、前の曲の保存を取りこぼさないよう、曲ごとに最後の1回だけ溜めておく
-const pendingSongs = new Map<string, Song>();
 let persistSongTimer: number | null = null;
+let pendingSong: Song | null = null;
 function persistSongSoon(song: Song): void {
-  pendingSongs.set(song.id, song);
   if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
+  pendingSong = song;
   persistSongTimer = window.setTimeout(() => {
     persistSongTimer = null;
-    const batch = [...pendingSongs.values()];
-    pendingSongs.clear();
-    for (const s of batch) void saveSong(s);
+    pendingSong = null;
+    void saveSong(song);
   }, 400);
 }
+// タブを閉じる・隠すときは、待っている保存をすぐ書く（直前の変更を落とさない）
+const flushSong = (): void => {
+  if (persistSongTimer === null || !pendingSong) return;
+  window.clearTimeout(persistSongTimer);
+  persistSongTimer = null;
+  const song = pendingSong;
+  pendingSong = null;
+  void saveSong(song);
+};
+window.addEventListener("pagehide", flushSong);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushSong();
+});
 
 const mixPanel = buildMixPanel({
   getPhrases: () => savedPhrases,
   onSongChange: persistSongSoon,
-  songs: {
-    loadAll: loadAllSongs,
-    remove: async (id) => {
-      pendingSongs.delete(id); // 消した曲を、溜めていた保存で書き戻さない
-      await deleteSong(id);
-    },
-  },
+  // 保存した曲は、読むときに今の形へ直す（migrateSong は id を作業中の曲にするので、保存時の id を戻す）
+  listSavedSongs: async () => (await loadSavedSongs()).map((raw) => ({ ...migrateSong(raw), id: raw.id })),
+  putSavedSong: saveSong,
+  deleteSavedSong: deleteSong,
   prepareAudio: async () => {
     await ensureAudio();
     stopPreview();
@@ -1045,15 +1054,39 @@ updateKeyLabels();
 
 const heldKeys = new Map<string, number>();
 
+/** 文字を打つ所か（テキスト・数値・検索の入力欄、テキストエリア、編集できる要素）。 */
+function isTextEntry(el: HTMLElement | null): boolean {
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+  if (el.tagName !== "INPUT") return false;
+  const type = (el as HTMLInputElement).type;
+  return ["text", "number", "search", "email", "password", "url", "tel"].includes(type);
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) return;
+  // 文字を打つ所（名前・BPMなど）では、キーをそのまま使わせる
+  if (isTextEntry(target)) return;
+  // チェックボックス・スライダー・選択はクリックのあともフォーカスが残る。スペースで切り替わらないよう、再生⇔停止だけにする
+  if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) {
+    if (e.code === "Space") {
+      e.preventDefault();
+      if (currentTab === "mix") mixPanel.togglePlay();
+      else togglePlay();
+    } else if (currentTab === "mix" && target && ["range", "checkbox"].includes((target as HTMLInputElement).type) && mixPanel.key(e.code)) {
+      // スライダーを動かしたあとも、M・S・Home は使える
+      e.preventDefault();
+    }
+    return;
+  }
   if (currentTab === "mix") {
-    // 刻むタブ：鍵盤は隠しているので音符は鳴らさない。スペースは刻んだ曲の再生⇔停止
+    // 刻むタブ：鍵盤は隠しているので音符は鳴らさない。スペースは刻んだ曲の再生⇔停止。M・S・Home はミキサーの操作
     if (e.code === "Space") {
       e.preventDefault();
       mixPanel.togglePlay();
+    } else if (mixPanel.key(e.code)) {
+      e.preventDefault();
     }
     return;
   }
@@ -1129,20 +1162,37 @@ function playheadLoop(): void {
 }
 playheadLoop();
 
-// フレーズを読み込んでから曲を開く（素材のフレーズが無いと、曲の素材が外れてしまうため）
-async function loadSongsAndMaterials(): Promise<void> {
-  await reloadPhraseList();
-  await mixPanel.reloadSongs();
+mixPanel.setSong(createEmptySong());
+// フレーズ一覧を読み終えてから曲を読む（先に曲を読むと、空の一覧で素材やトラックを消してしまい、次の保存で失われる）
+void (async () => {
+  try {
+    await reloadPhraseList();
+  } catch (err) {
+    // 一覧を読めなかったときは、曲を読まない（空の一覧で素材を消して保存しないように）
+    console.error("フレーズ一覧を読み込めませんでした", err);
+    return;
+  }
+  const song = await loadSong(SONG_ID).catch((err) => {
+    console.error("曲を読み込めませんでした", err);
+    return null;
+  });
+  if (song) mixPanel.setSong(migrateSong(song));
   mixPanel.refreshMaterials();
-}
-mixPanel.setSong(createEmptySong(makeId("song")));
-void loadSongsAndMaterials();
+})();
 refreshPhraseUI();
 
 // クラウドから新しいデータを取り込んだら、一覧を読み直す（編集中のフレーズは触らない）。
 initCloud({
   onSynced: () => {
-    void loadSongsAndMaterials();
+    void reloadPhraseList();
     void reloadUserPresets();
+    mixPanel.refreshLibrary();
+  },
+  // 別のアカウントに切り替えて端末のデータを消したら、刻む曲も空にする（前の人の曲を新しい人の所に保存しない）
+  onCleared: () => {
+    if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
+    persistSongTimer = null;
+    pendingSong = null;
+    mixPanel.setSong(createEmptySong());
   },
 });

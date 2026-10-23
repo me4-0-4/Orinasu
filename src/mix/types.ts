@@ -30,6 +30,8 @@ export interface Lane {
   mode?: CutMode;
   /** 音量（0〜1.5）。無ければ1。 */
   volume?: number;
+  /** 定位（-1で左、0で真ん中、1で右）。無ければ真ん中。ミキサーのパン（断片ごとのパンとは別）。 */
+  balance?: number;
   muted?: boolean;
   /** この層（トラック）のエフェクト：FXチェーンとエンベロープ。無ければ掛けない（マスターのエフェクトは別に掛かる）。 */
   fx?: TrackFx;
@@ -38,8 +40,8 @@ export interface Lane {
 }
 
 /** 層ごとにずらせる形のつまみ。 */
-export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold" | "crisp" | "pan" | "fx" | "repeat" | "fills" | "vary";
-export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold", "crisp", "pan", "fx", "repeat", "fills", "vary"];
+export type ShapeKey = "busy" | "breaks" | "onBeat" | "size" | "motion" | "hold" | "crisp" | "pan" | "fx";
+export const SHAPE_KEYS: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "motion", "hold", "crisp", "pan", "fx"];
 export const MAX_LANE_VOLUME = 1.5;
 
 /**
@@ -78,14 +80,12 @@ export interface SongParams extends ShapeParams {
   pad: number;
   /** ポンピング（0〜1）：下地のキックに合わせて、刻んだ音を沈ませる深さ。 */
   pump: number;
-  /** マスターの音量（0〜1.5）。全体のエフェクトのあと。大きすぎるときは、最後のリミッターが自動で下げる。 */
-  masterVolume: number;
-  /** マスターのコンプ（0〜1）：全体のエフェクトのあとに、曲全体へ掛ける。0なら掛けない。 */
-  masterComp: number;
+  /** マスターの音量（0〜1）。コンプ・リミッターのあとに掛ける。 */
+  master: number;
 }
 
 /**
- * 曲：刻む曲（フレーズ）と、層ごとの刻み方の種。何曲でも持てる（端末内と、ログイン中ならクラウド）。
+ * 曲：刻む曲（フレーズ）と、層ごとの刻み方の種。1つだけ持つ（端末内）。
  * 刻んだ音そのものは保存せず、種と設定から作り直す。
  */
 export interface Song {
@@ -103,6 +103,8 @@ export interface Song {
    * null は下地なし。無い（undefined）ときは、刻むときに、ドラムのある最初の材料を選ぶ。
    */
   drumId?: string | null;
+  /** 下地（ドラムループ）のミュート。音量はそのまま残る。 */
+  bedMuted?: boolean;
   /** エフェクト：全体・下地・伸ばし（層ごとのものは層が持つ）。 */
   fx: SongFx;
   /** 層。まだ刻んでいなければ無い。 */
@@ -110,11 +112,48 @@ export interface Song {
   /** グループ：選んだ断片のまとまり（まとめて刻み方・ミュート・FXを変える）。 */
   groups?: HitGroup[];
   params: SongParams;
+  /** 「保存した曲」から開いた曲なら、そのid（「保存」で上書きする先）。作業中の曲にだけ付く。 */
+  savedId?: string;
   updatedAt: number;
 }
 
-/** 最初の1曲だけが使っていた固定のid（複数曲になる前の保存データ）。 */
+/** 作業中の曲（自動で保存される）のid。 */
 export const SONG_ID = "song";
+/** 「保存した曲」のidの頭。作業中の曲と同じ保存場所に、別のidで入れる。 */
+export const SAVED_SONG_PREFIX = "saved_";
+
+/** 保存した曲か（作業中の曲ではなく、名前を付けて残した曲）。 */
+export const isSavedSongId = (id: string): boolean => id.startsWith(SAVED_SONG_PREFIX);
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, canonical(v)]),
+    );
+  }
+  return value;
+}
+
+/** 2つの曲の中身が同じか（id・更新時刻・どの保存した曲から開いたか、は見ない）。 */
+export function sameSongContent(a: Song, b: Song): boolean {
+  const strip = ({ id: _id, updatedAt: _u, savedId: _s, ...rest }: Song) => rest;
+  return JSON.stringify(canonical(strip(a))) === JSON.stringify(canonical(strip(b)));
+}
+
+/** 作業中の曲を、名前を付けて残すための写し（idは保存先のid）。 */
+export function snapshotSong(song: Song, id: string, now = Date.now()): Song {
+  const { savedId: _s, ...rest } = structuredClone(song);
+  return { ...rest, id, updatedAt: now };
+}
+
+/** 保存した曲を、作業中の曲として開くための写し。 */
+export function openedSong(saved: Song): Song {
+  return { ...structuredClone(saved), id: SONG_ID, savedId: saved.id };
+}
 
 export const MIN_BPM = 40;
 export const MAX_BPM = 240;
@@ -133,9 +172,6 @@ export const DEFAULT_PARAMS: SongParams = {
   crisp: 0.5,
   pan: 0.5,
   fx: 0.7,
-  repeat: 0.3,
-  fills: 1,
-  vary: 0,
   dry: true,
   swing: 0,
   turns: "mix",
@@ -143,11 +179,8 @@ export const DEFAULT_PARAMS: SongParams = {
   sfx: 0.6,
   pad: 0.5,
   pump: 0.5,
-  masterVolume: 1,
-  masterComp: 0,
+  master: 1,
 };
-
-export const MAX_MASTER_VOLUME = 1.5;
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 
@@ -158,57 +191,10 @@ export function effectiveParams(global: SongParams, lane: Pick<Lane, "shift" | "
   return out;
 }
 
-/** ランダム化で選ぶ範囲（[最小, 最大]）。どの値も、音楽として成り立つ範囲に収める。断片の長さ（size）は、切り方が大きく変わるので対象にしない。 */
-const RANDOM_RANGES: Record<Exclude<ShapeKey, "size">, [number, number]> = {
-  busy: [0.3, 0.85],
-  breaks: [0, 0.25],
-  onBeat: [0, 0.6],
-  motion: [0, 0.6],
-  hold: [0.3, 1],
-  crisp: [0, 1],
-  pan: [0, 0.8],
-  fx: [0, 1],
-  repeat: [0.1, 0.6],
-  fills: [0.6, 1],
-  vary: [0, 0.6],
-};
-
-/** そのモードで効くつまみ（ランダム化の対象）。 */
-export function randomizableKeys(style: ChopStyle): ShapeKey[] {
-  return style === "music"
-    ? ["busy", "breaks", "onBeat", "motion", "crisp", "pan", "fx", "repeat", "fills", "vary"]
-    : ["busy", "breaks", "onBeat", "motion", "hold"];
-}
-
-const round2 = (x: number): number => Math.round(x * 100) / 100;
-
-/** 全体の形を、範囲の中でランダムに選ぶ（keys のつまみだけ）。 */
-export function randomShape(keys: ShapeKey[], rng: () => number): Partial<Record<ShapeKey, number>> {
-  const out: Partial<Record<ShapeKey, number>> = {};
-  for (const key of keys) {
-    if (key === "size") continue;
-    const [lo, hi] = RANDOM_RANGES[key];
-    out[key] = round2(lo + (hi - lo) * rng());
-  }
-  return out;
-}
-
-/** 層の「ずらし」を、全体の値からランダムに選ぶ（±0.3まで。ずらした結果は 0〜1 に収める）。 */
-export function randomLaneShift(global: SongParams, keys: ShapeKey[], rng: () => number): Partial<Record<ShapeKey, number>> {
-  const shift: Partial<Record<ShapeKey, number>> = {};
-  for (const key of keys) {
-    if (key === "size") continue;
-    const target = clamp01(global[key] + (rng() * 2 - 1) * 0.3);
-    const d = round2(target - global[key]);
-    if (Math.abs(d) >= 0.01) shift[key] = d;
-  }
-  return shift;
-}
-
 /** 層が全体と違う設定を持っているか（ずらし・切り方・音量・ミュート）。 */
 export function laneIsCustom(lane: Lane): boolean {
   const shifted = SHAPE_KEYS.some((k) => Math.abs(lane.shift?.[k] ?? 0) > 1e-9);
-  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || !!lane.muted || trackHasFx(lane.fx) || (lane.takes?.length ?? 0) > 0;
+  return shifted || lane.mode !== undefined || (lane.volume !== undefined && lane.volume !== 1) || lane.balance !== undefined || !!lane.muted || trackHasFx(lane.fx) || (lane.takes?.length ?? 0) > 0;
 }
 
 /**
@@ -224,9 +210,9 @@ export function setLaneShape(lane: Lane, global: SongParams, key: ShapeKey, valu
   return Object.keys(shift).length === 0 ? rest : { ...rest, shift };
 }
 
-export function createEmptySong(id: string = SONG_ID): Song {
+export function createEmptySong(): Song {
   return {
-    id,
+    id: SONG_ID,
     name: "無題の曲",
     materialIds: [],
     bpm: DEFAULT_BPM,
@@ -262,13 +248,14 @@ export function migrateSong(raw: unknown): Song {
   if (typeof raw !== "object" || raw === null) return base;
   const r = raw as Record<string, unknown>;
   const song: Song = { ...base, updatedAt: isNum(r.updatedAt) ? r.updatedAt : base.updatedAt };
-  if (typeof r.id === "string" && r.id) song.id = r.id;
   if (typeof r.name === "string" && r.name) song.name = r.name;
   if (Array.isArray(r.materialIds)) song.materialIds = r.materialIds.filter((x): x is string => typeof x === "string");
   if (isNum(r.bpm) && r.bpm >= MIN_BPM && r.bpm <= MAX_BPM) song.bpm = Math.round(r.bpm);
   if (isNum(r.beatsPerBar) && r.beatsPerBar >= 1 && r.beatsPerBar <= 12) song.beatsPerBar = Math.round(r.beatsPerBar);
   if (isNum(r.lengthBars) && LENGTH_OPTIONS.includes(r.lengthBars)) song.lengthBars = r.lengthBars;
   if (typeof r.drumId === "string" || r.drumId === null) song.drumId = r.drumId;
+  if (r.bedMuted === true) song.bedMuted = true;
+  if (typeof r.savedId === "string" && isSavedSongId(r.savedId)) song.savedId = r.savedId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(
       (l): l is Lane =>
@@ -289,12 +276,10 @@ export function migrateSong(raw: unknown): Song {
     if (isNum(p.reverb)) song.fx.master = { chain: p.reverb > 0 ? [newPlugin("reverb", { amount: Math.min(1, p.reverb) })] : [], envelopes: [] };
     if (p.style === "music" || p.style === "material") song.params.style = p.style;
     if (isNum(p.swing)) song.params.swing = Math.min(1, Math.max(0, p.swing));
-    for (const key of ["bedVolume", "sfx", "pad", "pump"] as const) {
+    for (const key of ["bedVolume", "sfx", "pad", "pump", "master"] as const) {
       if (isNum(p[key])) song.params[key] = Math.min(1, Math.max(0, p[key]));
     }
     if (p.turns === "mix" || p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
-    if (isNum(p.masterVolume)) song.params.masterVolume = Math.min(MAX_MASTER_VOLUME, Math.max(0, p.masterVolume));
-    if (isNum(p.masterComp)) song.params.masterComp = Math.min(1, Math.max(0, p.masterComp));
   }
   const groups = sanitizeGroups(r.groups);
   if (groups.length > 0) song.groups = groups;
@@ -316,6 +301,7 @@ function sanitizeLane(raw: Lane, legacy: LegacyContext): Lane {
   if (raw.muted) lane.muted = true;
   if (raw.mode === "transient" || raw.mode === "divide") lane.mode = raw.mode;
   if (isNum(raw.volume)) lane.volume = Math.min(MAX_LANE_VOLUME, Math.max(0, raw.volume));
+  if (isNum(raw.balance) && Math.abs(raw.balance) > 1e-9) lane.balance = Math.min(1, Math.max(-1, raw.balance));
   // 前の形の「選んだ断片だけ」のエフェクトは、断片ごとのテイクFXになる
   const takes = sanitizeTakes(raw.takes);
   if (typeof raw.fx === "object" && raw.fx !== null) {

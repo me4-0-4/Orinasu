@@ -1,7 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createRng } from "../theory/rng.ts";
-import { createEmptySong, laneIsCustom, formatDuration, migrateSong, randomLaneShift, randomShape, randomizableKeys, songSeconds, type Lane } from "./types.ts";
+import {
+  SONG_ID,
+  createEmptySong,
+  formatDuration,
+  isSavedSongId,
+  laneIsCustom,
+  migrateSong,
+  openedSong,
+  sameSongContent,
+  snapshotSong,
+  songSeconds,
+  type Lane,
+} from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
@@ -146,54 +157,43 @@ test("層の組み方：初期は「混ぜる」。古い掛け合い・交代�
   assert.equal(migrateSong({ params: { turns: "mix" } }).params.turns, "mix");
 });
 
-test("マスターの音量とコンプ：初期値は素通しで、保存データは範囲に収める", () => {
-  const s0 = createEmptySong();
-  assert.equal(s0.params.masterVolume, 1);
-  assert.equal(s0.params.masterComp, 0);
-  const s = migrateSong({ params: { masterVolume: 9, masterComp: -1 } });
-  assert.equal(s.params.masterVolume, 1.5);
-  assert.equal(s.params.masterComp, 0);
-  assert.equal(migrateSong({ params: { masterVolume: 0.4, masterComp: 0.6 } }).params.masterComp, 0.6);
-  assert.equal(migrateSong({ params: {} }).params.masterVolume, 1);
+test("保存した曲：写しは作業中の曲と中身が同じで、idと更新時刻だけ違う", () => {
+  const song = createEmptySong();
+  song.name = "テスト";
+  song.lanes = [{ phraseId: "p1", cutSeed: 1, rhythmSeed: 2, orderSeed: 3 }];
+  song.savedId = "saved_x_1";
+  const saved = snapshotSong(song, "saved_a_1", 123);
+  assert.equal(saved.id, "saved_a_1");
+  assert.equal(saved.updatedAt, 123);
+  assert.equal(saved.savedId, undefined);
+  assert.ok(isSavedSongId(saved.id));
+  assert.ok(sameSongContent(saved, song));
+  // 写しを直しても、元は変わらない
+  saved.lanes![0].cutSeed = 99;
+  assert.equal(song.lanes[0].cutSeed, 1);
+  assert.ok(!sameSongContent(saved, song));
+  // 開くと、作業中のid・どの保存した曲かが付く
+  const opened = openedSong(saved);
+  assert.equal(opened.id, SONG_ID);
+  assert.equal(opened.savedId, "saved_a_1");
+  assert.ok(sameSongContent(opened, saved));
+  // 読み込みで savedId は残るが、保存した曲のid以外は捨てる
+  assert.equal(migrateSong(opened).savedId, "saved_a_1");
+  assert.equal(migrateSong({ ...opened, savedId: "song" }).savedId, undefined);
 });
 
-test("曲のidは、保存データから引き継ぐ（何曲も持てるように）。無ければ最初の1曲のid", () => {
-  assert.equal(migrateSong({ id: "song_abc_1" }).id, "song_abc_1");
-  assert.equal(migrateSong({}).id, "song");
-  assert.equal(createEmptySong("song_x").id, "song_x");
+test("保存データ：ドラムループのミュートを読む。ソロは保存しない", () => {
+  const song = migrateSong({ ...createEmptySong(), bedMuted: true });
+  assert.equal(song.bedMuted, true);
+  assert.equal(migrateSong({ ...createEmptySong(), bedMuted: "x" }).bedMuted, undefined);
+  assert.equal(migrateSong(createEmptySong()).bedMuted, undefined);
+  const lanes = [{ phraseId: "a", cutSeed: 1, rhythmSeed: 2, orderSeed: 3, solo: true }];
+  assert.ok(!("solo" in migrateSong({ ...createEmptySong(), lanes }).lanes![0]));
 });
 
-test("ランダム化：範囲の中に収まり、種が同じなら同じ。断片の長さは対象にしない", () => {
-  const keys = randomizableKeys("music");
-  assert.ok(!keys.includes("size"));
-  assert.deepEqual(randomShape(keys, createRng(3)), randomShape(keys, createRng(3)));
-  for (let seed = 1; seed <= 50; seed++) {
-    const r = randomShape(keys, createRng(seed));
-    assert.deepEqual(Object.keys(r).sort(), [...keys].sort());
-    for (const v of Object.values(r)) assert.ok(v! >= 0 && v! <= 1);
-    assert.ok(r.busy! >= 0.3 && r.busy! <= 0.85);
-    assert.ok(r.fills! >= 0.6);
-  }
-  assert.ok(!randomizableKeys("material").includes("crisp"));
-  assert.ok(randomizableKeys("material").includes("hold"));
-});
-
-test("ランダム化：層のずらしは±0.3以内で、ずらした結果が0〜1に収まる", () => {
-  const global = { ...createEmptySong().params, busy: 0.9, crisp: 0.05 };
-  for (let seed = 1; seed <= 50; seed++) {
-    const shift = randomLaneShift(global, randomizableKeys("music"), createRng(seed));
-    for (const [k, d] of Object.entries(shift)) {
-      assert.ok(Math.abs(d!) <= 0.3 + 1e-9);
-      const v = global[k as keyof typeof global] as number + d!;
-      assert.ok(v >= -1e-9 && v <= 1 + 1e-9, `${k} ${v}`);
-    }
-  }
-});
-
-test("新しいつまみ（くり返し・フィル・変化）：初期値は今までと同じ動き、保存データは範囲に収める", () => {
-  const p = createEmptySong().params;
-  assert.deepEqual([p.repeat, p.fills, p.vary], [0.3, 1, 0]);
-  const s = migrateSong({ params: { repeat: 5, fills: -1, vary: 0.4 } });
-  assert.deepEqual([s.params.repeat, s.params.fills, s.params.vary], [1, 0, 0.4]);
-  assert.deepEqual([migrateSong({ params: {} }).params.repeat, migrateSong({ params: {} }).params.fills], [0.3, 1]);
+test("保存データ：マスターの音量。無ければ1、範囲外は収める", () => {
+  assert.equal(migrateSong(createEmptySong()).params.master, 1);
+  assert.equal(migrateSong({ ...createEmptySong(), params: { ...createEmptySong().params, master: 0.4 } }).params.master, 0.4);
+  assert.equal(migrateSong({ ...createEmptySong(), params: { ...createEmptySong().params, master: 9 } }).params.master, 1);
+  assert.equal(migrateSong({ params: { busy: 0.4 } }).params.master, 1);
 });

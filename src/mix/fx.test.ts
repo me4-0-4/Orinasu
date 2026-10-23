@@ -9,10 +9,12 @@ import {
   envValueAt,
   fillBars,
   highCutHz,
+  liveReverbChain,
   lowCutHz,
   newEnvelope,
   newPlugin,
   reverbSeconds,
+  reverbToneHz,
   sanitizeTakes,
   sanitizeTrack,
   trackIsOff,
@@ -137,4 +139,37 @@ test("読み込み：いまの形、少し前の形（いつ掛けるか つき�
   assert.deepEqual(sanitizeTakes([{ step: 3, chain: [{ kind: "crush" }] }, { step: 3, chain: [{ kind: "drive" }] }, { step: 1, chain: [] }]).map((t) => t.step), [3]);
   const pcm = { l: Float32Array.from([0.1]), r: Float32Array.from([0.1]) };
   assert.equal(applyDrive(pcm, 0, 0), pcm);
+});
+
+test("フィルター：くり返しのつなぎ目で、音が途切れない（プチッとしない）", async () => {
+  const n = 1000; // 100Hzがちょうど100周
+  const l = Float32Array.from({ length: n }, (_, i) => Math.sin((2 * Math.PI * 100 * i) / SR));
+  const out = await applyTrack({ l, r: l.slice() }, { chain: [newPlugin("highCut", { amount: 0.9 })], envelopes: [] }, env());
+  let steady = 0;
+  for (let i = 300; i < n; i++) steady = Math.max(steady, Math.abs(out.l[i] - out.l[i - 1]));
+  assert.ok(Math.abs(out.l[0] - out.l[n - 1]) < steady * 2, `つなぎ目 ${Math.abs(out.l[0] - out.l[n - 1])} / ふだん ${steady}`);
+});
+
+test("エンベロープの曲線：点を順にたどっても、1点ずつ計算したのと同じ", () => {
+  const pts = [{ t: 0, v: 0 }, { t: 3, v: 1 }, { t: 3, v: 0.2 }, { t: 7, v: 0.6 }];
+  const c = envCurve(pts, 100, 10);
+  for (let i = 0; i < 100; i += 7) assert.ok(Math.abs(c[i] - envValueAt(pts, i / 10)) < 1e-6, `i=${i}`);
+});
+
+test("リアルタイムで掛けられるマスター：リバーブだけでつまみが動かないときの並び。それ以外は null", () => {
+  assert.deepEqual(liveReverbChain(undefined), []);
+  assert.deepEqual(liveReverbChain({ chain: [], envelopes: [] }), []);
+  const rv = newPlugin("reverb", { amount: 0.4, mix: 0.5, size: 0.35, tone: 0.5 });
+  const got = liveReverbChain({ chain: [rv], envelopes: [] })!;
+  assert.equal(got.length, 1);
+  assert.ok(Math.abs(got[0].send - 0.5 * 0.4 * 0.5) < 1e-12);
+  assert.ok(Math.abs(got[0].seconds - reverbSeconds(0.35)) < 1e-12);
+  assert.ok(Math.abs(got[0].toneHz - reverbToneHz(0.5)) < 1e-9);
+  // バイパス・量0は飛ばす
+  assert.deepEqual(liveReverbChain({ chain: [{ ...rv, bypass: true }, newPlugin("reverb", { amount: 0 })], envelopes: [] }), []);
+  // 別のプラグイン・エンベロープは、リアルタイムでは掛けない
+  assert.equal(liveReverbChain({ chain: [rv, newPlugin("delay")], envelopes: [] }), null);
+  assert.equal(liveReverbChain({ chain: [rv], envelopes: [newEnvelope(rv, "amount", 64)] }), null);
+  // 切ったエンベロープは、つまみの値のまま
+  assert.equal(liveReverbChain({ chain: [rv], envelopes: [{ ...newEnvelope(rv, "amount", 64), active: false }] })!.length, 1);
 });

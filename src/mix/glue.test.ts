@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase } from "../phrase/types.ts";
-import { addSfx, fourOnFloor, kickSteps, pump, renderPad, type Grid } from "./glue.ts";
+import { addSfx, fourOnFloor, kickSteps, pump, renderPad, renderPadStems, type Grid } from "./glue.ts";
 import type { Pcm } from "./pcm.ts";
 
 const SR = 8000;
@@ -58,4 +58,19 @@ test("キックの所：下地の曲のキック（36番）だけ、曲の長さ
   ];
   p.layers.push(d);
   assert.deepEqual(kickSteps(p, 32), [0, 10, 16, 26]);
+});
+
+test("伸ばしのステム：全部足すと、1つにまとめて作ったものと同じ。曲ごとに、使った所だけ鳴る", () => {
+  const grid: Grid = { totalSteps: 128, stepsPerBar: 16, stepSamples: 125, sampleRate: 4000 };
+  const tone = (f: number) => Float32Array.from({ length: 8000 }, (_, i) => Math.sin((2 * Math.PI * f * i) / 4000) * 0.5);
+  const sources = [220, 330, 440].map((f) => ({ pcm: { l: tone(f), r: tone(f) }, srcBars: 4, keyShift: 0 }));
+  const whole = renderPad(sources, grid, 1, createRng(5));
+  const stems = renderPadStems(sources, grid, 1, createRng(5));
+  assert.equal(stems.length, 3);
+  let maxDiff = 0;
+  for (let i = 0; i < whole.l.length; i++) maxDiff = Math.max(maxDiff, Math.abs(whole.l[i] - (stems[0].l[i] + stems[1].l[i] + stems[2].l[i])));
+  assert.ok(maxDiff < 1e-5, String(maxDiff));
+  assert.ok(stems.every((s) => s.l.some((x) => x !== 0)) || stems.some((s) => s.l.some((x) => x !== 0)));
+  assert.ok(renderPadStems([], grid, 1, createRng(5)).length === 0);
+  assert.ok(renderPadStems(sources, grid, 0, createRng(5)).every((s) => s.l.every((x) => x === 0)));
 });

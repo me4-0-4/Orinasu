@@ -4,10 +4,10 @@ import { migrateSong, type Song } from "../mix/types";
 import {
   clearLocalData,
   deletePhrase,
-  deleteUserPreset,
   deleteSong,
+  deleteUserPreset,
   loadAllPhrases,
-  loadAllSongs,
+  loadSavedSongs,
   loadUserPresets,
   savePhrase,
   saveSong,
@@ -31,6 +31,7 @@ const LAST_USER_KEY = "orinasu.cloudUserId";
 let state: CloudState = { status: "signedOut", email: null };
 let session: Session | null = null;
 let onSynced: (() => void) | null = null;
+let onCleared: (() => void) | null = null;
 const listeners = new Set<(s: CloudState) => void>();
 
 function setState(next: CloudState): void {
@@ -210,11 +211,11 @@ export async function syncAll(): Promise<void> {
       (p) => saveUserPreset(p, { silent: true }),
       (id) => deleteUserPreset(id, { silent: true }),
     );
-    // 曲は、古い形のデータでも読めるように migrateSong を通して取り込む
+    // 保存した曲はいちばん最後。テーブルがまだ無いときも、フレーズ・音色の同期は済んでいる
     const songsChanged = await reconcile<Song>(
       "songs",
-      await loadAllSongs(),
-      (s) => saveSong(migrateSong(s), { silent: true }),
+      await loadSavedSongs().then((list) => list.map((s) => ({ ...migrateSong(s), id: s.id }))),
+      (s) => saveSong({ ...migrateSong(s), id: s.id }, { silent: true }),
       (id) => deleteSong(id, { silent: true }),
     );
     setState({ ...state, status: "synced", message: undefined });
@@ -238,6 +239,7 @@ async function handleSession(next: Session | null): Promise<void> {
   // 前にこの端末を使った人と別のアカウントなら、前の人のデータを新しい人のアカウントに混ぜない。
   const last = readLastUser();
   if (last && last !== next.user.id) {
+    onCleared?.();
     await clearLocalData();
     onSynced?.();
   }
@@ -245,8 +247,9 @@ async function handleSession(next: Session | null): Promise<void> {
   await syncAll();
 }
 
-export function initCloud(handlers: { onSynced: () => void }): void {
+export function initCloud(handlers: { onSynced: () => void; onCleared?: () => void }): void {
   onSynced = handlers.onSynced;
+  onCleared = handlers.onCleared ?? null;
   supabase.auth.onAuthStateChange((_event, next) => {
     // コールバックの中でSupabaseを呼ぶと止まることがあるので、一拍置く。
     window.setTimeout(() => void handleSession(next), 0);

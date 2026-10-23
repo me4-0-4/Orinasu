@@ -22,6 +22,7 @@ create table if not exists public.presets (
   primary key (user_id, id)
 );
 
+-- 刻んだ曲（名前を付けて残したもの。作業中の曲は同期しない）
 create table if not exists public.songs (
   user_id    uuid    not null default auth.uid() references auth.users (id) on delete cascade,
   id         text    not null,
@@ -32,8 +33,8 @@ create table if not exists public.songs (
 );
 
 alter table public.phrases enable row level security;
-alter table public.presets enable row level security;
 alter table public.songs enable row level security;
+alter table public.presets enable row level security;
 
 -- ログインしていない人（anon）には何も許可しない。ログイン済み（authenticated）にだけ許可する。
 revoke all on public.phrases from anon;

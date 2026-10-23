@@ -1287,9 +1287,7 @@ body[data-tab="mix"] .app-footer {
 .mix-hit-bar {
   align-items: center;
 }
-.lane-canvas {
-  touch-action: none;
-}
+/* タッチの扱い（スクロールさせるか）は laneView が、場面に合わせて決める */
 @media (max-width: 720px) {
   .fx-overlay {
     left: 8px;
@@ -1317,15 +1315,6 @@ body[data-tab="mix"] .app-footer {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-}
-.tp-songs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.tp-song {
-  max-width: 14em;
 }
 .tp-play {
   min-width: 5.5em;
@@ -1418,6 +1407,67 @@ body[data-tab="mix"] .app-footer {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 作っている間：色つきの札にして、くるくるを付ける。狭い画面でも出す */
+.tp-status.is-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  flex: 0 0 auto;
+  margin-right: auto;
+  padding: 0.3em 0.9em;
+  border-radius: 999px;
+  background: var(--accent-yellow);
+  color: #1a1400;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.tp-status.is-busy::before {
+  content: "";
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: tp-spin 0.8s linear infinite;
+}
+@keyframes tp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 作っている間は、トランスポートの上の縁に、流れる帯を出す */
+.mix-transport {
+  position: relative;
+}
+.mix-transport.is-busy::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(90deg, transparent 0%, var(--accent-yellow) 50%, transparent 100%) 0 0 / 40% 100% no-repeat;
+  animation: tp-slide 1.1s linear infinite;
+  pointer-events: none;
+}
+@keyframes tp-slide {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tp-status.is-busy::before,
+  .mix-transport.is-busy::after {
+    animation: none;
+  }
+  .mix-transport.is-busy::after {
+    background: var(--accent-yellow);
+  }
+}
 .tp-export {
   display: flex;
   gap: 4px;
@@ -1433,7 +1483,7 @@ body[data-tab="mix"] .app-footer {
 }
 .arr-body {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
 }
 .arr-body.empty {
   grid-template-columns: minmax(0, 1fr);
@@ -1459,6 +1509,7 @@ body[data-tab="mix"] .app-footer {
   box-sizing: border-box;
 }
 .arr-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1467,6 +1518,28 @@ body[data-tab="mix"] .app-footer {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   border-left: 3px solid transparent;
   min-width: 0;
+}
+/* 音量メーター（ヘッダーの下の細いバー） */
+.arr-meter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  pointer-events: none;
+}
+.arr-meter > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent-green);
+}
+.arr-meter > i.hot {
+  background: var(--accent-yellow);
+}
+.arr-meter > i.clip {
+  background: var(--accent-orange);
 }
 .arr-head.selected {
   background: rgba(62, 230, 176, 0.1);
@@ -1520,6 +1593,11 @@ body[data-tab="mix"] .app-footer {
 .arr-mute.on {
   background: var(--accent-orange);
   border-color: var(--accent-orange);
+  color: #0c0d12;
+}
+.arr-solo.on {
+  background: var(--accent-yellow);
+  border-color: var(--accent-yellow);
   color: #0c0d12;
 }
 .arr-fx.on {
@@ -1733,7 +1811,7 @@ body[data-tab="mix"] .app-footer {
   .arr-vol-spacer {
     display: none;
   }
-  .tp-status {
+  .tp-status:not(.is-busy) {
     display: none;
   }
 }
@@ -1768,4 +1846,18 @@ body[data-tab="mix"] .app-footer {
 }
 .ins-group-row {
   align-items: center;
+}
+
+/* 刻む：保存した曲の一覧 */
+.saved-song-row {
+  flex-wrap: wrap;
+}
+.saved-song-info {
+  flex: 1;
+  min-width: 0;
+}
+.saved-song-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
