@@ -56,6 +56,9 @@ import {
   loadUserPresets,
   deleteSong,
   loadSavedSongs,
+  loadMaterials,
+  saveMaterial,
+  deleteMaterial,
   loadSong,
   saveSong,
   saveUserPreset,
@@ -66,6 +69,7 @@ import { initCloud } from "./cloud/sync";
 import { createCloudPanel } from "./ui/cloudPanel";
 import { buildUserPresets } from "./ui/userPresets";
 import { buildMixPanel } from "./ui/mixPanel";
+import { buildVideoPanel } from "./ui/videoPanel";
 import { renderPhrase } from "./audio/renderPhrase";
 import { reverbWet } from "./audio/reverbWet";
 import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
@@ -886,7 +890,21 @@ rollDock.append(pianoRoll.el);
 const phraseTab = document.createElement("div");
 phraseTab.className = "tab-panel phrase-tab";
 phraseTab.append(phraseSplit, rollDock);
-main.append(phraseTab, mixPanel.el);
+const videoPanel = buildVideoPanel({
+  mix: mixPanel,
+  getPhrases: () => savedPhrases,
+  materials: { load: loadMaterials, save: saveMaterial, remove: deleteMaterial },
+  audio: {
+    ctx: engine.ctx,
+    prepare: async () => {
+      await ensureAudio();
+      stopPreview();
+      if (transport.state !== "stopped") transport.stop();
+      allSoundsOff();
+    },
+  },
+});
+main.append(phraseTab, mixPanel.el, videoPanel.el);
 
 // --- タブ切り替え ---------------------------------------------------------
 
@@ -896,13 +914,15 @@ const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "perform", label: "演奏", panel: performTab },
   { id: "phrase", label: "フレーズ", panel: phraseTab },
   { id: "mix", label: "刻む", panel: mixPanel.el },
+  { id: "video", label: "映像", panel: videoPanel.el },
 ];
 let currentTab = "perform";
 function selectTab(id: string): void {
   currentTab = id;
   // 刻むタブでは、下の鍵盤は使わないので隠す（CSS で body[data-tab="mix"] を見る）
   document.body.dataset.tab = id;
-  if (id !== "mix") mixPanel.stop();
+  // 映像タブは刻むタブの曲を鳴らして見るので、行き来しても止めない
+  if (id !== "mix" && id !== "video") mixPanel.stop();
   pianoRoll.deleteButton.hidden = id !== "phrase"; // ノート削除はピアノロールのあるタブだけ
   for (const tab of tabs) {
     const active = tab.id === id;
@@ -1072,10 +1092,20 @@ window.addEventListener("keydown", (e) => {
   if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) {
     if (e.code === "Space") {
       e.preventDefault();
-      if (currentTab === "mix") mixPanel.togglePlay();
+      if (currentTab === "mix" || currentTab === "video") mixPanel.togglePlay();
       else togglePlay();
     } else if (currentTab === "mix" && target && ["range", "checkbox"].includes((target as HTMLInputElement).type) && mixPanel.key(e.code)) {
       // スライダーを動かしたあとも、M・S・Home は使える
+      e.preventDefault();
+    }
+    return;
+  }
+  if (currentTab === "video") {
+    // 映像タブ：スペースは刻んだ曲の再生⇔停止。R＝振り直す、Esc＝選択を外す
+    if (e.code === "Space") {
+      e.preventDefault();
+      mixPanel.togglePlay();
+    } else if (videoPanel.key(e.code)) {
       e.preventDefault();
     }
     return;
@@ -1153,6 +1183,7 @@ let lastPlayheadBeats: number | null = -1;
 function playheadLoop(): void {
   const beats = transport.currentPositionBeats();
   mixPanel.tick();
+  videoPanel.tick();
   if (beats !== lastPlayheadBeats) {
     pianoRoll.setPlayheadBeats(beats);
     lastPlayheadBeats = beats;

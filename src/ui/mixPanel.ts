@@ -92,6 +92,18 @@ export interface MixPanel {
   togglePlay: () => void;
   /** キー操作：M＝選んでいるトラックのミュート、S＝ソロ、Home＝先頭へ。使ったら true。 */
   key: (code: string) => boolean;
+  /** 映像タブ用：いまの曲（まだ作れていなければ null）。作り直すと、別のものになる。 */
+  current: () => { set: StemSet; song: Song } | null;
+  /** 映像タブ用：書き出しと同じミックスダウン（ソロは無視）。曲が無ければ null。 */
+  mixdown: () => Promise<Pcm> | null;
+  /** 再生位置（0〜1）。止まっていれば「ここから鳴らす」位置。 */
+  position: () => number;
+  playing: () => boolean;
+  seek: (fraction: number) => void;
+  /** いまの曲（映像の設定を読み書きする）。 */
+  song: () => Song;
+  /** 映像の設定を変えたので、曲を保存してほしい（作り直さない）。 */
+  videoChanged: () => void;
 }
 
 /** いま右のインスペクタに出しているもの：曲・トラック・断片。 */
@@ -1843,6 +1855,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       }
       return true;
     },
+    current: () => (result ? { set: result, song } : null),
+    mixdown: () => (result ? mixdownNow(false) : null),
+    position: () => positionNow() ?? 0,
+    playing: () => isPlaying(),
+    seek: (fraction) => void seek(fraction),
+    song: () => song,
+    videoChanged: () => touch(),
   };
   return api;
 }
