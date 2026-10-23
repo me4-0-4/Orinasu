@@ -78,6 +78,10 @@ export interface SongParams extends ShapeParams {
   pad: number;
   /** ポンピング（0〜1）：下地のキックに合わせて、刻んだ音を沈ませる深さ。 */
   pump: number;
+  /** マスターの音量（0〜1.5）。全体のエフェクトのあと。大きすぎるときは、最後のリミッターが自動で下げる。 */
+  masterVolume: number;
+  /** マスターのコンプ（0〜1）：全体のエフェクトのあとに、曲全体へ掛ける。0なら掛けない。 */
+  masterComp: number;
 }
 
 /**
@@ -135,7 +139,11 @@ export const DEFAULT_PARAMS: SongParams = {
   sfx: 0.6,
   pad: 0.5,
   pump: 0.5,
+  masterVolume: 1,
+  masterComp: 0,
 };
+
+export const MAX_MASTER_VOLUME = 1.5;
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 
@@ -233,6 +241,8 @@ export function migrateSong(raw: unknown): Song {
       if (isNum(p[key])) song.params[key] = Math.min(1, Math.max(0, p[key]));
     }
     if (p.turns === "mix" || p.turns === "call" || p.turns === "swap") song.params.turns = p.turns;
+    if (isNum(p.masterVolume)) song.params.masterVolume = Math.min(MAX_MASTER_VOLUME, Math.max(0, p.masterVolume));
+    if (isNum(p.masterComp)) song.params.masterComp = Math.min(1, Math.max(0, p.masterComp));
   }
   const groups = sanitizeGroups(r.groups);
   if (groups.length > 0) song.groups = groups;
