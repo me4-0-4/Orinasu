@@ -1,4 +1,5 @@
 import type { CutMode } from "./slicer.ts";
+import { migrateVideo, type VideoSettings } from "../video/settings.ts";
 import type { ShapeParams } from "./sequencer.ts";
 import {
   defaultSongFx,
@@ -112,6 +113,8 @@ export interface Song {
   /** グループ：選んだ断片のまとまり（まとめて刻み方・ミュート・FXを変える）。 */
   groups?: HitGroup[];
   params: SongParams;
+  /** 映像（パネルの配置・層・配色など）。まだ映像タブを開いていなければ無い。 */
+  video?: VideoSettings;
   /** 「保存した曲」から開いた曲なら、そのid（「保存」で上書きする先）。作業中の曲にだけ付く。 */
   savedId?: string;
   updatedAt: number;
@@ -305,6 +308,7 @@ export function migrateSong(raw: unknown): Song {
   if (isNum(r.lengthBars) && LENGTH_OPTIONS.includes(r.lengthBars)) song.lengthBars = r.lengthBars;
   if (typeof r.drumId === "string" || r.drumId === null) song.drumId = r.drumId;
   if (r.bedMuted === true) song.bedMuted = true;
+  if (typeof r.video === "object" && r.video !== null) song.video = migrateVideo(r.video);
   if (typeof r.savedId === "string" && isSavedSongId(r.savedId)) song.savedId = r.savedId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(

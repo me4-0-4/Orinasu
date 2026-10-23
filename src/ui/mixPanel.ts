@@ -100,6 +100,10 @@ export interface MixPanel {
   position: () => number;
   playing: () => boolean;
   seek: (fraction: number) => void;
+  /** いまの曲（映像の設定を読み書きする）。 */
+  song: () => Song;
+  /** 映像の設定を変えたので、曲を保存してほしい（作り直さない）。 */
+  videoChanged: () => void;
 }
 
 /** いま右のインスペクタに出しているもの：曲・トラック・断片。 */
@@ -1856,6 +1860,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     position: () => positionNow() ?? 0,
     playing: () => isPlaying(),
     seek: (fraction) => void seek(fraction),
+    song: () => song,
+    videoChanged: () => touch(),
   };
   return api;
 }
