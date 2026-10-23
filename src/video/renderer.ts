@@ -160,6 +160,39 @@ function treat(kind: string, x: number, y: number, w: number, h: number, P: Pale
       for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const gx = at(c + 1, r - 1) + 2 * at(c + 1, r) + at(c + 1, r + 1) - at(c - 1, r - 1) - 2 * at(c - 1, r) - at(c - 1, r + 1), gy = at(c - 1, r + 1) + 2 * at(c, r + 1) + at(c + 1, r + 1) - at(c - 1, r - 1) - 2 * at(c, r - 1) - at(c + 1, r - 1); put(d, r * cols + c, Math.hypot(gx, gy) > .35 ? DK : LT); } });
   } else if (kind === "led") ledify(x, y, w, h, P, u);
 }
+/** 毎コマ変わる処理（前のコマを使う・フィルで伸びる）。これは覚えずに、毎回掛ける。 */
+const LIVE = new Set(["mosh", "stretch"]);
+const tileCache = new Map<string, HTMLCanvasElement>();
+let cacheSig = "";
+/** 一度描いた素材の四角（処理まで済んだ絵）を覚えておき、次からはそれを置くだけにする。動画は毎コマ変わるので覚えない。 */
+function cached(key: string, m: Material, x: number, y: number, w: number, h: number, make: () => void): void {
+  if (m.el instanceof HTMLVideoElement) {
+    make();
+    return;
+  }
+  const sig = `${devScale}|${JSON.stringify(V.colors)}`;
+  if (sig !== cacheSig) {
+    tileCache.clear();
+    cacheSig = sig;
+  }
+  const dx = Math.round(x * devScale), dy = Math.round(y * devScale), dw = Math.round(w * devScale), dh = Math.round(h * devScale);
+  const hit = tileCache.get(key);
+  if (hit && hit.width === dw && hit.height === dh) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(hit, dx, dy);
+    ctx.restore();
+    return;
+  }
+  make();
+  if (dw < 1 || dh < 1) return;
+  const c = document.createElement("canvas");
+  c.width = dw;
+  c.height = dh;
+  c.getContext("2d")!.drawImage(cv, dx, dy, dw, dh, 0, 0, dw, dh);
+  tileCache.set(key, c);
+  if (tileCache.size > 160) tileCache.delete(tileCache.keys().next().value!);
+}
 function drawBase(f: Feat, P: Palette, g: Geom, u: number): void {
   const B = V.layers.base, mats = MATS.filter(matReady);
   if (B.mode === "none" || !mats.length) return;
@@ -170,9 +203,15 @@ function drawBase(f: Feat, P: Palette, g: Geom, u: number): void {
     const e = f.lastChop; let idx = TL.chops.indexOf(e); if (f.isFill) idx = idx * 31 + Math.floor(f.S);
     const m = pickMat(e, idx);
     if (m.el instanceof HTMLVideoElement && m.seek !== idx) { m.seek = idx; try { m.el.currentTime = noise(idx, 54) * (m.el.duration || 0); } catch { /* 読み込み中は飛ばさない */ } }
-    drawMat(m, 0, 0, g.VW, g.VH, 1 + B.zoom * 3 * noise(idx, 53), noise(idx, 55), noise(idx, 56), noise(idx, 57) > .6);
-    const t = pickT(idx, false); if (t !== "plain") treat(t, 0, 0, g.VW, g.VH, P, u, f, idx, m);
-    const t2 = pickT(idx + 7, true); if (noise(idx, 59) < .5 && t2 !== "plain" && t2 !== t) treat(t2, 0, 0, g.VW, g.VH, P, u, f, idx, m);
+    const t = pickT(idx, false), t2raw = pickT(idx + 7, true), t2 = noise(idx, 59) < .5 && t2raw !== t ? t2raw : "plain";
+    // 同じ断片なら同じ絵なので、処理まで済んだ絵を覚えておいて使い回す（毎コマ動く処理だけ、あとから掛ける）
+    cached(`cut|${idx}|${m.id}|${t}|${t2}|${B.zoom}`, m, 0, 0, g.VW, g.VH, () => {
+      drawMat(m, 0, 0, g.VW, g.VH, 1 + B.zoom * 3 * noise(idx, 53), noise(idx, 55), noise(idx, 56), noise(idx, 57) > .6);
+      if (t !== "plain" && !LIVE.has(t)) treat(t, 0, 0, g.VW, g.VH, P, u, f, idx, m);
+      if (t2 !== "plain" && !LIVE.has(t2)) treat(t2, 0, 0, g.VW, g.VH, P, u, f, idx, m);
+    });
+    if (LIVE.has(t)) treat(t, 0, 0, g.VW, g.VH, P, u, f, idx, m);
+    if (LIVE.has(t2)) treat(t2, 0, 0, g.VW, g.VH, P, u, f, idx, m);
     ctx.fillStyle = P.ink; ctx.globalAlpha = Math.max(0, 1 - (f.S - e.s) * 2) * .15; ctx.fillRect(0, 0, g.VW, g.VH); ctx.globalAlpha = 1;
   } else { // コラージュ：大きい四角と、群がる小さい四角
     const life = B.life * 4, s = Math.min(g.VW, g.VH), tiles: { i: number; e: VEvent; d: number; x: number; y: number; w: number; h: number; big: boolean }[] = [];
@@ -187,8 +226,16 @@ function drawBase(f: Feat, P: Palette, g: Geom, u: number): void {
     tiles.sort((a, b) => (Number(b.big) - Number(a.big)) || b.d - a.d); // 大きい四角を先に、小さい四角は上に群がらせる
     for (const t of tiles) {
       const m = pickMat(t.e, t.i), x = t.x + (t.d < .5 ? (1 - t.d / .5) * u * 4 : 0);
-      drawMat(m, x, t.y, t.w, t.h, 1 + noise(t.i, 65) * (t.big ? 1.5 : 4), noise(t.i, 66), noise(t.i, 67), noise(t.i, 68) > .7);
-      const k = pickT(t.i, !t.big); if (k !== "plain") treat(k, x, t.y, t.w, t.h, P, u, f, t.i, m);
+      const k = pickT(t.i, !t.big);
+      // すべり込んでいる間と、画面の外にはみ出す四角は覚えない（位置で見える所が変わるので）
+      const still = t.d >= .5 && x >= 0 && t.y >= 0 && x + t.w <= g.VW && t.y + t.h <= g.VH;
+      const make = (): void => {
+        drawMat(m, x, t.y, t.w, t.h, 1 + noise(t.i, 65) * (t.big ? 1.5 : 4), noise(t.i, 66), noise(t.i, 67), noise(t.i, 68) > .7);
+        if (k !== "plain" && !LIVE.has(k)) treat(k, x, t.y, t.w, t.h, P, u, f, t.i, m);
+      };
+      if (still) cached(`tile|${t.i}|${m.id}|${k}|${t.w.toFixed(1)}|${t.h.toFixed(1)}`, m, x, t.y, t.w, t.h, make);
+      else make();
+      if (LIVE.has(k)) treat(k, x, t.y, t.w, t.h, P, u, f, t.i, m);
       if (!t.big && noise(t.i, 74) > .6) { ctx.strokeStyle = P.ink; ctx.lineWidth = u * .06; ctx.strokeRect(x, t.y, t.w, t.h); }
     }
   }

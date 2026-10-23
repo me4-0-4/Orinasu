@@ -295,6 +295,15 @@ export class Layout {
       this.dropRatioOverrides(par);
     } else this.v.tree = this.replace(this.v.tree, lf, this.newSplit(dir, [lf, ...fresh]));
   }
+  /** パネルを1つ足す：いちばん大きい枠を、長い辺の方向に半分に割って入れる。足したパネルを返す。 */
+  add(keys: string[], rng: () => number): Leaf {
+    const lf = this.newLeaf(this.unused(keys, rng));
+    const out: Placed[] = [];
+    this.layoutTree(this.v.tree, frameGeom(this.v.aspect).content, out, []);
+    out.sort((a, b) => b.rect.w * b.rect.h - a.rect.w * a.rect.h);
+    this.insertBeside(out[0].leaf, lf, out[0].rect.w >= out[0].rect.h, false);
+    return lf;
+  }
   /** 中身（と枠）を入れ替える。 */
   swap(a: Leaf, b: Leaf): void {
     const pa = this.eff(a, "panel"), sa = this.eff(a, "style"), pb = this.eff(b, "panel"), sb = this.eff(b, "style");

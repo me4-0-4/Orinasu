@@ -167,18 +167,40 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     if (!pending) return;
     analyzing = true;
     const forSet = cur.set;
-    void pending.then((pcm) => {
-      // 解析は重いので、画面を一度描いてから
-      window.setTimeout(() => {
-        if (builtFrom !== forSet || !tl) return;
-        an = analyze(pcm, forSet.sampleRate, forSet.stepSamples, forSet.totalSteps);
-        bindTimeline(tl, an);
-        analyzing = false;
-        buildBoard(); // 書き出しを押せるようにする
-      }, 30);
+    void pending.then((pcm) => analyzeInBackground(pcm, forSet)).then((result) => {
+      if (builtFrom !== forSet || !tl) return;
+      an = result;
+      bindTimeline(tl, an);
+      analyzing = false;
+      buildBoard(); // 書き出しを押せるようにする
     }).catch((err) => {
       console.error("映像のための解析に失敗しました", err);
       analyzing = false;
+    });
+  }
+
+  /** 解析は重いので、裏（Web Worker）で計算する。使えなければ、ここで計算する。 */
+  function analyzeInBackground(pcm: Pcm, set: StemSet): Promise<Analysis> {
+    const fallback = (): Analysis => analyze(pcm, set.sampleRate, set.stepSamples, set.totalSteps);
+    return new Promise((resolve) => {
+      let worker: Worker;
+      try {
+        worker = new Worker(new URL("../video/analysis.worker.ts", import.meta.url), { type: "module" });
+      } catch {
+        resolve(fallback());
+        return;
+      }
+      worker.onmessage = (e: MessageEvent<Analysis>) => {
+        worker.terminate();
+        resolve(e.data);
+      };
+      worker.onerror = () => {
+        worker.terminate();
+        resolve(fallback());
+      };
+      // 元の波形は刻むタブが使い回すので、写しを渡す
+      const l = pcm.l.slice(), r = pcm.r.slice();
+      worker.postMessage({ l, r, sampleRate: set.sampleRate, stepSamples: set.stepSamples, totalSteps: set.totalSteps }, [l.buffer, r.buffer]);
     });
   }
 
@@ -189,7 +211,22 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     const scale = Math.min(aw / VW, ah / VH), dw = Math.floor(VW * scale), dh = Math.floor(VH * scale), dpr = Math.min(2, window.devicePixelRatio || 1);
     stage.style.width = `${dw}px`;
     stage.style.height = `${dh}px`;
-    target.resize(Math.floor(dw * dpr), Math.floor(dh * dpr), VW);
+    target.resize(Math.max(2, Math.floor(dw * dpr * quality)), Math.max(2, Math.floor(dh * dpr * quality)), VW);
+  }
+  // プレビューの画質：重いときは自動で下げ（書き出しの画質は変わらない）、それでも重ければコマを間引く
+  let quality = 1, cost = 16, skip = false, calmFrames = 0;
+  function adaptQuality(ms: number): void {
+    cost = cost * 0.85 + ms * 0.15;
+    if (cost > 28 && quality > 0.5) {
+      quality = Math.max(0.5, quality - 0.25);
+      cost = 16;
+      calmFrames = 0;
+      sizeStage();
+    } else if (cost < 9 && quality < 1 && ++calmFrames > 120) {
+      quality = Math.min(1, quality + 0.25);
+      calmFrames = 0;
+      sizeStage();
+    }
   }
   new ResizeObserver(() => sizeStage()).observe(stageWrap);
 
@@ -229,7 +266,12 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     const block = Math.floor(S / (tl.stepsPerBar * 8));
     if (auto && playing && lastBlock >= 0 && block !== lastBlock) shuffle();
     lastBlock = block;
+    // それでも重ければ、1コマおきに描く
+    skip = cost > 33 && !skip;
+    if (skip) return;
+    const t0 = performance.now();
     renderFrame(target, v, L, tl, mats, featAt(tl, an, S));
+    adaptQuality(performance.now() - t0);
   }
   scrub.addEventListener("input", () => deps.mix.seek(Number(scrub.value)));
   /** 再生⇔一時停止。止めるときは、その位置から続けられるようにする。 */
@@ -683,20 +725,26 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     const alpha = el("div", { class: "vid-sls" }, slider("面の濃さ", () => PL.alpha, (x) => (PL.alpha = x)));
     alpha.addEventListener("change", saveSoon);
     insp.append(section("パネルの層", row(lamp("出す", PL.show, edit(() => (PL.show = !PL.show)))), alpha));
+    // いつでも足せるように、選んでいなくても出す
+    insp.append(section("パネルを足す", row(
+      key("パネルを足す", edit(() => {
+        PL.show = true;
+        sel = L.add(KEYS_RANDOM, Math.random).id;
+      })),
+      key("浮かせて足す", edit(() => {
+        PL.show = true;
+        const n = L.newLeaf(L.unused(KEYS_RANDOM, Math.random), { style: "none", float: { anchor: "c", ox: 0, oy: 0, w: 0.5, h: 0.3 } });
+        v.floats.push(n);
+        sel = n.id;
+      })),
+    )));
     const nOv = Object.keys(v.ov[v.aspect]).length;
     if (L.only || nOv) {
       const r = el("div", { class: "vid-scope" }, el("span", {}, L.only ? `${A} だけに効きます` : `${A} に直しが ${nOv} か所あります`));
       if (nOv) r.append(key("全部戻す", edit(() => L.resetAspect()), "tx"));
       insp.append(r);
     }
-    if (!lf) {
-      insp.append(section("パネル", row(key("浮かせて足す", edit(() => {
-        const n = L.newLeaf(L.unused(KEYS_RANDOM, Math.random), { style: "none", float: { anchor: "c", ox: 0, oy: 0, w: 0.5, h: 0.3 } });
-        v.floats.push(n);
-        sel = n.id;
-      })))));
-      return;
-    }
+    if (!lf) return;
     const isFloat = L.isFloat(lf), cur = L.eff(lf, "panel") ?? lf.panel;
     const kinds = el("div", { class: "vid-kinds" });
     for (const g of GROUPS) {
