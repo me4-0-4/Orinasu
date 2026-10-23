@@ -100,6 +100,10 @@ export interface LaneView {
   muted: boolean;
   events: LaneEvent[];
   sliceCount: number;
+  /** 断片の位置（元の曲の波形の中）。映像で、どの音符が鳴っているかを調べるのに使う。 */
+  slices: Slice[];
+  /** 調をそろえるための移調（半音）。 */
+  keyShift: number;
 }
 
 export interface CollageResult {
@@ -309,6 +313,8 @@ export async function buildStems(
         muted: !!lane.muted,
         events: grouped.view,
         sliceCount: slices.length,
+        slices,
+        keyShift,
       };
       return { collage, view, pad, fx: lane.fx, takes: reverb ? (lane.takes ?? []) : [] };
     }),
