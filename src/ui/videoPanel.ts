@@ -11,6 +11,8 @@ import { ASPECT_LABEL, defaultVideo, FRAMES, Layout, migrateVideo, type Aspect, 
 import { FrameTarget, renderFrame } from "../video/renderer";
 import { makeSamples, srcSize, type Material } from "../video/materials";
 import type { StoredMaterial } from "../storage/db";
+import { extensionOf, pickMime, recordVideo } from "../video/exportVideo";
+import { repeatPcm } from "../mix/loopFold";
 
 export interface VideoPanelDeps {
   mix: {
@@ -22,7 +24,10 @@ export interface VideoPanelDeps {
     seek: (fraction: number) => void;
     song: () => Song;
     videoChanged: () => void;
+    stop: () => void;
   };
+  /** 書き出しで音を鳴らす AudioContext と、鳴らす前の準備（ほかの音を止める）。 */
+  audio: { ctx: AudioContext; prepare: () => Promise<void> };
   getPhrases: () => Phrase[];
   /** 素材（写真・動画）の置き場所（端末の中）。 */
   materials: {
@@ -111,6 +116,9 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   let an: Analysis | null = null;
   let analyzing = false;
   let lastT = performance.now(), lastBlock = -1, lastPlaying = false;
+  // 書き出し：くり返す回数・コマ数と、書き出し中の状態
+  let exportLoops = 1, exportFps = 30;
+  let exporting: { progress: number; cancel: boolean } | null = null;
   let lastLayout: { out: Placed[]; g: ReturnType<Layout["place"]>["g"] } | null = null;
 
   let songRef: Song | null = null;
@@ -128,6 +136,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   function syncSong(): void {
     const cur = deps.mix.current();
     if (!cur) {
+      if (builtFrom) buildBoard();
       builtFrom = null;
       tl = null;
       an = null;
@@ -148,6 +157,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
         an = analyze(pcm, forSet.sampleRate, forSet.stepSamples, forSet.totalSteps);
         bindTimeline(tl, an);
         analyzing = false;
+        buildBoard(); // 書き出しを押せるようにする
       }, 30);
     }).catch((err) => {
       console.error("映像のための解析に失敗しました", err);
@@ -168,7 +178,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
 
   // ---- 描く ----
   function tick(): void {
-    if (!root.classList.contains("active")) return;
+    if (!root.classList.contains("active") || exporting) return;
     if (deps.mix.song() !== songRef) {
       // 刻むタブで別の曲を開いた
       loadSettings();
@@ -376,6 +386,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
         key("振り直す", shuffle),
         lamp("8小節ごと", auto, () => { auto = !auto; refresh(); }),
       ),
+      group("書き出し", ...exportControls()),
       group("直す範囲",
         lamp(`${ASPECT_LABEL[v.aspect]} だけ直す`, L.only, () => { L.only = !L.only; refresh(); }, "warn"),
         lamp("書き出しの見え方", clean, () => { clean = !clean; refresh(); }),
@@ -395,6 +406,99 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
       }),
       key("元に戻す", change(() => { const p = PRESETS[v.preset as keyof typeof PRESETS] ?? PRESETS.shuden; v.colors = { ...p } as unknown as Colors; }), "tx"),
     );
+  }
+
+  // ---- 書き出し ----
+  function exportControls(): Node[] {
+    if (exporting) {
+      return [el("span", { class: "vid-progress" }, `書き出しています ${Math.round(exporting.progress * 100)}%`), key("やめる", () => { if (exporting) exporting.cancel = true; })];
+    }
+    const loops = el("select", { "aria-label": "くり返す回数" });
+    for (const n of [1, 2, 4]) {
+      const o = el("option", { value: String(n) }, `×${n}`);
+      o.selected = n === exportLoops;
+      loops.append(o);
+    }
+    loops.addEventListener("change", () => (exportLoops = Number(loops.value)));
+    const fps = el("select", { "aria-label": "1秒のコマ数" });
+    for (const n of [30, 60]) {
+      const o = el("option", { value: String(n) }, `${n}fps`);
+      o.selected = n === exportFps;
+      fps.append(o);
+    }
+    fps.addEventListener("change", () => (exportFps = Number(fps.value)));
+    const ready = !!(tl && an) && pickMime() !== null;
+    const go = key("動画を書き出す", () => void exportVideo());
+    go.disabled = !ready;
+    go.title = pickMime() === null ? "このブラウザは動画を書き出せません" : ready ? "映像と音を、動画ファイルにして保存する（曲の長さぶん時間がかかる）" : "刻むタブで曲を作ってから";
+    return [loops, fps, go];
+  }
+  async function exportVideo(): Promise<void> {
+    const pending = deps.mix.mixdown();
+    if (!tl || !an || !builtFrom || !pending || exporting) return;
+    const timeline = tl, analysis = an, set = builtFrom, song = deps.mix.song();
+    exporting = { progress: 0, cancel: false };
+    deps.mix.stop();
+    buildBoard();
+    note.hidden = false;
+    note.textContent = "書き出しています。終わるまで、このタブを開いたままにしてください。";
+    try {
+      await deps.audio.prepare();
+      await document.fonts.ready;
+      const pcm = repeatPcm(await pending, exportLoops);
+      const [VW, VH] = FRAMES[v.aspect];
+      const canvas = document.createElement("canvas");
+      const out = new FrameTarget(canvas);
+      out.resize(VW, VH, VW);
+      for (const k of Object.keys(rt.parts)) delete rt.parts[Number(k)];
+      const songSec = timeline.seconds;
+      let block = -1;
+      const result = await recordVideo({
+        canvas,
+        ctx: deps.audio.ctx,
+        pcm,
+        sampleRate: set.sampleRate,
+        fps: exportFps,
+        draw: (t, dt) => {
+          const S = ((t % songSec) / songSec) * timeline.totalSteps;
+          const b = Math.floor(S / (timeline.stepsPerBar * 8));
+          if (auto && block >= 0 && b !== block) L.shuffle(KEYS_RANDOM, Math.random);
+          block = b;
+          rt.frameDt = Math.min(0.1, dt);
+          rt.playing = true;
+          renderFrame(out, v, L, timeline, mats, featAt(timeline, analysis, S));
+        },
+        onProgress: (p) => {
+          if (!exporting) return;
+          const before = Math.round(exporting.progress * 100);
+          exporting.progress = p;
+          if (Math.round(p * 100) !== before) buildBoard();
+        },
+        cancelled: () => !!exporting?.cancel,
+      });
+      if (result) {
+        const url = URL.createObjectURL(result.blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${song.name.trim() || "orinasu"}_${ASPECT_LABEL[v.aspect].replace(":", "x")}.${extensionOf(result.mime)}`;
+        document.body.append(a);
+        a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+        note.textContent = extensionOf(result.mime) === "mp4" ? "書き出しました（MP4）。" : "書き出しました（WebM）。このブラウザは MP4 を書き出せないので、WebM になっています。";
+      } else {
+        note.textContent = "書き出しをやめました。";
+      }
+    } catch (err) {
+      console.error("動画の書き出しに失敗しました", err);
+      note.textContent = "書き出せませんでした。もう一度「動画を書き出す」を押してください。";
+    } finally {
+      exporting = null;
+      buildBoard();
+      window.setTimeout(() => {
+        if (!exporting) note.hidden = true;
+      }, 6000);
+    }
   }
 
   // ---- インスペクタ ----

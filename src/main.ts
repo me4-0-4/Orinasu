@@ -894,6 +894,15 @@ const videoPanel = buildVideoPanel({
   mix: mixPanel,
   getPhrases: () => savedPhrases,
   materials: { load: loadMaterials, save: saveMaterial, remove: deleteMaterial },
+  audio: {
+    ctx: engine.ctx,
+    prepare: async () => {
+      await ensureAudio();
+      stopPreview();
+      if (transport.state !== "stopped") transport.stop();
+      allSoundsOff();
+    },
+  },
 });
 main.append(phraseTab, mixPanel.el, videoPanel.el);
 
