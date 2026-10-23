@@ -80,3 +80,12 @@ test("保存したものを読み直すと、足りない設定は初期値で�
   assert.ok(v.nextId > 40);
   assert.equal(migrateVideo(null).aspect, "tall");
 });
+
+test("パネルを足す：いちばん大きい枠を割って、まだ使っていないパネルを入れる", () => {
+  const L = new Layout(defaultVideo());
+  const before = L.leaves().length;
+  const lf = L.add(KEYS, seq());
+  assert.equal(L.leaves().length, before + 1);
+  assert.ok(L.leaves().includes(lf));
+  assert.ok(!L.leaves().filter((l) => l !== lf).some((l) => l.panel === lf.panel));
+});

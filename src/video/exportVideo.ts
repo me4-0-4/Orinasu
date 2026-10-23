@@ -96,3 +96,75 @@ export async function recordVideo(o: RecordOptions): Promise<{ blob: Blob; mime:
   if (cancelled) return null;
   return { blob: new Blob(chunks, { type: mime.split(";")[0] }), mime };
 }
+
+// ---- 速い書き出し（WebCodecs ＋ mediabunny） ----
+// 1コマずつ描いて符号化するので、コマが落ちず、たいてい実時間より速い。
+
+export interface EncodeOptions {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  fps: number;
+  pcm: Pcm;
+  sampleRate: number;
+  /** t 秒の絵を canvas に描く（dt＝前のコマからの秒数）。 */
+  draw: (t: number, dt: number) => void;
+  onProgress: (fraction: number) => void;
+  cancelled: () => boolean;
+}
+
+/** 試す組み合わせ（上から）。SNS には MP4（H.264＋AAC）がいちばん通りやすい。 */
+const PLANS: { fmt: "mp4" | "webm"; video: "avc" | "vp9" | "vp8"; audio: "aac" | "opus" }[] = [
+  { fmt: "mp4", video: "avc", audio: "aac" },
+  { fmt: "mp4", video: "avc", audio: "opus" },
+  { fmt: "webm", video: "vp9", audio: "opus" },
+  { fmt: "webm", video: "vp8", audio: "opus" },
+];
+
+/** WebCodecs で書き出せるか。書き出せない組み合わせしか無ければ null（実時間の書き出しに切り替える）。 */
+export async function pickPlan(width: number, height: number, fps: number, sampleRate: number): Promise<(typeof PLANS)[number] | null> {
+  if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") return null;
+  const { canEncodeAudio, canEncodeVideo, QUALITY_HIGH } = await import("mediabunny");
+  for (const p of PLANS) {
+    try {
+      if ((await canEncodeVideo(p.video, { width, height, frameRate: fps, quality: QUALITY_HIGH })) && (await canEncodeAudio(p.audio, { numberOfChannels: 2, sampleRate, quality: QUALITY_HIGH }))) return p;
+    } catch {
+      // この組み合わせは使えない
+    }
+  }
+  return null;
+}
+
+/** 動画を作って返す（やめたら null）。plan は pickPlan で選んだもの。 */
+export async function encodeVideo(o: EncodeOptions, plan: (typeof PLANS)[number]): Promise<{ blob: Blob; ext: string; codecs: string } | null> {
+  const { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, QUALITY_HIGH, WebMOutputFormat } = await import("mediabunny");
+  const target = new BufferTarget();
+  const output = new Output({ format: plan.fmt === "mp4" ? new Mp4OutputFormat({ fastStart: "in-memory" }) : new WebMOutputFormat(), target });
+  const video = new CanvasSource(o.canvas, { codec: plan.video, quality: QUALITY_HIGH });
+  const audio = new AudioBufferSource({ codec: plan.audio, quality: QUALITY_HIGH });
+  output.addVideoTrack(video, { frameRate: o.fps });
+  output.addAudioTrack(audio);
+  await output.start();
+  const ab = new AudioBuffer({ numberOfChannels: 2, length: o.pcm.l.length, sampleRate: o.sampleRate });
+  ab.copyToChannel(o.pcm.l as Float32Array<ArrayBuffer>, 0);
+  ab.copyToChannel(o.pcm.r as Float32Array<ArrayBuffer>, 1);
+  await audio.add(ab);
+  audio.close();
+  const frames = Math.max(1, Math.round(ab.duration * o.fps)), dt = 1 / o.fps;
+  for (let k = 0; k < frames; k++) {
+    if (o.cancelled()) {
+      await output.cancel();
+      return null;
+    }
+    o.draw(k * dt, k === 0 ? 0 : dt);
+    await video.add(k * dt, dt);
+    if (k % 4 === 0) {
+      o.onProgress(k / frames);
+      // 画面（進み具合・やめるボタン）が動くように、ときどき手を離す
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  video.close();
+  await output.finalize();
+  return { blob: new Blob([target.buffer!], { type: output.format.mimeType }), ext: plan.fmt, codecs: `${plan.video}+${plan.audio}` };
+}

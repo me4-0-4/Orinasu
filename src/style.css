@@ -2047,9 +2047,74 @@ body[data-tab="video"] .app-footer {
 .vid-note[hidden] {
   display: none;
 }
+.vid-song {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  width: 100%;
+  max-width: 640px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.vid-song-label {
+  font-family: "DotGothic16", "Consolas", monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.vid-song-name {
+  font-size: 1rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.vid-song-meta {
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.vid-song .vid-key.tx {
+  margin-left: auto;
+}
+.vid-transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(100%, 640px);
+}
+.vid-play {
+  flex: none;
+  width: 40px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.vid-play:hover {
+  border-color: var(--accent-yellow);
+}
+.vid-play:focus-visible {
+  outline: 2px solid var(--accent-yellow);
+  outline-offset: 2px;
+}
+.vid-play:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .vid-scrub {
-  width: min(100%, 520px);
+  flex: 1;
+  min-width: 0;
   accent-color: var(--accent-yellow);
+}
+.vid-time {
+  flex: none;
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }
 .vid-tm {
   position: absolute;

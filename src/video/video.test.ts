@@ -93,3 +93,15 @@ test("featAt：位置、最後に鳴った断片、フィルの進み具合", ()
   assert.equal(fill.fillAmt, 0.5);
   assert.equal(featAt(tl, an, 64 + 11.5).step, 11); // 曲の長さでくり返す
 });
+
+test("通り過ぎた判定：ふつうに進んだときと、くり返しで頭に戻ったときだけ。巻き戻し・大きな飛ばしは通っていない", async () => {
+  const { bindTimeline, passed } = await import("./panels.ts");
+  const tl = buildTimeline(base({ totalSteps: 64 }));
+  const z = new Float32Array(64 * 100);
+  bindTimeline(tl, analyze({ l: z, r: z }, 48000, 100, 64));
+  assert.equal(passed(10, 11, 10.5), true);
+  assert.equal(passed(10, 11, 12), false);
+  assert.equal(passed(63, 1, 0), true); // 頭に戻った
+  assert.equal(passed(40, 0, 50), false); // ■で先頭へ（巻き戻し）
+  assert.equal(passed(0, 30, 10), false); // 位置のバーで大きく飛ばした
+});
