@@ -24,6 +24,7 @@ import {
   LENGTH_OPTIONS,
   MAX_BPM,
   MAX_LANE_VOLUME,
+  MAX_MASTER_VOLUME,
   MIN_BPM,
   createEmptySong,
   formatDuration,
@@ -701,6 +702,29 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らし続ける（断片の間をつなぐ）",
     }),
   );
+  const masterVolKnob = reg(
+    knob({
+      label: "マスター音量",
+      max: MAX_MASTER_VOLUME,
+      get: () => song.params.masterVolume,
+      set: (v) => {
+        song.params.masterVolume = v;
+        changed();
+      },
+      hint: () => "全体のFXとコンプのあとの音量。大きすぎるときは、最後のリミッターが自動で下げる",
+    }),
+  );
+  const masterCompKnob = reg(
+    knob({
+      label: "マスターコンプ",
+      get: () => song.params.masterComp,
+      set: (v) => {
+        song.params.masterComp = v;
+        changed();
+      },
+      hint: () => "曲全体に掛けるコンプ。強いほど音の大小がそろう（0で掛けない）",
+    }),
+  );
   const dryChoice = reg(
     choice<"dry" | "wet">({
       label: "素材の残響",
@@ -729,7 +753,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       swingKnob.el,
     ),
     section("drums", "ドラムループ", drumChoice.el, bedKnob.el, pumpKnob.el),
-    section("finish", "仕上げ", sfxKnob.el, padKnob.el, dryChoice.el, button("マスターのFXを開く", () => openTrackFx("master"), "preset-button")),
+    section("finish", "仕上げ", sfxKnob.el, padKnob.el, dryChoice.el, masterCompKnob.el, masterVolKnob.el, button("マスターのFXを開く", () => openTrackFx("master"), "preset-button")),
     section("groups", "グループ", note("断片をいくつか選んで「グループにする」と、まとめて刻み方・ミュート・FXを変えられる"), groupList),
     section("info", "曲の情報", nameRow, keyInfo),
   );

@@ -144,3 +144,14 @@ test("層の組み方：初期は「混ぜる」。古い掛け合い・交代�
   assert.equal(migrateSong({ params: { turns: "call" } }).params.turns, "call");
   assert.equal(migrateSong({ params: { turns: "mix" } }).params.turns, "mix");
 });
+
+test("マスターの音量とコンプ：初期値は素通しで、保存データは範囲に収める", () => {
+  const s0 = createEmptySong();
+  assert.equal(s0.params.masterVolume, 1);
+  assert.equal(s0.params.masterComp, 0);
+  const s = migrateSong({ params: { masterVolume: 9, masterComp: -1 } });
+  assert.equal(s.params.masterVolume, 1.5);
+  assert.equal(s.params.masterComp, 0);
+  assert.equal(migrateSong({ params: { masterVolume: 0.4, masterComp: 0.6 } }).params.masterComp, 0.6);
+  assert.equal(migrateSong({ params: {} }).params.masterVolume, 1);
+});
