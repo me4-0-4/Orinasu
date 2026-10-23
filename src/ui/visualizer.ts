@@ -66,8 +66,11 @@ export class Visualizer {
 
   start(): void {
     const loop = () => {
-      this.drawWaveform();
-      this.drawSpectrum();
+      // ほかのタブを開いていて見えないときは描かない
+      if (this.el.offsetParent !== null) {
+        this.drawWaveform();
+        this.drawSpectrum();
+      }
       this.rafId = requestAnimationFrame(loop);
     };
     loop();

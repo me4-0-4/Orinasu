@@ -285,7 +285,8 @@ function drawFrame(f: Feat): void {
   });
   drawTop(f, P0, g, u);
   if (fx.sumi && f.isFill) { ctx.globalAlpha = .92; brush(ctx, g.VW * .02, g.VH * (.3 + .4 * noise(f.bar, 41)), g.VW * .98, g.VH * (.3 + .4 * noise(f.bar, 42)), Math.min(g.VW, g.VH) * .09, Math.min(1, f.fillAmt * 3), f.bar * 13, isDark(P0.bg) ? P0.ink : P0.ink); ctx.globalAlpha = 1; }
-  const zure = fx.zure ? f.kick * u * .7 : 0, gl = fx.glitch ? f.fillAmt : 0;
+  // 版ズレはキックの直後だけ（画面を丸ごと描き直すので、ずっと掛けると重い）
+  const zure = fx.zure && f.kick > .35 ? f.kick * u * .7 : 0, gl = fx.glitch ? f.fillAmt : 0;
   if (zure > u * .05 || gl > 0) {
     snctx.setTransform(1, 0, 0, 1, 0, 0); snctx.clearRect(0, 0, snap.width, snap.height); snctx.drawImage(cv, 0, 0);
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -303,6 +304,7 @@ function drawFrame(f: Feat): void {
   for (let i = 0; i < n; i++) { ctx.fillStyle = i < done ? (i % 16 === 15 ? P0.a2 : P0.a1) : P0.line; ctx.fillRect(u * 3 + i * bw + bw * .12, by, bw * .76, u * .55); }
   ctx.fillStyle = P0.dim; ctx.font = `${u * 1.1}px ${DOT}`; ctx.fillText(`${fmtT(t)} / ${fmtT(TL.seconds)}`, u * 3, by - u * .7);
   ctx.textAlign = "right"; ctx.fillStyle = P0.ink; ctx.font = `900 ${u * 1.4}px ${MIN}`; ctx.fillText("織りなす", g.VW - u * 3, by - u * .6); ctx.textAlign = "left";
-  prevX.drawImage(cv, 0, 0);
+  // 前のコマはモッシュでだけ使う。使わないときは写さない（画面を丸ごと写すので重い）
+  if (V.layers.base.mode !== "none" && V.layers.base.treat.mosh) prevX.drawImage(cv, 0, 0);
 }
 
