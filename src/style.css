@@ -1318,6 +1318,15 @@ body[data-tab="mix"] .app-footer {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+.tp-songs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.tp-song {
+  max-width: 14em;
+}
 .tp-play {
   min-width: 5.5em;
 }

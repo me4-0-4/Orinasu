@@ -1,12 +1,16 @@
 import type { Session } from "@supabase/supabase-js";
 import type { Phrase } from "../phrase/types";
+import { migrateSong, type Song } from "../mix/types";
 import {
   clearLocalData,
   deletePhrase,
   deleteUserPreset,
+  deleteSong,
   loadAllPhrases,
+  loadAllSongs,
   loadUserPresets,
   savePhrase,
+  saveSong,
   saveUserPreset,
   storageHooks,
   type UserPreset,
@@ -96,7 +100,7 @@ async function flushPending(): Promise<void> {
   const batch = [...pending.values()];
   pending.clear();
   try {
-    for (const table of ["phrases", "presets"] as const) {
+    for (const table of ["phrases", "presets", "songs"] as const) {
       const rows = batch.filter((r) => r.table === table).map(({ table: _t, ...row }) => row);
       await pushRows(table, rows);
     }
@@ -120,6 +124,10 @@ storageHooks.presetSaved = (p) =>
   queuePush("presets", { id: p.id, data: p, updated_at: p.updatedAt, deleted: false });
 storageHooks.presetDeleted = (id) =>
   queuePush("presets", { id, data: {}, updated_at: Date.now(), deleted: true });
+storageHooks.songSaved = (s) =>
+  queuePush("songs", { id: s.id, data: s, updated_at: s.updatedAt, deleted: false });
+storageHooks.songDeleted = (id) =>
+  queuePush("songs", { id, data: {}, updated_at: Date.now(), deleted: true });
 
 // --- 全体の突き合わせ（新しい方が勝つ） --------------------------------------------
 
@@ -202,8 +210,15 @@ export async function syncAll(): Promise<void> {
       (p) => saveUserPreset(p, { silent: true }),
       (id) => deleteUserPreset(id, { silent: true }),
     );
+    // 曲は、古い形のデータでも読めるように migrateSong を通して取り込む
+    const songsChanged = await reconcile<Song>(
+      "songs",
+      await loadAllSongs(),
+      (s) => saveSong(migrateSong(s), { silent: true }),
+      (id) => deleteSong(id, { silent: true }),
+    );
     setState({ ...state, status: "synced", message: undefined });
-    if (phrasesChanged || presetsChanged) onSynced?.();
+    if (phrasesChanged || presetsChanged || songsChanged) onSynced?.();
   } catch (e) {
     setState({ ...state, status: "error", message: describeError(e) });
   } finally {

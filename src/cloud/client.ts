@@ -9,4 +9,4 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 
-export type CloudTable = "phrases" | "presets";
+export type CloudTable = "phrases" | "presets" | "songs";

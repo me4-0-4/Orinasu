@@ -28,6 +28,7 @@ import {
   MIN_BPM,
   createEmptySong,
   formatDuration,
+  migrateSong,
   effectiveParams,
   laneIsCustom,
   setLaneShape,
@@ -38,7 +39,7 @@ import {
   type Song,
   type TurnStyle,
 } from "../mix/types";
-import type { Phrase } from "../phrase/types";
+import { makeId, type Phrase } from "../phrase/types";
 import { randomSeed } from "../theory/rng";
 import { ENV_H, HEAD_H, ROW_H, buildLaneView, type Row } from "./laneView";
 import { buildFxWindow } from "./fxWindow";
@@ -51,6 +52,8 @@ export interface MixPanelDeps {
   getPhrases: () => Phrase[];
   /** 曲が変わったので保存してほしい。 */
   onSongChange: (song: Song) => void;
+  /** 保存してある曲の一覧と、曲の削除。 */
+  songs: { loadAll: () => Promise<Song[]>; remove: (id: string) => Promise<void> };
   /** 鳴らす前に呼ぶ：音を出す準備と、ほかの音（演奏・フレーズの再生）を止める。 */
   prepareAudio: () => Promise<void>;
   audio: { ctx: AudioContext; out: AudioNode };
@@ -63,6 +66,8 @@ export interface MixPanelDeps {
 export interface MixPanel {
   el: HTMLElement;
   setSong: (song: Song) => void;
+  /** 保存してある曲を読み直す（起動時・クラウドから取り込んだとき）。開いている曲は、保存側のほうが新しければ差し替える。 */
+  reloadSongs: () => Promise<void>;
   /** フレーズ一覧が変わったとき。 */
   refreshMaterials: () => void;
   /** 鳴らしているものを止める。 */
@@ -105,6 +110,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let busy = "";
   const renderCache = new Map<string, Promise<Pcm>>();
   const player = new LoopPlayer(deps.audio.ctx, deps.audio.out);
+  /** 保存してある曲（開いている曲は、ここにも同じものが入る）。 */
+  let songList: Song[] = [];
+  /** 開いている曲を触ったか（まだ保存側に無くても、触った曲は捨てない。触っていない空の曲は、取り込んだ曲に差し替える）。 */
+  let songTouched = false;
   const sampleRate = deps.audio.ctx.sampleRate;
 
   function stampsOf(lanes: Lane[]): string {
@@ -196,6 +205,19 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   // ------------------------------------------------------------------ トランスポート
 
   const transport = el("div", "mix-transport");
+  const songSelect = el("select", "quantize-select tp-song");
+  songSelect.title = "開く曲（曲は何曲でも作れる。ログインしていれば、ほかの端末にも同期される）";
+  songSelect.addEventListener("change", () => switchSong(songSelect.value));
+  const songNew = button("新規", () => addSong(createEmptySong(makeId("song"))), "preset-button", "新しい空の曲を作る");
+  const songDup = button("複製", () => {
+    const copy = structuredClone(song);
+    copy.id = makeId("song");
+    copy.name = `${song.name || "無題の曲"}のコピー`;
+    addSong(copy);
+  }, "preset-button", "いまの曲をコピーして、別の曲にする");
+  const songDel = button("削除", () => void removeSong(), "preset-button", "いまの曲を削除する（同期していれば、ほかの端末からも消える）");
+  const songBox = el("div", "tp-songs");
+  songBox.append(songSelect, songNew, songDup, songDel);
   const playButton = button("▶ 再生", () => void togglePlay(), "preset-button tp-play", "再生／停止（スペースキー）");
   const posBox = el("div", "tp-pos");
   const posMain = el("span", "tp-pos-main", "1.1.1");
@@ -271,7 +293,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const exportButton = button("書き出し", () => saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
   const exportBox = el("div", "tp-export");
   exportBox.append(exportButton, loopSelect);
-  transport.append(playButton, posBox, bpmBox, lengthBox, chopBox, undoButton, redoButton, statusText, exportBox);
+  transport.append(songBox, playButton, posBox, bpmBox, lengthBox, chopBox, undoButton, redoButton, statusText, exportBox);
 
   // ------------------------------------------------------------------ アレンジ画面（トラックヘッダー＋線）
 
@@ -540,6 +562,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   nameInput.addEventListener("input", () => {
     song.name = nameInput.value;
     touch();
+    renderSongPicker();
   });
   const nameRow = el("label", "ins-row ins-choice");
   nameRow.append(el("span", "ins-label", "名前"), nameInput);
@@ -1020,7 +1043,94 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   function touch(): void {
     song.updatedAt = Date.now();
+    songTouched = true;
+    const i = songList.findIndex((x) => x.id === song.id);
+    if (i >= 0) songList[i] = song;
+    else songList.push(song);
     deps.onSongChange(song);
+  }
+
+  // --- 曲の一覧：切り替え・新規・複製・削除 ---
+
+  const CURRENT_SONG_KEY = "orinasu.currentSongId";
+  const rememberSong = (): void => {
+    try {
+      localStorage.setItem(CURRENT_SONG_KEY, song.id);
+    } catch {
+      // 覚えられなくても、曲の切り替えはできる
+    }
+  };
+  const rememberedSong = (): string | null => {
+    try {
+      return localStorage.getItem(CURRENT_SONG_KEY);
+    } catch {
+      return null;
+    }
+  };
+
+  /** 一覧の曲：保存側＋いま開いている曲。作った順（idの順）に並べる。 */
+  function songChoices(): Song[] {
+    const all = songList.filter((x) => x.id !== song.id);
+    all.push(song);
+    return all.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  function renderSongPicker(): void {
+    const choices = songChoices();
+    songSelect.innerHTML = "";
+    choices.forEach((x, i) => {
+      const o = el("option", undefined, `${i + 1}. ${x.name || "無題の曲"}`);
+      o.value = x.id;
+      songSelect.appendChild(o);
+    });
+    songSelect.value = song.id;
+  }
+
+  function openSong(next: Song): void {
+    api.setSong(next);
+    rememberSong();
+    renderSongPicker();
+  }
+
+  function switchSong(id: string): void {
+    if (id === song.id) return;
+    const target = songList.find((x) => x.id === id);
+    if (target) openSong(target);
+    else renderSongPicker();
+  }
+
+  /** 新しい曲（新規・複製）を開いて、すぐ保存する。 */
+  function addSong(next: Song): void {
+    next.updatedAt = Date.now();
+    songList.push(next);
+    openSong(next);
+    touch();
+  }
+
+  async function removeSong(): Promise<void> {
+    if (!window.confirm(`曲「${song.name || "無題の曲"}」を削除する？（同期していれば、ほかの端末からも消える）`)) return;
+    const gone = song.id;
+    await deps.songs.remove(gone);
+    songList = songList.filter((x) => x.id !== gone);
+    songTouched = false;
+    openSong(songList[0] ?? createEmptySong(makeId("song")));
+  }
+
+  async function reloadSongs(): Promise<void> {
+    songList = (await deps.songs.loadAll()).map(migrateSong);
+    const saved = songList.find((x) => x.id === song.id);
+    if (saved) {
+      songTouched = false;
+      if (saved.updatedAt > song.updatedAt) openSong(saved); // ほかの端末で直した曲
+      else songList = songList.map((x) => (x.id === song.id ? song : x));
+    } else if (songTouched) {
+      songList.push(song); // 触ったばかりで、まだ保存されていない曲
+    } else {
+      // 触っていない曲（起動直後の空の曲）は、前に開いていた曲か、いちばん新しい曲に差し替える
+      const next = songList.find((x) => x.id === rememberedSong()) ?? songList[0];
+      if (next) openSong(next);
+    }
+    renderSongPicker();
   }
 
   /** トラック（刻む曲）を変える。音に関わる変更なら作り直す。 */
@@ -1400,13 +1510,16 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   }
 
   setNotice("");
+  renderSongPicker();
   refresh();
 
-  return {
+  const api: MixPanel = {
     el: root,
+    reloadSongs,
     setSong(next) {
       player.stop();
       song = next;
+      songTouched = false;
       buildToken++;
       result = null;
       undoStack.length = 0;
@@ -1442,4 +1555,5 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       void togglePlay();
     },
   };
+  return api;
 }

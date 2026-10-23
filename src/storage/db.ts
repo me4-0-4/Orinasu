@@ -15,6 +15,8 @@ export const storageHooks: {
   phraseDeleted?: (id: string) => void;
   presetSaved?: (preset: UserPreset) => void;
   presetDeleted?: (id: string) => void;
+  songSaved?: (song: Song) => void;
+  songDeleted?: (id: string) => void;
 } = {};
 
 /** silent: true にすると通知しない（クラウドから取り込んだデータを書くときに使う）。 */
@@ -120,8 +122,8 @@ export async function loadUserPresets(): Promise<UserPreset[]> {
   return result.sort((a, b) => a.updatedAt - b.updatedAt);
 }
 
-/** 刻んだ曲（選んだ曲・BPM・刻み方の計画）。いまは端末内だけに保存する（クラウド同期は未対応）。 */
-export async function saveSong(song: Song): Promise<void> {
+/** 刻んだ曲（選んだ曲・BPM・刻み方の計画）。何曲でも持てて、ログイン中ならクラウドにも送る。 */
+export async function saveSong(song: Song, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(SONG_STORE, "readwrite");
@@ -130,20 +132,33 @@ export async function saveSong(song: Song): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  if (!opts.silent) storageHooks.songSaved?.(song);
 }
 
-export async function loadSong(id: string): Promise<Song | null> {
+export async function deleteSong(id: string, opts: WriteOptions = {}): Promise<void> {
   const db = await openDb();
-  const result = await new Promise<Song | null>((resolve, reject) => {
-    const req = db.transaction(SONG_STORE, "readonly").objectStore(SONG_STORE).get(id);
-    req.onsuccess = () => resolve((req.result as Song | undefined) ?? null);
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(SONG_STORE, "readwrite");
+    tx.objectStore(SONG_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+  if (!opts.silent) storageHooks.songDeleted?.(id);
+}
+
+export async function loadAllSongs(): Promise<Song[]> {
+  const db = await openDb();
+  const result = await new Promise<Song[]>((resolve, reject) => {
+    const req = db.transaction(SONG_STORE, "readonly").objectStore(SONG_STORE).getAll();
+    req.onsuccess = () => resolve(req.result as Song[]);
     req.onerror = () => reject(req.error);
   });
   db.close();
-  return result;
+  return result.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** 端末内のフレーズと自分の音色を全部消す。別のアカウントでログインしたときに前の人のデータを残さないために使う。 */
+/** 端末内のフレーズ・自分の音色・曲を全部消す。別のアカウントでログインしたときに前の人のデータを残さないために使う。 */
 export async function clearLocalData(): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {

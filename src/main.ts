@@ -54,7 +54,8 @@ import {
   savePhrase,
   deletePhrase,
   loadUserPresets,
-  loadSong,
+  deleteSong,
+  loadAllSongs,
   saveSong,
   saveUserPreset,
   deleteUserPreset,
@@ -66,7 +67,7 @@ import { buildUserPresets } from "./ui/userPresets";
 import { buildMixPanel } from "./ui/mixPanel";
 import { renderPhrase } from "./audio/renderPhrase";
 import { reverbWet } from "./audio/reverbWet";
-import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
+import { createEmptySong, type Song } from "./mix/types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = "";
@@ -237,18 +238,30 @@ const recorder = new Recorder(transport, activeLayer);
 
 // --- 刻む（選んだ曲を1本の波形にして、切り貼りして鳴らす） ---------------------
 
+// 曲を切り替えても、前の曲の保存を取りこぼさないよう、曲ごとに最後の1回だけ溜めておく
+const pendingSongs = new Map<string, Song>();
 let persistSongTimer: number | null = null;
 function persistSongSoon(song: Song): void {
+  pendingSongs.set(song.id, song);
   if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
   persistSongTimer = window.setTimeout(() => {
     persistSongTimer = null;
-    void saveSong(song);
+    const batch = [...pendingSongs.values()];
+    pendingSongs.clear();
+    for (const s of batch) void saveSong(s);
   }, 400);
 }
 
 const mixPanel = buildMixPanel({
   getPhrases: () => savedPhrases,
   onSongChange: persistSongSoon,
+  songs: {
+    loadAll: loadAllSongs,
+    remove: async (id) => {
+      pendingSongs.delete(id); // 消した曲を、溜めていた保存で書き戻さない
+      await deleteSong(id);
+    },
+  },
   prepareAudio: async () => {
     await ensureAudio();
     stopPreview();
@@ -1116,18 +1129,20 @@ function playheadLoop(): void {
 }
 playheadLoop();
 
-void reloadPhraseList();
-mixPanel.setSong(createEmptySong());
-void loadSong(SONG_ID).then((song) => {
-  if (song) mixPanel.setSong(migrateSong(song));
+// フレーズを読み込んでから曲を開く（素材のフレーズが無いと、曲の素材が外れてしまうため）
+async function loadSongsAndMaterials(): Promise<void> {
+  await reloadPhraseList();
+  await mixPanel.reloadSongs();
   mixPanel.refreshMaterials();
-});
+}
+mixPanel.setSong(createEmptySong(makeId("song")));
+void loadSongsAndMaterials();
 refreshPhraseUI();
 
 // クラウドから新しいデータを取り込んだら、一覧を読み直す（編集中のフレーズは触らない）。
 initCloud({
   onSynced: () => {
-    void reloadPhraseList();
+    void loadSongsAndMaterials();
     void reloadUserPresets();
   },
 });

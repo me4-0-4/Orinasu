@@ -155,3 +155,9 @@ test("マスターの音量とコンプ：初期値は素通しで、保存デ�
   assert.equal(migrateSong({ params: { masterVolume: 0.4, masterComp: 0.6 } }).params.masterComp, 0.6);
   assert.equal(migrateSong({ params: {} }).params.masterVolume, 1);
 });
+
+test("曲のidは、保存データから引き継ぐ（何曲も持てるように）。無ければ最初の1曲のid", () => {
+  assert.equal(migrateSong({ id: "song_abc_1" }).id, "song_abc_1");
+  assert.equal(migrateSong({}).id, "song");
+  assert.equal(createEmptySong("song_x").id, "song_x");
+});

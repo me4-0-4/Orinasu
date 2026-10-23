@@ -85,7 +85,7 @@ export interface SongParams extends ShapeParams {
 }
 
 /**
- * 曲：刻む曲（フレーズ）と、層ごとの刻み方の種。1つだけ持つ（端末内）。
+ * 曲：刻む曲（フレーズ）と、層ごとの刻み方の種。何曲でも持てる（端末内と、ログイン中ならクラウド）。
  * 刻んだ音そのものは保存せず、種と設定から作り直す。
  */
 export interface Song {
@@ -113,6 +113,7 @@ export interface Song {
   updatedAt: number;
 }
 
+/** 最初の1曲だけが使っていた固定のid（複数曲になる前の保存データ）。 */
 export const SONG_ID = "song";
 
 export const MIN_BPM = 40;
@@ -173,9 +174,9 @@ export function setLaneShape(lane: Lane, global: SongParams, key: ShapeKey, valu
   return Object.keys(shift).length === 0 ? rest : { ...rest, shift };
 }
 
-export function createEmptySong(): Song {
+export function createEmptySong(id: string = SONG_ID): Song {
   return {
-    id: SONG_ID,
+    id,
     name: "無題の曲",
     materialIds: [],
     bpm: DEFAULT_BPM,
@@ -211,6 +212,7 @@ export function migrateSong(raw: unknown): Song {
   if (typeof raw !== "object" || raw === null) return base;
   const r = raw as Record<string, unknown>;
   const song: Song = { ...base, updatedAt: isNum(r.updatedAt) ? r.updatedAt : base.updatedAt };
+  if (typeof r.id === "string" && r.id) song.id = r.id;
   if (typeof r.name === "string" && r.name) song.name = r.name;
   if (Array.isArray(r.materialIds)) song.materialIds = r.materialIds.filter((x): x is string => typeof x === "string");
   if (isNum(r.bpm) && r.bpm >= MIN_BPM && r.bpm <= MAX_BPM) song.bpm = Math.round(r.bpm);
