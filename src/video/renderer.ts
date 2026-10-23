@@ -1,6 +1,6 @@
 import type { Feat } from "./features.ts";
 import type { Timeline, VEvent } from "./timeline.ts";
-import { brush, circle, DOT, fmtT, hex2rgb, isDark, line, MIN, MONO, noise, palette, PANELS, rt, SANS, type PanelDef, type Palette, type Rect } from "./panels.ts";
+import { brush, circle, DOT, fmtT, hex2rgb, isDark, line, MONO, noise, palette, PANELS, rt, SANS, type PanelDef, type Palette, type Rect } from "./panels.ts";
 import { Layout, type FrameStyle, type Geom, type Treatment, type VideoSettings } from "./settings.ts";
 import { matReady, srcSize, type Material } from "./materials.ts";
 
@@ -50,8 +50,10 @@ function dotPattern(key: string, cell: number, r: number, col: string, hole: boo
   g.beginPath(); g.arc(cell / 2, cell / 2, r, 0, Math.PI * 2); g.fill();
   return (patCache[k] = ctx.createPattern(t, "repeat")!);
 }
+/** LED の1粒の大きさ（画面の画素）。 */
+const ledCell = (u: number): number => Math.max(3, Math.round(u * .62 * devScale));
 function ledify(x: number, y: number, w: number, h: number, P: Palette, u: number): void {
-  const cell = Math.max(3, Math.round(u * .62 * devScale)), dx = Math.round(x * devScale), dy = Math.round(y * devScale);
+  const cell = ledCell(u), dx = Math.round(x * devScale), dy = Math.round(y * devScale);
   const cols = Math.floor(w * devScale / cell), rows = Math.floor(h * devScale / cell);
   if (cols < 2 || rows < 2) return;
   small.width = cols; small.height = rows; sctx.drawImage(cv, dx, dy, cols * cell, rows * cell, 0, 0, cols, rows);
@@ -289,6 +291,9 @@ function drawFrame(f: Feat): void {
     try {
       chrome(ctx, x, y, w, h, P, u, L.eff(o.leaf, "style"));
       const cr = label(ctx, x, y, w, h, P, u, def, f);
+      // LED にするパネルには、1粒の大きさ（書き出しの画素）を教える（動く文字を粒の幅ずつ動かして、チラつかせない）
+      const ledV = L.eff(o.leaf, "led"), ledOn = ledV == null ? (fx.led || !!def.led) : ledV;
+      rt.ledCell = ledOn ? ledCell(u) / devScale : 0;
       if (cr.w > u && cr.h > u) def.draw(ctx, cr, f, P, u, o.leaf);
     } catch (err) {
       // 1枚のパネルが壊れても、ほかは描き続ける（状態を捨てて、次のコマでやり直す）
@@ -322,7 +327,6 @@ function drawFrame(f: Feat): void {
   const by = g.VH - u * 1.9, n = 64, bw = (g.VW - u * 6) / n, done = S / TL.totalSteps * n, t = S / TL.totalSteps * TL.seconds;
   for (let i = 0; i < n; i++) { ctx.fillStyle = i < done ? (i % 16 === 15 ? P0.a2 : P0.a1) : P0.line; ctx.fillRect(u * 3 + i * bw + bw * .12, by, bw * .76, u * .55); }
   ctx.fillStyle = P0.dim; ctx.font = `${u * 1.1}px ${DOT}`; ctx.fillText(`${fmtT(t)} / ${fmtT(TL.seconds)}`, u * 3, by - u * .7);
-  ctx.textAlign = "right"; ctx.fillStyle = P0.ink; ctx.font = `900 ${u * 1.4}px ${MIN}`; ctx.fillText("織りなす", g.VW - u * 3, by - u * .6); ctx.textAlign = "left";
   // 前のコマはモッシュでだけ使う。使わないときは写さない（画面を丸ごと写すので重い）
   if (V.layers.base.mode !== "none" && V.layers.base.treat.mosh) prevX.drawImage(cv, 0, 0);
 }

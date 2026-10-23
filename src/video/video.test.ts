@@ -131,3 +131,26 @@ test("電光掲示板：曲の位置を巻き戻しても、頭に戻っても�
   // 流れる量は、曲の位置に関係なく、いつも増える（巻き戻らない）
   for (let i = 1; i < scroll.length; i++) assert.ok(scroll[i] > scroll[i - 1], `コマ${i}`);
 });
+
+test("電光掲示板：LED のときは、文字を粒の幅ずつ動かす", async () => {
+  const { PANELS, rt } = await import("./panels.ts");
+  const xs: number[] = [];
+  const ctx = {
+    font: "", fillStyle: "", textBaseline: "",
+    measureText: (t: string) => ({ width: t.length * 10 }),
+    fillText: (_t: string, x: number) => xs.push(x),
+  } as unknown as CanvasRenderingContext2D;
+  const P = { bg: "#000", panel: "#000", ink: "#fff", line: "#333", a1: "#fa0", a2: "#f67", dim: "#888" };
+  rt.parts = {};
+  rt.frameDt = 1 / 60;
+  rt.ledCell = 7;
+  const firsts: number[] = [];
+  for (let k = 0; k < 20; k++) {
+    xs.length = 0;
+    PANELS.ticker.draw(ctx, { x: 0, y: 0, w: 300, h: 40 }, { S: k, bar: 0, active: [] } as unknown as Parameters<typeof PANELS.ticker.draw>[2], P, 10, { id: 2 });
+    firsts.push(xs[0]);
+  }
+  // 最初の文字の位置は、はじめの位置から粒（7）の倍数だけずれる
+  for (const x of firsts) assert.ok(Math.abs(((firsts[0] - x) / 7) - Math.round((firsts[0] - x) / 7)) < 1e-9);
+  rt.ledCell = 0;
+});

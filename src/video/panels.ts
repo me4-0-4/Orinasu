@@ -31,6 +31,8 @@ export const rt = {
   /** 素材パネルの画像（パネルの id で引く）。 */
   imgs: new Map<number, Img>(),
   song: { name: "", key: "", keyJa: "", bars: 16 },
+  /** このパネルが LED なら、1粒の大きさ（書き出しの画素）。LED でなければ0。 */
+  ledCell: 0,
 };
 
 export const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -367,13 +369,16 @@ export const PANELS: Record<string, PanelDef> = {
       while (last.at + width(last.text) < st.x + c.w + fs) { last = { text: txt, at: last.at + width(last.text) }; st.items.push(last); }
       while (st.items.length > 1 && st.items[0].at + width(st.items[0].text) < st.x) st.items.shift();
       ctx.fillStyle = P.a1; ctx.textBaseline = "middle";
-      for (const it of st.items) ctx.fillText(it.text, c.x + it.at - st.x, c.y + c.h / 2);
+      // LED のときは、粒の幅ずつ動かす（粒より細かく動くと、どの粒が点くかがコマごとに変わってチラつく）
+      const step = rt.ledCell, shift = step > 0 ? Math.round(st.x / step) * step : st.x;
+      for (const it of st.items) ctx.fillText(it.text, c.x + it.at - shift, c.y + c.h / 2);
       ctx.textBaseline = "alphabetic";
     } },
 
-  board: { ja: "発車標", en: "BOARD", g: "文字", draw(ctx, c, f, P, u) {
+  // 出番：トラックごとに、次に鳴る音と、あと何ステップか
+  board: { ja: "出番", en: "CUE", g: "文字", draw(ctx, c, f, P, u) {
       const ja = rt.lang === "ja", rows = 5, rh = c.h / rows, fs = Math.min(rh * .55, u * 2.4), cols = [0, .3, .62, .82];
-      const head = ja ? ["種別", "行先", "あと", "状態"] : ["LINE", "NEXT", "IN", "NOW"];
+      const head = ja ? ["トラック", "次の音", "あと", "いま"] : ["TRACK", "NEXT", "IN", "NOW"];
       ctx.font = `${fs * .8}px ${DOT}`; ctx.fillStyle = P.dim; head.forEach((h, i) => ctx.fillText(h, c.x + c.w * cols[i], c.y + rh * .65));
       for (let t = 0; t < 4; t++) {
         const y = c.y + rh * (t + 1), next = events.find(e => e.tr === t && e.s > f.S) || events.find(e => e.tr === t);
@@ -384,7 +389,7 @@ export const PANELS: Record<string, PanelDef> = {
         ctx.font = `${fs}px ${DOT}`; ctx.fillStyle = trackColor(P, t); ctx.fillText(TRACKS[t][rt.lang], c.x + c.w * cols[0], y + rh * .68);
         ctx.fillStyle = P.ink; ctx.fillText(next.kind ? (ja ? { kick: "鼓", snare: "締", hat: "鈴" }[next.kind] : next.kind.toUpperCase()) : pfull(next.p), c.x + c.w * cols[1], y + rh * .68);
         ctx.fillStyle = P.a1; ctx.fillText(String(wait).padStart(2, "0"), c.x + c.w * cols[2], y + rh * .68);
-        ctx.fillStyle = now ? P.a2 : P.line; ctx.fillText(now ? (ja ? "発車" : "ON") : (ja ? "待機" : "--"), c.x + c.w * cols[3], y + rh * .68);
+        ctx.fillStyle = now ? P.a2 : P.line; ctx.fillText(now ? (ja ? "鳴" : "ON") : (ja ? "休" : "--"), c.x + c.w * cols[3], y + rh * .68);
       }
     } },
 
