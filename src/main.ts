@@ -1183,15 +1183,23 @@ window.setInterval(updateLatency, 500);
 
 let lastPlayheadBeats: number | null = -1;
 function playheadLoop(): void {
+  // 次のコマを先に頼んでおく：どこかでエラーが出ても、画面の動き全体が止まらないように
+  requestAnimationFrame(playheadLoop);
+  const safely = (name: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      console.error(`${name}の更新に失敗しました`, err);
+    }
+  };
   const beats = transport.currentPositionBeats();
-  mixPanel.tick();
-  videoPanel.tick();
+  safely("刻むタブ", () => mixPanel.tick());
+  safely("映像タブ", () => videoPanel.tick());
   if (beats !== lastPlayheadBeats) {
     pianoRoll.setPlayheadBeats(beats);
     lastPlayheadBeats = beats;
   }
   updateGuide();
-  requestAnimationFrame(playheadLoop);
 }
 playheadLoop();
 

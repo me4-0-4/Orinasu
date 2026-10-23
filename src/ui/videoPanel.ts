@@ -214,7 +214,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     target.resize(Math.max(2, Math.floor(dw * dpr * quality)), Math.max(2, Math.floor(dh * dpr * quality)), VW);
   }
   // プレビューの画質：重いときは自動で下げ（書き出しの画質は変わらない）、それでも重ければコマを間引く
-  let quality = 1, cost = 16, skip = false, calmFrames = 0;
+  let quality = 1, cost = 16, skip = false, calmFrames = 0, pendingDt = 0;
   function adaptQuality(ms: number): void {
     cost = cost * 0.85 + ms * 0.15;
     if (cost > 28 && quality > 0.5) {
@@ -244,7 +244,8 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     syncSong();
     const playing = deps.mix.playing();
 
-    rt.frameDt = playing ? dt : 0;
+    // 間引いたコマの時間も足しておく（粒や電光掲示板が、間引いた分だけ遅れないように）
+    pendingDt = playing ? Math.min(0.2, pendingDt + dt) : 0;
     rt.playing = playing;
     rt.lang = v.lang;
     const song = deps.mix.song();
@@ -269,6 +270,8 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     // それでも重ければ、1コマおきに描く
     skip = cost > 33 && !skip;
     if (skip) return;
+    rt.frameDt = pendingDt;
+    pendingDt = 0;
     const t0 = performance.now();
     renderFrame(target, v, L, tl, mats, featAt(tl, an, S));
     adaptQuality(performance.now() - t0);

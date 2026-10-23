@@ -331,19 +331,21 @@ export const PANELS: Record<string, PanelDef> = {
         let opened = 0;
         for (const e of events) {
           if (opened >= 3) break; // 1コマで開くのは3つまで
-          if (!passed(st.prevS, f.S, e.s) || !(e.kind === "kick" || (e.tr < 2 && noise(e.s, 93) < .35))) continue;
+          if (!passed(st.prevS, f.S, e.s) || !(e.kind === "kick" || (e.tr < 2 && noise(e.s, 93) < .25))) continue;
           opened++;
           const id = st.n++, bx = .15 + .7 * noise(id, 94), by = .15 + .5 * noise(id, 95), col = cols[id % cols.length], big = e.kind === "kick";
           st.bursts.push({ id, x: bx, y: by, t: 0, col });
-          const n = big ? 70 : 30;
+          const n = big ? 50 : 20;
           for (let k = 0; k < n; k++) { const a = Math.random() * Math.PI * 2, sp = (big ? .32 : .2) * (.4 + Math.random() * .6); st.sparks.push({ b: id, x: bx, y: by, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1 + Math.random() * .8, col: Math.random() < .2 ? P.ink : col }); }
         }
         for (const p of st.sparks) { p.vx *= .985; p.vy = p.vy * .985 + .12 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt * .55; }
-        st.sparks = st.sparks.filter((p: { life: number }) => p.life > 0).slice(-1500);
+        st.sparks = st.sparks.filter((p: { life: number }) => p.life > 0).slice(-900);
         st.bursts.forEach((b: { t: number }) => (b.t += dt)); st.bursts = st.bursts.filter((b: { t: number }) => b.t < 2.4);
       }
       st.prevS = f.S;
-      for (const b of st.bursts) { ctx.fillStyle = b.col; ctx.globalAlpha = .06 * (1 - b.t / 2.4); circle(ctx, c.x + b.x * c.w, c.y + b.y * c.h, Math.min(c.w, c.h) * (.1 + b.t * .12)); ctx.fill(); } // 煙
+      // 開いた所の光（大きな半透明の丸を重ねると重いので、小さな芯だけ）
+      for (const b of st.bursts) { if (b.t > .5) continue; ctx.fillStyle = b.col; ctx.globalAlpha = .9 * (1 - b.t / .5); circle(ctx, c.x + b.x * c.w, c.y + b.y * c.h, u * (.6 + b.t * 2)); ctx.fill(); }
+      ctx.globalAlpha = 1;
       ctx.lineWidth = u * .16;
       strokeBatched(ctx, st.sparks.map((p: { x: number; y: number; vx: number; vy: number; life: number; col: string }) => {
         const x = c.x + p.x * c.w, y = c.y + p.y * c.h;
@@ -351,12 +353,21 @@ export const PANELS: Record<string, PanelDef> = {
       }));
     } },
 
-  ticker: { ja: "電光", en: "TICKER", g: "文字", led: true, draw(ctx, c, f, P, u) {
+  ticker: { ja: "電光", en: "TICKER", g: "文字", led: true, draw(ctx, c, f, P, u, lf) {
       const notes = f.active.filter(a => a.tr < 2).map(a => pname(a.p)).join(" ") || "・";
       const txt = rt.lang === "ja" ? `${rt.song.name}　第${f.bar + 1}小節　${notes}　${BPM}BPM　${rt.song.keyJa}　　` : `${rt.song.name}  BAR ${f.bar + 1}  ${notes}  ${BPM}BPM  ${rt.song.key}    `;
-      const fs = Math.min(c.h * .62, u * 9); ctx.font = `${fs}px ${DOT}`; const tw = ctx.measureText(txt).width;
-      let x = c.x - ((f.S * u * 1.6) % tw); ctx.fillStyle = P.a1; ctx.textBaseline = "middle";
-      while (x < c.x + c.w) { ctx.fillText(txt, x, c.y + c.h / 2); x += tw; }
+      const fs = Math.min(c.h * .62, u * 9); ctx.font = `${fs}px ${DOT}`;
+      // 流れる位置は、経った時間だけ前に進める（曲の位置から計算しないので、頭に戻っても・巻き戻しても戻らない）
+      const st = rt.parts[lf.id] || (rt.parts[lf.id] = { x: 0, items: [] as { text: string; at: number }[] });
+      st.x += Math.max(0, rt.frameDt) * u * 1.6 * BPM / 15;
+      const width = (t: string): number => Math.max(fs, ctx.measureText(t).width);
+      // 文字は、右端から入ってくるときの内容（小節・音名）でつなげていく
+      if (!st.items.length) st.items.push({ text: txt, at: st.x });
+      let last = st.items[st.items.length - 1];
+      while (last.at + width(last.text) < st.x + c.w + fs) { last = { text: txt, at: last.at + width(last.text) }; st.items.push(last); }
+      while (st.items.length > 1 && st.items[0].at + width(st.items[0].text) < st.x) st.items.shift();
+      ctx.fillStyle = P.a1; ctx.textBaseline = "middle";
+      for (const it of st.items) ctx.fillText(it.text, c.x + it.at - st.x, c.y + c.h / 2);
       ctx.textBaseline = "alphabetic";
     } },
 

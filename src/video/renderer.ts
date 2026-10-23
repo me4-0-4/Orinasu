@@ -1,6 +1,6 @@
 import type { Feat } from "./features.ts";
 import type { Timeline, VEvent } from "./timeline.ts";
-import { brush, circle, DOT, fmtT, hex2rgb, isDark, line, MIN, MONO, noise, palette, PANELS, SANS, type PanelDef, type Palette, type Rect } from "./panels.ts";
+import { brush, circle, DOT, fmtT, hex2rgb, isDark, line, MIN, MONO, noise, palette, PANELS, rt, SANS, type PanelDef, type Palette, type Rect } from "./panels.ts";
 import { Layout, type FrameStyle, type Geom, type Treatment, type VideoSettings } from "./settings.ts";
 import { matReady, srcSize, type Material } from "./materials.ts";
 
@@ -160,6 +160,9 @@ function treat(kind: string, x: number, y: number, w: number, h: number, P: Pale
       for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const gx = at(c + 1, r - 1) + 2 * at(c + 1, r) + at(c + 1, r + 1) - at(c - 1, r - 1) - 2 * at(c - 1, r) - at(c - 1, r + 1), gy = at(c - 1, r + 1) + 2 * at(c, r + 1) + at(c + 1, r + 1) - at(c - 1, r - 1) - 2 * at(c, r - 1) - at(c + 1, r - 1); put(d, r * cols + c, Math.hypot(gx, gy) > .35 ? DK : LT); } });
   } else if (kind === "led") ledify(x, y, w, h, P, u);
 }
+/** パネルごとの、いま描いている中身（替わったら状態を捨てる）と、描けなかった中身（エラーは1回だけ出す）。 */
+const kindOf = new Map<number, string>();
+const failed = new Set<string>();
 /** 毎コマ変わる処理（前のコマを使う・フィルで伸びる）。これは覚えずに、毎回掛ける。 */
 const LIVE = new Set(["mosh", "stretch"]);
 const tileCache = new Map<string, HTMLCanvasElement>();
@@ -276,16 +279,33 @@ function drawFrame(f: Feat): void {
     const r = o.rect, x = r.x + g.gap / 2, y = r.y + g.gap / 2, w = r.w - g.gap, h = r.h - g.gap;
     if (w < u * 3 || h < u * 3) return;
     const pc = L.eff(o.leaf, "color"), P = pc ? Object.assign({}, P0, { a1: pc }) : P0, def = PANELS[pk];
+    // 中身を別のパネルに替えたら、前のパネルの粒などの状態は捨てる（形の違う状態を読んで壊れないように）
+    if (kindOf.get(o.leaf.id) !== pk) {
+      delete rt.parts[o.leaf.id];
+      delete rt.sy[o.leaf.id];
+      kindOf.set(o.leaf.id, pk);
+    }
     ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
-    chrome(ctx, x, y, w, h, P, u, L.eff(o.leaf, "style"));
-    const cr = label(ctx, x, y, w, h, P, u, def, f);
-    if (cr.w > u && cr.h > u) def.draw(ctx, cr, f, P, u, o.leaf);
-    ctx.restore();
+    try {
+      chrome(ctx, x, y, w, h, P, u, L.eff(o.leaf, "style"));
+      const cr = label(ctx, x, y, w, h, P, u, def, f);
+      if (cr.w > u && cr.h > u) def.draw(ctx, cr, f, P, u, o.leaf);
+    } catch (err) {
+      // 1枚のパネルが壊れても、ほかは描き続ける（状態を捨てて、次のコマでやり直す）
+      delete rt.parts[o.leaf.id];
+      if (!failed.has(pk)) {
+        failed.add(pk);
+        console.error(`パネル「${def.ja}」を描けませんでした`, err);
+      }
+    } finally {
+      ctx.restore();
+    }
     const led = L.eff(o.leaf, "led"); if (led == null ? (fx.led || def.led) : led) ledify(x, y, w, h, P, u);
   });
   drawTop(f, P0, g, u);
   if (fx.sumi && f.isFill) { ctx.globalAlpha = .92; brush(ctx, g.VW * .02, g.VH * (.3 + .4 * noise(f.bar, 41)), g.VW * .98, g.VH * (.3 + .4 * noise(f.bar, 42)), Math.min(g.VW, g.VH) * .09, Math.min(1, f.fillAmt * 3), f.bar * 13, isDark(P0.bg) ? P0.ink : P0.ink); ctx.globalAlpha = 1; }
-  const zure = fx.zure ? f.kick * u * .7 : 0, gl = fx.glitch ? f.fillAmt : 0;
+  // 版ズレはキックの直後だけ（画面を丸ごと描き直すので、ずっと掛けると重い）
+  const zure = fx.zure && f.kick > .35 ? f.kick * u * .7 : 0, gl = fx.glitch ? f.fillAmt : 0;
   if (zure > u * .05 || gl > 0) {
     snctx.setTransform(1, 0, 0, 1, 0, 0); snctx.clearRect(0, 0, snap.width, snap.height); snctx.drawImage(cv, 0, 0);
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -303,6 +323,7 @@ function drawFrame(f: Feat): void {
   for (let i = 0; i < n; i++) { ctx.fillStyle = i < done ? (i % 16 === 15 ? P0.a2 : P0.a1) : P0.line; ctx.fillRect(u * 3 + i * bw + bw * .12, by, bw * .76, u * .55); }
   ctx.fillStyle = P0.dim; ctx.font = `${u * 1.1}px ${DOT}`; ctx.fillText(`${fmtT(t)} / ${fmtT(TL.seconds)}`, u * 3, by - u * .7);
   ctx.textAlign = "right"; ctx.fillStyle = P0.ink; ctx.font = `900 ${u * 1.4}px ${MIN}`; ctx.fillText("織りなす", g.VW - u * 3, by - u * .6); ctx.textAlign = "left";
-  prevX.drawImage(cv, 0, 0);
+  // 前のコマはモッシュでだけ使う。使わないときは写さない（画面を丸ごと写すので重い）
+  if (V.layers.base.mode !== "none" && V.layers.base.treat.mosh) prevX.drawImage(cv, 0, 0);
 }
 

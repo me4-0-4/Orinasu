@@ -105,3 +105,29 @@ test("通り過ぎた判定：ふつうに進んだときと、くり返しで�
   assert.equal(passed(40, 0, 50), false); // ■で先頭へ（巻き戻し）
   assert.equal(passed(0, 30, 10), false); // 位置のバーで大きく飛ばした
 });
+
+test("電光掲示板：曲の位置を巻き戻しても、頭に戻っても、文字は左へ進み続ける", async () => {
+  const { PANELS, rt } = await import("./panels.ts");
+  const calls: { t: string; x: number }[] = [];
+  const ctx = {
+    font: "", fillStyle: "", textBaseline: "",
+    measureText: (t: string) => ({ width: t.length * 10 }),
+    fillText: (t: string, x: number) => calls.push({ t, x }),
+  } as unknown as CanvasRenderingContext2D;
+  const P = { bg: "#000", panel: "#000", ink: "#fff", line: "#333", a1: "#fa0", a2: "#f67", dim: "#888" };
+  const c = { x: 0, y: 0, w: 300, h: 40 };
+  rt.frameDt = 1 / 30;
+  rt.parts = {};
+  const scroll: number[] = [];
+  // 位置：進む → 先頭へ戻る（■） → 進む → 曲の頭に戻る
+  for (const S of [10, 11, 12, 0, 1, 2, 63, 0.2, 1]) {
+    calls.length = 0;
+    const f = { S, bar: Math.floor(S / 16), active: [] } as unknown as Parameters<typeof PANELS.ticker.draw>[2];
+    PANELS.ticker.draw(ctx, c, f, P, 10, { id: 1 });
+    scroll.push((rt.parts[1] as { x: number }).x);
+    // 描いた文字は、すき間なくつながっている
+    for (let i = 1; i < calls.length; i++) assert.ok(Math.abs(calls[i].x - (calls[i - 1].x + calls[i - 1].t.length * 10)) < 1e-6);
+  }
+  // 流れる量は、曲の位置に関係なく、いつも増える（巻き戻らない）
+  for (let i = 1; i < scroll.length; i++) assert.ok(scroll[i] > scroll[i - 1], `コマ${i}`);
+});
