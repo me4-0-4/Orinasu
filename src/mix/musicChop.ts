@@ -1,6 +1,7 @@
 import type { Slice } from "./slicer.ts";
 import { STEPS_PER_BEAT, accentOf, restMask, type EventFx, type FxKind, type LaneEvent, type ShapeParams } from "./sequencer.ts";
 import type { TurnStyle } from "./types.ts";
+import { createRng } from "../theory/rng.ts";
 
 type Rng = () => number;
 
@@ -74,6 +75,22 @@ interface Hit {
 }
 
 /**
+ * 混ぜるとき、どの層（曲）の断片を使うかを選ぶ。weights（層ごとの重み）が無ければ、どの層も同じ確率。
+ * 重みが全部同じなら、重み無しと同じ結果になる。
+ */
+export function pickSource(n: number, weights: number[] | undefined, rng: Rng): number {
+  const u = rng();
+  if (!weights || weights.length !== n) return Math.min(n - 1, Math.floor(u * n));
+  const total = weights.reduce((a, b) => a + b, 0);
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    acc += weights[i];
+    if (u * total < acc) return i;
+  }
+  return n - 1;
+}
+
+/**
  * 1小節のパターン。並べ方は「切ったまま（元の順）」と「繰り返す（前と同じ断片）」の2つだけ。
  * 繰り返した所は、左右に交互に振る（パン）。音程の動きがあれば、繰り返しを1オクターブ上げることがある。
  */
@@ -90,7 +107,7 @@ function barPattern(slots: number, slotSteps: number, params: ShapeParams, rhyth
     const onBeat = (i * slotSteps) % STEPS_PER_BEAT === 0;
     const prob = i === 0 ? 1 : onBeat ? p + (1 - p) * o : p * (1 - 0.6 * o);
     if (r >= prob) continue;
-    const repeat = i > 0 && prevK >= 0 && a < 0.3;
+    const repeat = i > 0 && prevK >= 0 && a < clamp01(params.repeat);
     const k = i === 0 ? 0 : repeat ? prevK : i;
     let pan = 0;
     if (repeat) {
@@ -119,6 +136,7 @@ function fillOf(
   startSlot = Math.floor(slots / 2),
   srcRng?: Rng,
   laneCount = 1,
+  weights?: number[],
 ): Hit[] {
   const start = startSlot * slotSteps;
   const span = stepsPerBar - start;
@@ -127,7 +145,7 @@ function fillOf(
   const every = sprinkle ? 1 : slotSteps;
   const pitchStyle = rng() < clamp01(params.motion) ? (rng() < 0.6 ? "stairs" : "octave") : "none";
   const fxKind = rng() < clamp01(params.fx) ? FX_KINDS[randInt(FX_KINDS.length, rng)] : null;
-  const src = srcRng ? randInt(laneCount, srcRng) : undefined;
+  const src = srcRng ? pickSource(laneCount, weights, srcRng) : undefined;
   const tail: Hit[] = [];
   let side = 1;
   for (let at = start; at < stepsPerBar; at += every) {
@@ -190,6 +208,13 @@ export interface MusicLaneInput {
    * 無ければ、混ぜずに交代する。
    */
   srcRng?: Rng;
+  /** 混ぜるとき：層ごとの選ばれやすさ（層の「密度」）。無ければ全部同じ。全部の層に同じ値を渡す。 */
+  srcWeights?: number[];
+  /**
+   * 「変化」と「フィル」で、小節ごとに決める乱数。全部の層（混ぜるとき）に同じ種を渡す。
+   * 無ければ固定の種（変化0・フィル1なら、使われない）。
+   */
+  varyRng?: Rng;
   params: ShapeParams;
   cutRng: Rng;
   rhythmRng: Rng;
@@ -207,23 +232,28 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
   // 8小節ごとに、新しいパターン（1小節か2小節）とフィル。後ろの4小節は詰めたパターンと、長いフィル
   const bigStart = Math.max(0, Math.floor(slots / 4));
   const mix = input.turns === "mix" && input.laneCount > 1 && !!input.srcRng;
+  // 偶然で全部が同じ曲になったら、1つだけ別の曲にする（混ぜたのに1曲だけ、にならないように）
+  const assignSources = (all: Hit[], rng: Rng): void => {
+    for (const h of all) h.src = pickSource(input.laneCount, input.srcWeights, rng);
+    if (all.length > 1 && all.every((h) => h.src === all[0].src)) {
+      const h = all[1 + randInt(all.length - 1, rng)];
+      h.src = (all[0].src! + 1 + randInt(input.laneCount - 1, rng)) % input.laneCount;
+    }
+  };
+  // 変化（小節ごとに新しいパターン）とフィルの有無は、この乱数で小節ごとに決める（どちらも0・1なら、結果は変わらない）
+  const vary = clamp01(params.vary);
+  const fillRate = clamp01(params.fills);
+  const varyRng = input.varyRng ?? createRng(0x9e3779b9);
+  const variantRng = createRng(Math.floor(varyRng() * 4294967296));
   const blocks: { motif: Hit[][]; fills: Hit[][]; dense: Hit[][]; bigFills: Hit[][] }[] = [];
   for (let blk = 0; blk * BLOCK_BARS < bars; blk++) {
     const motifLen = bars >= 8 && input.cutRng() < 0.5 ? 2 : 1;
     const motif = Array.from({ length: motifLen }, () => barPattern(slots, slotSteps, params, input.rhythmRng, input.orderRng));
     // 混ぜる：打つ1回ごとに、どの層（曲）の断片を使うかを偶然で決める（パターンと一緒にくり返す）
-    if (mix) {
-      const all = motif.flat();
-      for (const h of all) h.src = randInt(input.laneCount, input.srcRng!);
-      // 偶然で全部が同じ曲になったら、1つだけ別の曲にする（混ぜたのに1曲だけ、にならないように）
-      if (all.length > 1 && all.every((h) => h.src === all[0].src)) {
-        const h = all[1 + randInt(all.length - 1, input.srcRng!)];
-        h.src = (all[0].src! + 1 + randInt(input.laneCount - 1, input.srcRng!)) % input.laneCount;
-      }
-    }
-    const fills = motif.map((m) => fillOf(m, slots, slotSteps, stepsPerBar, params, input.cutRng, undefined, input.srcRng, input.laneCount));
+    if (mix) assignSources(motif.flat(), input.srcRng!);
+    const fills = motif.map((m) => fillOf(m, slots, slotSteps, stepsPerBar, params, input.cutRng, undefined, input.srcRng, input.laneCount, input.srcWeights));
     const dense = motif.map((m) => denser(m, slots, slotSteps, params, input.rhythmRng));
-    const bigFills = dense.map((m) => fillOf(m, slots, slotSteps, stepsPerBar, params, input.cutRng, bigStart, input.srcRng, input.laneCount));
+    const bigFills = dense.map((m) => fillOf(m, slots, slotSteps, stepsPerBar, params, input.cutRng, bigStart, input.srcRng, input.laneCount, input.srcWeights));
     blocks.push({ motif, fills, dense, bigFills });
   }
 
@@ -233,6 +263,8 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
   for (let b = 0; b < bars; b++) {
     // 小節の質感：キレ（短い隙間でメリハリ、左右に振る）か、なめらか（隙間なくつなぐ）
     const crisp = input.cutRng() < clamp01(params.crisp);
+    const uVary = varyRng();
+    const uFill = varyRng();
     const unit = Math.floor(b / UNIT_BARS);
     // 掛け合い：前半2拍は「呼ぶ層」、後半2拍は「応える層」。4小節ごとに呼ぶ層が替わる
     const caller = unit % Math.max(1, input.laneCount);
@@ -242,9 +274,17 @@ export function planMusicLane(input: MusicLaneInput): LaneEvent[] {
     const { motif, fills, dense, bigFills } = blocks[Math.floor(b / BLOCK_BARS)];
     const m = b % motif.length;
     const late = b % BLOCK_BARS >= UNIT_BARS; // 8小節の後ろ半分：詰めて盛り上げる
-    const isFill = (b % UNIT_BARS === UNIT_BARS - 1 || b === bars - 1) && bars > 1;
+    const isFill = (b % UNIT_BARS === UNIT_BARS - 1 || b === bars - 1) && bars > 1 && uFill < fillRate;
     const isBig = isFill && (b % BLOCK_BARS === BLOCK_BARS - 1 || b === bars - 1) && bars >= BLOCK_BARS;
-    const pattern = isBig ? bigFills[m] : isFill ? fills[m] : late ? dense[m] : motif[m];
+    let pattern: Hit[];
+    if (isBig) pattern = bigFills[m];
+    else if (isFill) pattern = fills[m];
+    else if (uVary < vary) {
+      // 変化：この小節だけ、新しいパターンにする（詰める後半は、詰めたものに）
+      const fresh = barPattern(slots, slotSteps, params, variantRng, variantRng);
+      if (mix) assignSources(fresh, variantRng);
+      pattern = late ? denser(fresh, slots, slotSteps, params, variantRng) : fresh;
+    } else pattern = late ? dense[m] : motif[m];
     const sb = b % srcBars;
     const barStart = b * stepsPerBar;
     // 左右は、1小節の中で1つの数え方で交互に振る（片側に偏らないように）

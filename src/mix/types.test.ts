@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createEmptySong, laneIsCustom, formatDuration, migrateSong, songSeconds, type Lane } from "./types.ts";
+import { createRng } from "../theory/rng.ts";
+import { createEmptySong, laneIsCustom, formatDuration, migrateSong, randomLaneShift, randomShape, randomizableKeys, songSeconds, type Lane } from "./types.ts";
 
 test("曲の長さ：小節数・拍子・曲のBPMから決まる（フレーズのBPMは関係ない）", () => {
   const s = { ...createEmptySong(), lengthBars: 4 }; // 4小節・4拍・120BPM
@@ -160,4 +161,39 @@ test("曲のidは、保存データから引き継ぐ（何曲も持てるよう
   assert.equal(migrateSong({ id: "song_abc_1" }).id, "song_abc_1");
   assert.equal(migrateSong({}).id, "song");
   assert.equal(createEmptySong("song_x").id, "song_x");
+});
+
+test("ランダム化：範囲の中に収まり、種が同じなら同じ。断片の長さは対象にしない", () => {
+  const keys = randomizableKeys("music");
+  assert.ok(!keys.includes("size"));
+  assert.deepEqual(randomShape(keys, createRng(3)), randomShape(keys, createRng(3)));
+  for (let seed = 1; seed <= 50; seed++) {
+    const r = randomShape(keys, createRng(seed));
+    assert.deepEqual(Object.keys(r).sort(), [...keys].sort());
+    for (const v of Object.values(r)) assert.ok(v! >= 0 && v! <= 1);
+    assert.ok(r.busy! >= 0.3 && r.busy! <= 0.85);
+    assert.ok(r.fills! >= 0.6);
+  }
+  assert.ok(!randomizableKeys("material").includes("crisp"));
+  assert.ok(randomizableKeys("material").includes("hold"));
+});
+
+test("ランダム化：層のずらしは±0.3以内で、ずらした結果が0〜1に収まる", () => {
+  const global = { ...createEmptySong().params, busy: 0.9, crisp: 0.05 };
+  for (let seed = 1; seed <= 50; seed++) {
+    const shift = randomLaneShift(global, randomizableKeys("music"), createRng(seed));
+    for (const [k, d] of Object.entries(shift)) {
+      assert.ok(Math.abs(d!) <= 0.3 + 1e-9);
+      const v = global[k as keyof typeof global] as number + d!;
+      assert.ok(v >= -1e-9 && v <= 1 + 1e-9, `${k} ${v}`);
+    }
+  }
+});
+
+test("新しいつまみ（くり返し・フィル・変化）：初期値は今までと同じ動き、保存データは範囲に収める", () => {
+  const p = createEmptySong().params;
+  assert.deepEqual([p.repeat, p.fills, p.vary], [0.3, 1, 0]);
+  const s = migrateSong({ params: { repeat: 5, fills: -1, vary: 0.4 } });
+  assert.deepEqual([s.params.repeat, s.params.fills, s.params.vary], [1, 0, 0.4]);
+  assert.deepEqual([migrateSong({ params: {} }).params.repeat, migrateSong({ params: {} }).params.fills], [0.3, 1]);
 });
