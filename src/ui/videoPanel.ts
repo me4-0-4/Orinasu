@@ -10,6 +10,7 @@ import { bindTimeline, COLOR_KEYS, PANELS, PRESETS, rt, type Colors } from "../v
 import { ASPECT_LABEL, defaultVideo, FRAMES, Layout, migrateVideo, type Aspect, type Divider, type FrameStyle, type Leaf, type Placed, type Treatment, type VideoSettings } from "../video/settings";
 import { FrameTarget, renderFrame } from "../video/renderer";
 import { makeSamples, srcSize, type Material } from "../video/materials";
+import type { StoredMaterial } from "../storage/db";
 
 export interface VideoPanelDeps {
   mix: {
@@ -23,6 +24,12 @@ export interface VideoPanelDeps {
     videoChanged: () => void;
   };
   getPhrases: () => Phrase[];
+  /** 素材（写真・動画）の置き場所（端末の中）。 */
+  materials: {
+    load: () => Promise<StoredMaterial[]>;
+    save: (m: StoredMaterial) => Promise<void>;
+    remove: (id: string) => Promise<void>;
+  };
 }
 
 export interface VideoPanel {
@@ -93,7 +100,10 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   let sel: number | null = null;
   let tab: "base" | "panels" | "top" = "panels";
   let clean = false, auto = false, colorOpen = false;
-  const mats: Material[] = makeSamples();
+  // 素材の棚：自分の素材が1つも無いあいだは、見本を並べる
+  const samples = makeSamples();
+  const mats: Material[] = [...samples];
+  const records = new Map<string, StoredMaterial>();
   let matError = "";
   // 曲：作り直されたら、出来事の並びと解析をやり直す
   let builtFrom: StemSet | null = null;
@@ -433,44 +443,84 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
         o.selected = (m.tr ?? "") === val;
         s.append(o);
       }
-      s.addEventListener("change", () => (m.tr = s.value === "chop" || s.value === "drum" ? s.value : null));
-      shelf.append(el("div", { class: "vid-mat" }, th, el("span", { class: "vid-mname" }, m.name), s, key("外す", () => { mats.splice(mats.indexOf(m), 1); renderInspector(); }, "tx")));
+      s.addEventListener("change", () => setMaterialTrack(m, s.value === "chop" || s.value === "drum" ? s.value : null));
+      shelf.append(el("div", { class: "vid-mat" }, th, el("span", { class: "vid-mname" }, m.sample ? `${m.name}（見本）` : m.name), s, key("外す", () => removeMaterial(m), "tx")));
     }
     const fin = el("input", { type: "file", accept: "image/*,video/*", multiple: "" });
-    fin.addEventListener("change", () => [...(fin.files ?? [])].forEach(addFile));
+    fin.addEventListener("change", () => [...(fin.files ?? [])].forEach((file) => void addFile(file)));
     const kids: Node[] = [shelf, el("label", { class: "vid-file" }, fin)];
     if (matError) kids.push(el("p", { class: "vid-err" }, matError));
     insp.append(section(`素材 ${mats.length}`, ...kids));
   }
-  function addFile(file: File): void {
-    const name = file.name, url = URL.createObjectURL(file);
-    const fail = (): void => {
-      matError = `${name} を読み込めませんでした。別の形式で試してください。`;
-      renderInspector();
-    };
-    if (file.type.startsWith("video")) {
-      const vid = document.createElement("video");
-      vid.muted = true;
-      vid.loop = true;
-      vid.playsInline = true;
-      vid.addEventListener("loadeddata", () => {
-        mats.push({ id: `file${Date.now()}${mats.length}`, name, kind: "video", el: vid, tr: null });
-        void vid.play().catch(() => {});
-        matError = "";
-        renderInspector();
-      }, { once: true });
-      vid.addEventListener("error", fail, { once: true });
-      vid.src = url;
-    } else {
-      const im = new Image();
-      im.onload = () => {
-        mats.push({ id: `file${Date.now()}${mats.length}`, name, kind: "image", el: im, tr: null });
-        matError = "";
-        renderInspector();
-      };
-      im.onerror = fail;
-      im.src = url;
+  /** 保存した素材（Blob）から、描ける要素を作る。 */
+  function materialFrom(rec: StoredMaterial): Promise<Material> {
+    const url = URL.createObjectURL(rec.blob);
+    return new Promise((resolve, reject) => {
+      if (rec.kind === "video") {
+        const vid = document.createElement("video");
+        vid.muted = true;
+        vid.loop = true;
+        vid.playsInline = true;
+        vid.addEventListener("loadeddata", () => {
+          void vid.play().catch(() => {});
+          resolve({ id: rec.id, name: rec.name, kind: "video", el: vid, tr: rec.tr });
+        }, { once: true });
+        vid.addEventListener("error", () => reject(new Error(rec.name)), { once: true });
+        vid.src = url;
+      } else {
+        const im = new Image();
+        im.onload = () => resolve({ id: rec.id, name: rec.name, kind: "image", el: im, tr: rec.tr });
+        im.onerror = () => reject(new Error(rec.name));
+        im.src = url;
+      }
+    });
+  }
+  function addOwn(m: Material): void {
+    if (mats.length && mats.every((x) => x.sample)) mats.length = 0; // 自分の素材を入れたら、見本は下げる
+    mats.push(m);
+  }
+  async function addFile(file: File): Promise<void> {
+    const kind = file.type.startsWith("video") ? "video" : "image";
+    const rec: StoredMaterial = { id: `mat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, name: file.name, kind, blob: file, tr: null, createdAt: Date.now() };
+    try {
+      const m = await materialFrom(rec);
+      records.set(rec.id, rec);
+      addOwn(m);
+      matError = "";
+      await deps.materials.save(rec);
+    } catch (err) {
+      console.error("素材を読み込めませんでした", err);
+      matError = `${file.name} を読み込めませんでした。別の形式で試してください。`;
     }
+    renderInspector();
+  }
+  async function loadOwnMaterials(): Promise<void> {
+    try {
+      for (const rec of await deps.materials.load()) {
+        records.set(rec.id, rec);
+        const m = await materialFrom(rec).catch(() => null);
+        if (!m) continue;
+        if (rec.panelId !== undefined) rt.imgs.set(rec.panelId, m.el as HTMLImageElement);
+        else addOwn(m);
+      }
+    } catch (err) {
+      console.error("素材の一覧を読み込めませんでした", err);
+    }
+    if (tab === "base") renderInspector();
+  }
+  function setMaterialTrack(m: Material, tr: Material["tr"]): void {
+    m.tr = tr;
+    const rec = records.get(m.id);
+    if (rec) void deps.materials.save({ ...rec, tr }).catch((err) => console.error("素材を保存できませんでした", err));
+  }
+  function removeMaterial(m: Material): void {
+    mats.splice(mats.indexOf(m), 1);
+    if (records.has(m.id)) {
+      records.delete(m.id);
+      void deps.materials.remove(m.id).catch((err) => console.error("素材を消せませんでした", err));
+    }
+    if (!mats.length) mats.push(...samples);
+    renderInspector();
   }
 
   function topInsp(): void {
@@ -523,9 +573,11 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
       fin.addEventListener("change", () => {
         const file = fin.files?.[0];
         if (!file) return;
-        const im = new Image();
-        im.onload = () => rt.imgs.set(lf.id, im);
-        im.src = URL.createObjectURL(file);
+        const rec: StoredMaterial = { id: `panel_${lf.id}`, name: file.name, kind: "image", blob: file, tr: null, panelId: lf.id, createdAt: Date.now() };
+        void materialFrom(rec).then((m) => {
+          rt.imgs.set(lf.id, m.el as HTMLImageElement);
+          return deps.materials.save(rec);
+        }).catch((err) => console.error("素材パネルの画像を読み込めませんでした", err));
       });
       insp.append(section("画像", el("label", { class: "vid-file" }, fin)));
     }
@@ -563,6 +615,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   loadSettings();
   sizeStage();
   refresh();
+  void loadOwnMaterials();
 
   return {
     el: root,

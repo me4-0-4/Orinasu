@@ -56,6 +56,9 @@ import {
   loadUserPresets,
   deleteSong,
   loadSavedSongs,
+  loadMaterials,
+  saveMaterial,
+  deleteMaterial,
   loadSong,
   saveSong,
   saveUserPreset,
@@ -887,7 +890,11 @@ rollDock.append(pianoRoll.el);
 const phraseTab = document.createElement("div");
 phraseTab.className = "tab-panel phrase-tab";
 phraseTab.append(phraseSplit, rollDock);
-const videoPanel = buildVideoPanel({ mix: mixPanel, getPhrases: () => savedPhrases });
+const videoPanel = buildVideoPanel({
+  mix: mixPanel,
+  getPhrases: () => savedPhrases,
+  materials: { load: loadMaterials, save: saveMaterial, remove: deleteMaterial },
+});
 main.append(phraseTab, mixPanel.el, videoPanel.el);
 
 // --- タブ切り替え ---------------------------------------------------------

@@ -26,10 +26,12 @@ export interface WriteOptions {
 }
 
 const DB_NAME = "orinasu";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE = "phrases";
 const PRESET_STORE = "presets";
 const SONG_STORE = "songs";
+/** 映像の素材（写真・動画）。重いので端末の中だけに置く（クラウドには上げない）。 */
+const MATERIAL_STORE = "materials";
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -44,6 +46,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(SONG_STORE)) {
         db.createObjectStore(SONG_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(MATERIAL_STORE)) {
+        db.createObjectStore(MATERIAL_STORE, { keyPath: "id" });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -178,7 +183,8 @@ export async function deleteSong(id: string, opts: WriteOptions = {}): Promise<v
 export async function clearLocalData(): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([STORE, PRESET_STORE, SONG_STORE], "readwrite");
+    const tx = db.transaction([STORE, PRESET_STORE, SONG_STORE, MATERIAL_STORE], "readwrite");
+    tx.objectStore(MATERIAL_STORE).clear();
     tx.objectStore(STORE).clear();
     tx.objectStore(PRESET_STORE).clear();
     tx.objectStore(SONG_STORE).clear();
@@ -186,4 +192,51 @@ export async function clearLocalData(): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+}
+
+/** 映像の素材（写真・動画）1つ。 */
+export interface StoredMaterial {
+  id: string;
+  name: string;
+  kind: "image" | "video";
+  blob: Blob;
+  /** どの音で出すか。null＝どれでも。 */
+  tr: "chop" | "drum" | null;
+  /** 素材パネル用の画像なら、そのパネルの id（素材の棚には並べない）。 */
+  panelId?: number;
+  createdAt: number;
+}
+
+export async function saveMaterial(m: StoredMaterial): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(MATERIAL_STORE, "readwrite");
+    tx.objectStore(MATERIAL_STORE).put(m);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+export async function deleteMaterial(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(MATERIAL_STORE, "readwrite");
+    tx.objectStore(MATERIAL_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+export async function loadMaterials(): Promise<StoredMaterial[]> {
+  const db = await openDb();
+  const result = await new Promise<StoredMaterial[]>((resolve, reject) => {
+    const tx = db.transaction(MATERIAL_STORE, "readonly");
+    const req = tx.objectStore(MATERIAL_STORE).getAll();
+    req.onsuccess = () => resolve(req.result as StoredMaterial[]);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return result.sort((a, b) => a.createdAt - b.createdAt);
 }
