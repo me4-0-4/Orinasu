@@ -31,6 +31,8 @@ export const rt = {
   /** 素材パネルの画像（パネルの id で引く）。 */
   imgs: new Map<number, Img>(),
   song: { name: "", key: "", keyJa: "", bars: 16 },
+  /** このパネルが LED なら、1粒の大きさ（書き出しの画素）。LED でなければ0。 */
+  ledCell: 0,
 };
 
 export const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -367,7 +369,9 @@ export const PANELS: Record<string, PanelDef> = {
       while (last.at + width(last.text) < st.x + c.w + fs) { last = { text: txt, at: last.at + width(last.text) }; st.items.push(last); }
       while (st.items.length > 1 && st.items[0].at + width(st.items[0].text) < st.x) st.items.shift();
       ctx.fillStyle = P.a1; ctx.textBaseline = "middle";
-      for (const it of st.items) ctx.fillText(it.text, c.x + it.at - st.x, c.y + c.h / 2);
+      // LED のときは、粒の幅ずつ動かす（粒より細かく動くと、どの粒が点くかがコマごとに変わってチラつく）
+      const step = rt.ledCell, shift = step > 0 ? Math.round(st.x / step) * step : st.x;
+      for (const it of st.items) ctx.fillText(it.text, c.x + it.at - shift, c.y + c.h / 2);
       ctx.textBaseline = "alphabetic";
     } },
 
