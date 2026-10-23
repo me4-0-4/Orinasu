@@ -894,6 +894,7 @@ const videoPanel = buildVideoPanel({
   mix: mixPanel,
   getPhrases: () => savedPhrases,
   materials: { load: loadMaterials, save: saveMaterial, remove: deleteMaterial },
+  gotoMix: () => selectTab("mix"),
   audio: {
     ctx: engine.ctx,
     prepare: async () => {
@@ -1092,7 +1093,8 @@ window.addEventListener("keydown", (e) => {
   if (target && (target.tagName === "INPUT" || target.tagName === "SELECT")) {
     if (e.code === "Space") {
       e.preventDefault();
-      if (currentTab === "mix" || currentTab === "video") mixPanel.togglePlay();
+      if (currentTab === "mix") mixPanel.togglePlay();
+      else if (currentTab === "video") videoPanel.togglePlay();
       else togglePlay();
     } else if (currentTab === "mix" && target && ["range", "checkbox"].includes((target as HTMLInputElement).type) && mixPanel.key(e.code)) {
       // スライダーを動かしたあとも、M・S・Home は使える
@@ -1101,10 +1103,10 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (currentTab === "video") {
-    // 映像タブ：スペースは刻んだ曲の再生⇔停止。R＝振り直す、Esc＝選択を外す
+    // 映像タブ：スペースは刻んだ曲の再生⇔一時停止。R＝振り直す、Esc＝選択を外す
     if (e.code === "Space") {
       e.preventDefault();
-      mixPanel.togglePlay();
+      videoPanel.togglePlay();
     } else if (videoPanel.key(e.code)) {
       e.preventDefault();
     }

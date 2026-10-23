@@ -11,7 +11,7 @@ import { ASPECT_LABEL, defaultVideo, FRAMES, Layout, migrateVideo, type Aspect, 
 import { FrameTarget, renderFrame } from "../video/renderer";
 import { makeSamples, srcSize, type Material } from "../video/materials";
 import type { StoredMaterial } from "../storage/db";
-import { extensionOf, pickMime, recordVideo } from "../video/exportVideo";
+import { encodeVideo, extensionOf, pickMime, pickPlan, recordVideo } from "../video/exportVideo";
 import { repeatPcm } from "../mix/loopFold";
 
 export interface VideoPanelDeps {
@@ -26,6 +26,8 @@ export interface VideoPanelDeps {
     videoChanged: () => void;
     stop: () => void;
   };
+  /** 刻むタブを開く（映す曲を変えるとき）。 */
+  gotoMix: () => void;
   /** 書き出しで音を鳴らす AudioContext と、鳴らす前の準備（ほかの音を止める）。 */
   audio: { ctx: AudioContext; prepare: () => Promise<void> };
   getPhrases: () => Phrase[];
@@ -45,6 +47,8 @@ export interface VideoPanel {
   key: (code: string) => boolean;
   /** 曲が入れ替わった（開き直したなど）。 */
   setSong: () => void;
+  /** 再生⇔一時停止（スペースキー用）。 */
+  togglePlay: () => void;
 }
 
 type Attrs = Record<string, string | (() => void)>;
@@ -95,7 +99,20 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   const stage = el("div", { class: "vid-stage" }, el("i", { class: "vid-tm tl" }), el("i", { class: "vid-tm tr" }), el("i", { class: "vid-tm bl" }), el("i", { class: "vid-tm br" }), canvas, ov);
   const note = el("p", { class: "vid-note" });
   const scrub = el("input", { type: "range", min: "0", max: "1", step: "0.001", class: "vid-scrub", "aria-label": "再生位置" });
-  const stageWrap = el("div", { class: "vid-stagewrap" }, stage, note, scrub);
+  // 映している曲（刻むタブで作っている曲）と、再生のボタン
+  const songName = el("span", { class: "vid-song-name" });
+  const songMeta = el("span", { class: "vid-song-meta" });
+  const songBar = el("div", { class: "vid-song" }, el("span", { class: "vid-song-label" }, "曲"), songName, songMeta, key("刻むタブで変える", () => deps.gotoMix(), "tx"));
+  const playBtn = el("button", { type: "button", class: "vid-play", "aria-label": "再生" });
+  const stopBtn = el("button", { type: "button", class: "vid-play", "aria-label": "先頭に戻す", title: "止めて、先頭に戻す" }, "■");
+  const timeLabel = el("span", { class: "vid-time" });
+  playBtn.addEventListener("click", () => togglePlay());
+  stopBtn.addEventListener("click", () => {
+    if (deps.mix.playing()) deps.mix.togglePlay();
+    deps.mix.seek(0);
+  });
+  const transport = el("div", { class: "vid-transport" }, playBtn, stopBtn, scrub, timeLabel);
+  const stageWrap = el("div", { class: "vid-stagewrap" }, songBar, stage, note, transport);
   const insp = el("aside", { class: "vid-insp" });
   root.append(board, colorsBox, el("div", { class: "vid-main" }, stageWrap, insp));
 
@@ -115,7 +132,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   let tl: Timeline | null = null;
   let an: Analysis | null = null;
   let analyzing = false;
-  let lastT = performance.now(), lastBlock = -1, lastPlaying = false;
+  let lastT = performance.now(), lastBlock = -1;
   // 書き出し：くり返す回数・コマ数と、書き出し中の状態
   let exportLoops = 1, exportFps = 30;
   let exporting: { progress: number; cancel: boolean } | null = null;
@@ -189,16 +206,13 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     lastT = now;
     syncSong();
     const playing = deps.mix.playing();
-    if (playing !== lastPlaying) {
-      // スペースキーや刻むタブで再生⇔停止したら、配電盤のランプも変える
-      lastPlaying = playing;
-      buildBoard();
-    }
+
     rt.frameDt = playing ? dt : 0;
     rt.playing = playing;
     rt.lang = v.lang;
     const song = deps.mix.song();
     rt.song = { name: song.name || "無題", key: builtFrom?.keyName ?? "", keyJa: builtFrom?.keyName ?? "", bars: song.lengthBars };
+    updateSongBar();
     if (!tl || !an) {
       note.textContent = !deps.mix.current() ? "刻むタブで曲を作ると、ここに映像が出ます。" : analyzing ? "曲を解析しています…" : "";
       note.hidden = note.textContent === "";
@@ -218,6 +232,27 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     renderFrame(target, v, L, tl, mats, featAt(tl, an, S));
   }
   scrub.addEventListener("input", () => deps.mix.seek(Number(scrub.value)));
+  /** 再生⇔一時停止。止めるときは、その位置から続けられるようにする。 */
+  function togglePlay(): void {
+    if (deps.mix.playing()) {
+      const pos = deps.mix.position();
+      deps.mix.togglePlay();
+      deps.mix.seek(pos);
+    } else deps.mix.togglePlay();
+  }
+  const fmt = (sec: number): string => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+  /** 曲の表示と、再生ボタン・時間。 */
+  function updateSongBar(): void {
+    const song = deps.mix.song(), cur = deps.mix.current();
+    songName.textContent = song.name.trim() || "無題";
+    songMeta.textContent = cur ? `${song.lengthBars}小節・${song.bpm} BPM${cur.set.keyName ? `・${cur.set.keyName}` : ""}` : "まだ刻んでいません";
+    const playing = deps.mix.playing();
+    playBtn.textContent = playing ? "❚❚" : "▶";
+    playBtn.setAttribute("aria-label", playing ? "一時停止" : "再生");
+    playBtn.disabled = stopBtn.disabled = !cur;
+    const total = tl?.seconds ?? 0;
+    timeLabel.textContent = `${fmt(deps.mix.position() * total)} / ${fmt(total)}`;
+  }
 
   function shuffle(): void {
     L.shuffle(KEYS_RANDOM, Math.random);
@@ -381,8 +416,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
         lamp("英", v.lang === "en", change(() => (v.lang = "en"))),
       ),
       group("効果", ...([["led", "LED"], ["zure", "版ズレ"], ["glitch", "グリッチ"], ["sumi", "墨"], ["halftone", "網点"], ["weave", "織り目"]] as const).map(([k, l]) => lamp(l, v.fx[k], change(() => (v.fx[k] = !v.fx[k]))))),
-      group("再生",
-        lamp(deps.mix.playing() ? "再生中" : "停止中", deps.mix.playing(), () => { deps.mix.togglePlay(); window.setTimeout(refresh, 50); }),
+      group("振り直し",
         key("振り直す", shuffle),
         lamp("8小節ごと", auto, () => { auto = !auto; refresh(); }),
       ),
@@ -453,39 +487,42 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
       for (const k of Object.keys(rt.parts)) delete rt.parts[Number(k)];
       const songSec = timeline.seconds;
       let block = -1;
-      const result = await recordVideo({
-        canvas,
-        ctx: deps.audio.ctx,
-        pcm,
-        sampleRate: set.sampleRate,
-        fps: exportFps,
-        draw: (t, dt) => {
-          const S = ((t % songSec) / songSec) * timeline.totalSteps;
-          const b = Math.floor(S / (timeline.stepsPerBar * 8));
-          if (auto && block >= 0 && b !== block) L.shuffle(KEYS_RANDOM, Math.random);
-          block = b;
-          rt.frameDt = Math.min(0.1, dt);
-          rt.playing = true;
-          renderFrame(out, v, L, timeline, mats, featAt(timeline, analysis, S));
-        },
-        onProgress: (p) => {
-          if (!exporting) return;
-          const before = Math.round(exporting.progress * 100);
-          exporting.progress = p;
-          if (Math.round(p * 100) !== before) buildBoard();
-        },
-        cancelled: () => !!exporting?.cancel,
-      });
+      const draw = (t: number, dt: number): void => {
+        const S = ((t % songSec) / songSec) * timeline.totalSteps;
+        const b = Math.floor(S / (timeline.stepsPerBar * 8));
+        if (auto && block >= 0 && b !== block) L.shuffle(KEYS_RANDOM, Math.random);
+        block = b;
+        rt.frameDt = Math.min(0.1, dt);
+        rt.playing = true;
+        renderFrame(out, v, L, timeline, mats, featAt(timeline, analysis, S));
+      };
+      const onProgress = (p: number): void => {
+        if (!exporting) return;
+        const before = Math.round(exporting.progress * 100);
+        exporting.progress = p;
+        if (Math.round(p * 100) !== before) buildBoard();
+      };
+      const cancelled = (): boolean => !!exporting?.cancel;
+      // 1コマずつ符号化できれば、それで（コマが落ちない）。できないブラウザは、実時間で録る
+      const plan = await pickPlan(VW, VH, exportFps, set.sampleRate);
+      let result: { blob: Blob; ext: string; label: string } | null;
+      if (plan) {
+        const r = await encodeVideo({ canvas, width: VW, height: VH, fps: exportFps, pcm, sampleRate: set.sampleRate, draw, onProgress, cancelled }, plan);
+        result = r && { blob: r.blob, ext: r.ext, label: plan.video === "avc" ? `${r.ext.toUpperCase()}・H.264` : r.ext.toUpperCase() };
+      } else {
+        const r = await recordVideo({ canvas, ctx: deps.audio.ctx, pcm, sampleRate: set.sampleRate, fps: exportFps, draw, onProgress, cancelled });
+        result = r && { blob: r.blob, ext: extensionOf(r.mime), label: `${extensionOf(r.mime).toUpperCase()}・実時間` };
+      }
       if (result) {
         const url = URL.createObjectURL(result.blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${song.name.trim() || "orinasu"}_${ASPECT_LABEL[v.aspect].replace(":", "x")}.${extensionOf(result.mime)}`;
+        a.download = `${song.name.trim() || "orinasu"}_${ASPECT_LABEL[v.aspect].replace(":", "x")}.${result.ext}`;
         document.body.append(a);
         a.click();
         a.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
-        note.textContent = extensionOf(result.mime) === "mp4" ? "書き出しました（MP4）。" : "書き出しました（WebM）。このブラウザは MP4 を書き出せないので、WebM になっています。";
+        note.textContent = result.ext === "mp4" ? `書き出しました（${result.label}）。` : `書き出しました（${result.label}）。このブラウザは MP4 を書き出せないので、WebM になっています。`;
       } else {
         note.textContent = "書き出しをやめました。";
       }
@@ -736,6 +773,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
       }
       return false;
     },
+    togglePlay,
     setSong() {
       loadSettings();
       builtFrom = null;
