@@ -55,6 +55,37 @@ export function bindTimeline(tl: Timeline, analysis: Analysis): void {
   TRACKS = [nm(0, "刻む1", "CH 1"), nm(1, "刻む2", "CH 2"), { ja: "ドラム", en: "DRUM" }, { ja: "パッド", en: "PAD" }];
 }
 const loudAtS = (S: number): number => (an ? loudAt(an, S) : 0);
+/**
+ * 前のコマ（prev）から今（S）までに、位置 s を通り過ぎたか。
+ * 曲の終わりから頭に戻った（くり返し）ときは通ったとみなす。巻き戻し（■・位置のバー）や大きな飛ばしは、通っていないことにする。
+ */
+export function passed(prev: number, S: number, s: number): boolean {
+  if (S >= prev) return S - prev < 8 && s > prev && s <= S;
+  // 頭に戻ったのは、終わりの近くから頭の近くへ来たときだけ（それ以外の後戻りは巻き戻し）
+  return prev > STEPS - 8 && S < 8 && (s > prev || s <= S);
+}
+/** 短い線をたくさん引く：色と濃さ（4段）ごとにまとめて、1回で描く。 */
+function strokeBatched(ctx: CanvasRenderingContext2D, segs: { x1: number; y1: number; x2: number; y2: number; col: string; a: number }[]): void {
+  const groups = new Map<string, number[]>();
+  for (const s of segs) {
+    const key = `${s.col}|${Math.max(1, Math.min(4, Math.ceil(s.a * 4)))}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = []));
+    g.push(s.x1, s.y1, s.x2, s.y2);
+  }
+  for (const [key, g] of groups) {
+    const [col, lv] = key.split("|");
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = Number(lv) / 4;
+    ctx.beginPath();
+    for (let i = 0; i < g.length; i += 4) {
+      ctx.moveTo(g[i], g[i + 1]);
+      ctx.lineTo(g[i + 2], g[i + 3]);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
 const specAtS = (S: number): number[] => (an ? specAt(an, S) : new Array(40).fill(0));
 
 export const PRESETS = {
@@ -228,7 +259,7 @@ export const PANELS: Record<string, PanelDef> = {
   ember: { ja: "火の粉", en: "EMBER", g: "響き", draw(ctx, c, f, P, u, lf) {
       const st = rt.parts[lf.id] || (rt.parts[lf.id] = { list: [], prevS: f.S }), dt = rt.frameDt;
       if (rt.playing && dt > 0) {
-        let burst = 0; for (const k of kicks) if ((k.s > st.prevS && k.s <= f.S) || (st.prevS > f.S && (k.s > st.prevS || k.s <= f.S))) burst += 90;
+        let burst = 0; for (const k of kicks) if (passed(st.prevS, f.S, k.s)) burst += 90;
         burst += Math.round(f.loud * 5);
         for (let i = 0; i < burst && st.list.length < 1600; i++) st.list.push({ x: .5 + (Math.random() - .5) * .5, y: 1, vx: (Math.random() - .5) * .35, vy: -(.6 + Math.random() * .9) * (.6 + f.kick * .7), life: 1, split: Math.random() < .04 });
         const add = [];
@@ -238,9 +269,11 @@ export const PANELS: Record<string, PanelDef> = {
         }
         st.list = st.list.concat(add).filter((p: { life: number; y: number }) => p.life > 0 && p.y < 1.05);
       }
-      st.prevS = f.S; ctx.lineWidth = u * .18; ctx.lineCap = "round";
-      for (const p of st.list) { ctx.strokeStyle = p.life > .6 ? P.a1 : P.a2; ctx.globalAlpha = Math.min(1, p.life * 1.4); const x = c.x + p.x * c.w, y = c.y + p.y * c.h; line(ctx, x, y, x - p.vx * c.w * .03, y - p.vy * c.h * .03); }
-      ctx.globalAlpha = 1; ctx.lineCap = "butt"; ctx.fillStyle = P.a1; ctx.fillRect(c.x + c.w * .22, c.y + c.h - u * .3, c.w * .56, u * .3);
+      st.prevS = f.S; ctx.lineWidth = u * .18;
+      strokeBatched(ctx, st.list.map((p: { x: number; y: number; vx: number; vy: number; life: number }) => {
+        const x = c.x + p.x * c.w, y = c.y + p.y * c.h;
+        return { x1: x, y1: y, x2: x - p.vx * c.w * .03, y2: y - p.vy * c.h * .03, col: p.life > .6 ? P.a1 : P.a2, a: Math.min(1, p.life * 1.4) };
+      })); ctx.fillStyle = P.a1; ctx.fillRect(c.x + c.w * .22, c.y + c.h - u * .3, c.w * .56, u * .3);
     } },
 
   spectrum: { ja: "帯域", en: "SPECTRUM", g: "響き", draw(ctx, c, f, P, u, lf) {
@@ -295,23 +328,27 @@ export const PANELS: Record<string, PanelDef> = {
       const st = rt.parts[lf.id] || (rt.parts[lf.id] = { bursts: [], sparks: [], prevS: f.S, n: 0 }), dt = rt.frameDt;
       const cols = [P.a1, P.a2, P.ink, mix(P.a1, P.a2, .5), "#8fe3cf"];
       if (rt.playing && dt > 0) {
-        const crossed = (s: number) => (s > st.prevS && s <= f.S) || (st.prevS > f.S && (s > st.prevS || s <= f.S));
+        let opened = 0;
         for (const e of events) {
-          if (!crossed(e.s) || !(e.kind === "kick" || (e.tr < 2 && noise(e.s, 93) < .35))) continue;
+          if (opened >= 3) break; // 1コマで開くのは3つまで
+          if (!passed(st.prevS, f.S, e.s) || !(e.kind === "kick" || (e.tr < 2 && noise(e.s, 93) < .35))) continue;
+          opened++;
           const id = st.n++, bx = .15 + .7 * noise(id, 94), by = .15 + .5 * noise(id, 95), col = cols[id % cols.length], big = e.kind === "kick";
           st.bursts.push({ id, x: bx, y: by, t: 0, col });
-          const n = big ? 130 : 60;
+          const n = big ? 70 : 30;
           for (let k = 0; k < n; k++) { const a = Math.random() * Math.PI * 2, sp = (big ? .32 : .2) * (.4 + Math.random() * .6); st.sparks.push({ b: id, x: bx, y: by, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1 + Math.random() * .8, col: Math.random() < .2 ? P.ink : col }); }
         }
         for (const p of st.sparks) { p.vx *= .985; p.vy = p.vy * .985 + .12 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt * .55; }
-        st.sparks = st.sparks.filter((p: { life: number }) => p.life > 0).slice(-4000);
+        st.sparks = st.sparks.filter((p: { life: number }) => p.life > 0).slice(-1500);
         st.bursts.forEach((b: { t: number }) => (b.t += dt)); st.bursts = st.bursts.filter((b: { t: number }) => b.t < 2.4);
       }
       st.prevS = f.S;
       for (const b of st.bursts) { ctx.fillStyle = b.col; ctx.globalAlpha = .06 * (1 - b.t / 2.4); circle(ctx, c.x + b.x * c.w, c.y + b.y * c.h, Math.min(c.w, c.h) * (.1 + b.t * .12)); ctx.fill(); } // 煙
-      ctx.lineCap = "round"; ctx.lineWidth = u * .16;
-      for (const p of st.sparks) { const x = c.x + p.x * c.w, y = c.y + p.y * c.h; ctx.strokeStyle = p.col; ctx.globalAlpha = Math.min(1, p.life); line(ctx, x, y, x - p.vx * c.w * .08, y - p.vy * c.h * .08); }
-      ctx.globalAlpha = 1; ctx.lineCap = "butt";
+      ctx.lineWidth = u * .16;
+      strokeBatched(ctx, st.sparks.map((p: { x: number; y: number; vx: number; vy: number; life: number; col: string }) => {
+        const x = c.x + p.x * c.w, y = c.y + p.y * c.h;
+        return { x1: x, y1: y, x2: x - p.vx * c.w * .08, y2: y - p.vy * c.h * .08, col: p.col, a: Math.min(1, p.life) };
+      }));
     } },
 
   ticker: { ja: "電光", en: "TICKER", g: "文字", led: true, draw(ctx, c, f, P, u) {
