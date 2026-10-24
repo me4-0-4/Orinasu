@@ -84,7 +84,7 @@ function label(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h
     line(ctx, x + e, y + u * .8, x + e, y + h - u * .8); ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.fillStyle = P.ink; let end: number;
     if (V.lang === "ja") { ctx.font = `${u * 1.3}px ${DOT}`; ctx.textAlign = "center"; [...name].forEach((ch, i) => ctx.fillText(ch, x + e / 2, y + u * 2.2 + i * u * 1.5)); ctx.textAlign = "left"; end = u * 2.2 + name.length * u * 1.5; }
     else { ctx.save(); ctx.translate(x + e / 2 - u * .45, y + u * 1.2); ctx.rotate(Math.PI / 2); ctx.font = `${u * 1.1}px ${DOT}`; ctx.fillText(name, 0, 0); end = u * 1.6 + ctx.measureText(name).width; ctx.restore(); }
-    if (h > end + u * 13) for (let k = 0; k < 16; k++) { const ty = y + h - u * 1.2 - (15 - k) * u * .7, cur = k === f.step; ctx.fillStyle = cur ? P.a1 : P.dim; ctx.fillRect(x + e * (cur ? .2 : .35), ty, e * (cur ? .6 : .3), u * (cur ? .25 : .1)); }
+    if (h > end + u * 13) for (let k = 0; k < TL.stepsPerBar; k++) { const ty = y + h - u * 1.2 - (TL.stepsPerBar - 1 - k) * u * .7, cur = k === f.step; ctx.fillStyle = cur ? P.a1 : P.dim; ctx.fillRect(x + e * (cur ? .2 : .35), ty, e * (cur ? .6 : .3), u * (cur ? .25 : .1)); }
     return { x: x + e + u * 1.2, y: y + u * 1.2, w: w - e - u * 2.4, h: h - u * 2.4 };
   }
   return { x: x + u * 1.2, y: y + u * 1.2, w: w - u * 2.4, h: h - u * 2.4 };
@@ -249,7 +249,7 @@ function drawBase(f: Feat, P: Palette, g: Geom, u: number): void {
 function drawTop(f: Feat, P: Palette, g: Geom, u: number): void {
   const T = V.layers.top, s = Math.min(g.VW, g.VH);
   if (T.lines) { // 細い直線：拍ごとに引き直す
-    const k = f.bar * 4 + f.beat; ctx.strokeStyle = P.ink; ctx.lineWidth = u * .1;
+    const k = f.bar * 16 + f.beat; ctx.strokeStyle = P.ink; ctx.lineWidth = u * .1;
     for (let i = 0; i < 6; i++) { ctx.globalAlpha = .35 + .4 * noise(i, k + 81); const a = noise(i, k + 82) * Math.PI, cx = g.VW * noise(i, k + 83), cy = g.VH * noise(i, k + 84), L = g.VW + g.VH; line(ctx, cx - Math.cos(a) * L, cy - Math.sin(a) * L, cx + Math.cos(a) * L, cy + Math.sin(a) * L); }
     for (let i = 0; i < 3; i++) { ctx.globalAlpha = .4; circle(ctx, g.VW * noise(i, k + 85), g.VH * noise(i, k + 86), s * (.1 + .35 * noise(i, k + 87))); ctx.stroke(); }
     ctx.globalAlpha = 1;

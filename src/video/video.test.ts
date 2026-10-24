@@ -154,3 +154,31 @@ test("電光掲示板：LED のときは、文字を粒の幅ずつ動かす", a
   for (const x of firsts) assert.ok(Math.abs(((firsts[0] - x) / 7) - Math.round((firsts[0] - x) / 7)) < 1e-9);
   rt.ledCell = 0;
 });
+
+test("3拍子（1小節＝12ステップ）：位置・拍・フィルが拍子どおり。全部のパネルが描ける", async () => {
+  const { PANELS, bindTimeline, rt } = await import("./panels.ts");
+  const tl = buildTimeline(base({ totalSteps: 48, stepsPerBar: 12 }));
+  const z = new Float32Array(48 * 100);
+  const an = analyze({ l: z, r: z }, 48000, 100, 48);
+  bindTimeline(tl, an);
+  const f = featAt(tl, an, 14.5); // 2小節目の2拍目（12ステップ目から数えて 2.5）
+  assert.equal(f.bar, 1);
+  assert.equal(f.beat, 0);
+  assert.equal(f.step, 2);
+  assert.ok(featAt(tl, an, 36 + 7).isFill); // 4小節目の後ろ半分
+  assert.ok(!featAt(tl, an, 36 + 5).isFill);
+  // 描く命令は何もしない、文字の幅だけ返す Canvas の代わり
+  const ctx = new Proxy({}, {
+    get: (_t, k) => (k === "measureText" ? (s: string) => ({ width: s.length * 10 }) : () => undefined),
+    set: () => true,
+  }) as unknown as CanvasRenderingContext2D;
+  const P = { bg: "#000000", panel: "#000000", ink: "#ffffff", line: "#333333", a1: "#ffaa00", a2: "#ff6677", dim: "#888888" };
+  rt.parts = {};
+  rt.frameDt = 1 / 30;
+  rt.playing = true;
+  Object.entries(PANELS).forEach(([key, def], i) => {
+    if (key === "sozai") return; // 画像を作るので、画面のある所でだけ
+    // パネルごとに別の番号（同じ番号だと、ほかのパネルの状態を読んでしまう。映像の側では中身を替えると状態を捨てる）
+    for (const S of [0, 5.5, 13, 47.9]) def.draw(ctx, { x: 0, y: 0, w: 400, h: 300 }, featAt(tl, an, S), P, 10, { id: 100 + i });
+  });
+});
