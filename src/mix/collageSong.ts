@@ -1,3 +1,4 @@
+import { planDrops, renderDrops, type Drop } from "./drops.ts";
 import { createRng } from "../theory/rng.ts";
 import { keyShortName } from "../theory/key.ts";
 import { totalBeats, type Phrase } from "../phrase/types.ts";
@@ -119,11 +120,11 @@ export interface CollageResult {
 /** ミキサーに並ぶ1本分の波形（ステム）。マスターに行く前の、そのトラックだけの音。 */
 export interface Stem {
   id: string;
-  kind: "track" | "pad" | "bed" | "sfx";
+  kind: "track" | "pad" | "bed" | "sfx" | "drop";
   /** track・pad：どの層のものか（層の曲の id）。この層のフェーダー（ミュート・音量）が掛かる。 */
   phraseId?: string;
   /** pad・bed・sfx：そのチャンネルのフェーダー（パッドの量・ドラムループの音量・効果音の量）も掛かる。 */
-  channel?: "pad" | "bed" | "sfx";
+  channel?: "pad" | "bed" | "sfx" | "drop";
   pcm: Pcm;
 }
 
@@ -141,13 +142,18 @@ export interface StemSet {
   faders: Record<string, number>;
   /** 全体のエフェクト（マスター）。 */
   masterFx: TrackFx | undefined;
+  /** 置いた音（置く音を使っていなければ空）。 */
+  drops: Drop[];
 }
+
+/** 置く音の中身を、曲のサンプリングレートの波形で返す（用意できなければ null）。 */
+export type SoundSource = (soundId: string) => Promise<Pcm | null>;
 
 /** 層のフェーダー：ミュートなら0、そうでなければ音量（無ければ1）。 */
 export const faderOf = (lane: Pick<Lane, "muted" | "volume">): number => (lane.muted ? 0 : (lane.volume ?? 1));
 
 /** フェーダーの名前：層は曲の id、そのほかのチャンネルは @ をつけた名前。 */
-export const CHANNEL_FADERS = { bed: "@bed", pad: "@pad", sfx: "@sfx" } as const;
+export const CHANNEL_FADERS = { bed: "@bed", pad: "@pad", sfx: "@sfx", drop: "@drop" } as const;
 /** マスターのフェーダー（コンプ・リミッターのあとに掛かる）。 */
 export const MASTER_FADER = "@master";
 /** 層の定位（-1〜1）の名前。層の曲の id の前に ~ をつける。 */
@@ -174,7 +180,7 @@ export interface SoloState {
 }
 
 /** 曲の設定から、全部のフェーダーの値（層ごとの音量・ミュート・ソロと、ドラムループ・パッド・効果音の量）。 */
-export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted">, solo?: SoloState): Record<string, number> {
+export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted" | "drops">, solo?: SoloState): Record<string, number> {
   // 外した素材のソロは数えない（ソロが残っていて、全部が無音になるのを避ける）
   const anySolo = !!solo && (solo.bed || (song.lanes ?? []).some((l) => solo.lanes.has(l.phraseId)));
   const laneValue = (l: Lane): number => (solo?.lanes.has(l.phraseId) ? (l.volume ?? 1) : anySolo ? 0 : faderOf(l));
@@ -186,6 +192,8 @@ export function songFaders(song: Pick<Song, "lanes" | "params" | "bedMuted">, so
     [CHANNEL_FADERS.pad]: song.params.pad,
     [CHANNEL_FADERS.sfx]: anySolo ? 0 : song.params.sfx,
     [MASTER_FADER]: song.params.master,
+    // 置く音：ソロのときは鳴らさない（効果音と同じ）
+    ...(song.drops ? { [CHANNEL_FADERS.drop]: anySolo || song.drops.muted ? 0 : (song.drops.volume ?? 1) } : {}),
   };
 }
 
@@ -241,6 +249,8 @@ export async function buildStems(
   reverb?: ReverbFn,
   /** 前と同じ入力のトラック（と伸ばし）の波形を使い回す入れ物。無ければ毎回ぜんぶ作る。 */
   cache?: BuildCache,
+  /** 置く音の中身。無ければ、置く音は鳴らさない。 */
+  sounds?: SoundSource,
 ): Promise<StemSet | null> {
   const cached = <T>(key: string, make: () => Promise<T> | T): Promise<T> => (cache ? cache.getOrCompute(key, make) : Promise.resolve(make()));
   const fxOn = (fx: TrackFx | undefined): fx is TrackFx => !!reverb && !trackIsOff(fx);
@@ -460,6 +470,28 @@ export async function buildStems(
     });
     stems.push({ id: "sfx", kind: "sfx", channel: "sfx", pcm: sfx });
   }
+  // 置く音：刻まずに、まるごと曲の上に置く（置き場所は種から。音量・ミュートはフェーダー @drop で）
+  let drops: Drop[] = [];
+  if (song.drops && sounds && song.drops.soundIds.length > 0) {
+    const pcms = new Map<string, Pcm>();
+    for (const id of song.drops.soundIds) {
+      const pcm = await sounds(id);
+      if (pcm && pcm.l.length > 0) pcms.set(id, pcm);
+    }
+    const ids = [...pcms.keys()];
+    drops = planDrops({
+      totalSteps,
+      stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT,
+      seed: song.drops.seed,
+      amount: song.drops.amount,
+      sounds: ids.map((id) => ({ id, steps: Math.ceil(pcms.get(id)!.l.length / stepSamples) })),
+    });
+    if (drops.length > 0) {
+      const dropKey = JSON.stringify([drops, ids.map((id) => (cache ? cache.idOf(pcms.get(id)!) : 0)), totalSteps, stepSamples]);
+      const pcm = await cached(`drop|${dropKey}`, () => renderDrops(drops, pcms, Math.max(1, Math.round(totalSteps * stepSamples)), stepSamples));
+      stems.push({ id: "drop", kind: "drop", channel: "drop", pcm });
+    }
+  }
   return {
     stems,
     lanes: built.map((b) => b.view),
@@ -469,8 +501,9 @@ export async function buildStems(
     sampleRate,
     bpm: song.bpm,
     stepSamples,
-    faders: songFaders({ lanes, params: song.params, bedMuted: song.bedMuted }),
+    faders: songFaders({ lanes, params: song.params, bedMuted: song.bedMuted, drops: song.drops }),
     masterFx: song.fx.master,
+    drops,
   };
 }
 
@@ -536,8 +569,9 @@ export async function buildCollage(
   sampleRate: number,
   reverb?: ReverbFn,
   cache?: BuildCache,
+  sounds?: SoundSource,
 ): Promise<CollageResult | null> {
-  const set = await buildStems(song, phrases, render, sampleRate, reverb, cache);
+  const set = await buildStems(song, phrases, render, sampleRate, reverb, cache, sounds);
   if (!set) return null;
   return { pcm: await mixdown(set, reverb), lanes: set.lanes, bed: set.bed, totalSteps: set.totalSteps, keyName: set.keyName };
 }

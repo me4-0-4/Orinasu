@@ -61,3 +61,52 @@ create policy "own rows" on public.songs
   for all to authenticated
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
+
+-- --- 読み込んだ音（段階7） ------------------------------------------------------
+-- 音の情報（名前・長さ・テンポなど）はこの表に、音の中身は Storage の「sounds」置き場に入れる。
+
+create table if not exists public.sounds (
+  user_id    uuid    not null default auth.uid() references auth.users (id) on delete cascade,
+  id         text    not null,
+  data       jsonb   not null,
+  updated_at bigint  not null,
+  deleted    boolean not null default false,
+  primary key (user_id, id)
+);
+
+alter table public.sounds enable row level security;
+revoke all on public.sounds from anon;
+grant select, insert, update on public.sounds to authenticated;
+
+drop policy if exists "own rows" on public.sounds;
+create policy "own rows" on public.sounds
+  for all to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
+
+-- 音の中身の置き場。公開しない。1ファイル 50MB まで。
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('sounds', 'sounds', false, 52428800)
+on conflict (id) do update set public = false, file_size_limit = 52428800;
+
+-- 置き場の中は「ユーザーID/音のID」。自分のフォルダの中だけ読み書き・削除できる。
+drop policy if exists "own sounds select" on storage.objects;
+create policy "own sounds select" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'sounds' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+drop policy if exists "own sounds insert" on storage.objects;
+create policy "own sounds insert" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'sounds' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+drop policy if exists "own sounds update" on storage.objects;
+create policy "own sounds update" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'sounds' and (storage.foldername(name))[1] = (select auth.uid())::text)
+  with check (bucket_id = 'sounds' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+drop policy if exists "own sounds delete" on storage.objects;
+create policy "own sounds delete" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'sounds' and (storage.foldername(name))[1] = (select auth.uid())::text);

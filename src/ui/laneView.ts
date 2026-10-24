@@ -4,9 +4,9 @@ import type { LaneEvent } from "../mix/sequencer";
 /** トラックの行：層・下地・伸ばし・マスター。 */
 export interface TrackRow {
   type: "track";
-  /** トラックの鍵：lane:<曲のid>・bed・pad・master。 */
+  /** トラックの鍵：lane:<曲のid>・bed・pad・drop・master。 */
   key: string;
-  kind: "lane" | "bed" | "pad" | "master";
+  kind: "lane" | "bed" | "pad" | "drop" | "master";
   name: string;
   locked: boolean;
   muted: boolean;
@@ -193,6 +193,18 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
         if (row.kind === "bed") {
           g.fillStyle = "rgba(200,200,210,0.55)";
           for (const ev of row.events) g.fillRect(GUTTER + ev.step * sx, mid - 5, Math.max(1.5, sx * 0.6), 10);
+        } else if (row.kind === "drop") {
+          // 置いた音：鳴っている長さの帯（音ごとに色）
+          g.globalAlpha = row.muted ? 0.25 : 0.85;
+          for (const ev of row.events) {
+            g.fillStyle = `hsl(${(ev.slice * 97 + 30) % 360} 70% 60%)`;
+            g.fillRect(GUTTER + ev.step * sx, mid - 6, Math.max(2, ev.len * sx - 1), 12);
+          }
+          g.globalAlpha = 1;
+          if (row.events.length === 0) {
+            g.fillStyle = dim;
+            g.fillText("置く場所がまだない（右の「置く音」で多さを上げるか、振り直す）", GUTTER + 6, mid);
+          }
         } else if (row.kind === "lane") {
           g.globalAlpha = row.muted ? 0.25 : 1;
           const takes = new Set(row.takeSteps ?? []);

@@ -1,7 +1,6 @@
 import "./style.css";
 import { AudioEngine } from "./audio/context";
-import type { SynthEngine } from "./audio/synth";
-import { LayerSynths, DEFAULT_VOLUME } from "./audio/layerSynths";
+import { LayerSynths, DEFAULT_VOLUME, type LayerInstrument } from "./audio/layerSynths";
 import { DrumMachine, drumNoteNumbers, noteNumberToDrum, type DrumId } from "./audio/drums";
 import { clone, defaultSynthParams, synthPresets, type SynthParams } from "./audio/synthParams";
 import { PianoKeyboard } from "./ui/pianoKeyboard";
@@ -25,7 +24,10 @@ import {
   type LayerRole,
   type Note,
   type Phrase,
+  usesSampler,
+  isPadLayer,
 } from "./phrase/types";
+import { defaultSamplerParams, type SamplerParams } from "./sound/sampler";
 import { Arpeggiator } from "./audio/arpeggiator";
 import { buildAssistPanel } from "./ui/assistPanel";
 import {
@@ -70,6 +72,10 @@ import { createCloudPanel } from "./ui/cloudPanel";
 import { buildUserPresets } from "./ui/userPresets";
 import { buildMixPanel } from "./ui/mixPanel";
 import { buildVideoPanel } from "./ui/videoPanel";
+import { buildSoundPanel } from "./ui/soundPanel";
+import { SoundLibrary } from "./sound/library";
+import { soundPhrase } from "./sound/soundPhrase";
+import type { Pcm } from "./mix/pcm";
 import { renderPhrase } from "./audio/renderPhrase";
 import { reverbWet } from "./audio/reverbWet";
 import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
@@ -78,8 +84,10 @@ const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = "";
 
 const engine = new AudioEngine();
+// 読み込んだ音の棚（サンプラーの層が鳴らす音もここから取る）
+const soundLibrary = new SoundLibrary(engine.ctx);
 // 音色と音量は層ごと。層のないとき（まだ何も録音していない状態）の試し弾き用に、仮の層を1つ持つ。
-const synths = new LayerSynths(engine);
+const synths = new LayerSynths(engine, (id) => soundLibrary.cached(id));
 const scratchLayer: Layer = {
   ...createEmptyLayer("melody"),
   id: "scratch",
@@ -98,10 +106,49 @@ function soundLayer(): Layer {
   return last ?? scratchLayer;
 }
 
+/** 刻むタブ・映像タブの材料：保存したフレーズと、テンポを入れた読み込んだ音。 */
+function mixSources(): Phrase[] {
+  const sounds = soundLibrary.sounds.map(soundPhrase).filter((p): p is Phrase => p !== null);
+  return [...savedPhrases, ...sounds];
+}
+
+/** 置く音（刻むタブ）：読み込んだ音を、曲のサンプリングレートのステレオの波形にする（音ごとに1回だけ）。 */
+const soundPcms = new Map<string, Promise<Pcm | null>>();
+function soundPcm(id: string): Promise<Pcm | null> {
+  let hit = soundPcms.get(id);
+  if (!hit) {
+    hit = (async () => {
+      const buffer = await soundLibrary.buffer(id);
+      if (!buffer) return null;
+      const rate = engine.ctx.sampleRate;
+      let b = buffer;
+      if (buffer.sampleRate !== rate) {
+        // サンプリングレートが違う音は、オフラインで鳴らし直してそろえる
+        const off = new OfflineAudioContext(2, Math.max(1, Math.ceil(buffer.duration * rate)), rate);
+        const src = off.createBufferSource();
+        src.buffer = buffer;
+        src.connect(off.destination);
+        src.start();
+        b = await off.startRendering();
+      }
+      const l = new Float32Array(b.getChannelData(0));
+      const r = b.numberOfChannels > 1 ? new Float32Array(b.getChannelData(1)) : new Float32Array(l);
+      return { l, r };
+    })();
+    // 中身がまだ無かった（取り寄せ中）ときは覚えない
+    hit.then((p) => p === null && soundPcms.delete(id)).catch(() => soundPcms.delete(id));
+    soundPcms.set(id, hit);
+  }
+  return hit;
+}
+
+/** サンプラータブの「鍵盤で鳴らす」欄を、編集中の層に合わせる（タブを作ったあとで差し替える）。 */
+let refreshSamplerUi: () => void = () => {};
+
 /** 鳴らし始めた音を、どのシンセで鳴らしたか覚えておく（途中で編集対象の層が変わっても正しく止める）。 */
-const liveEngines = new Map<string, SynthEngine>();
+const liveEngines = new Map<string, LayerInstrument>();
 function liveOn(voiceId: string, pitch: number, velocity = 1): void {
-  const eng = synths.forLayer(soundLayer());
+  const eng = synths.instrumentFor(soundLayer());
   liveEngines.set(voiceId, eng);
   eng.noteOn(voiceId, pitch, velocity);
 }
@@ -162,6 +209,10 @@ function ensurePhrase(): Phrase {
     currentPhrase = createEmptyPhrase(1, 120, 4);
     const layer = createEmptyLayer("melody");
     layer.synth = clone(scratchLayer.synth ?? defaultSynthParams); // 試し弾きで作った音を引き継ぐ
+    if (scratchLayer.sampler) {
+      layer.instrument = scratchLayer.instrument;
+      layer.sampler = { ...scratchLayer.sampler };
+    }
     currentPhrase.layers.push(layer);
     activeLayerId = layer.id;
   }
@@ -204,6 +255,8 @@ function refreshPhraseUI(): void {
   synths.prune(new Set(currentPhrase?.layers.map((l) => l.id) ?? []));
   updateFooterMode();
   syncSoundPanel();
+  preloadSamples();
+  refreshSamplerUi();
   refreshAssist();
 }
 
@@ -216,12 +269,12 @@ const transport = new Transport(engine.ctx, engine.drumOut, {
       const id = noteNumberToDrum[note.pitch];
       if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), time);
     } else {
-      synths.forLayer(layer).noteOn(`sched:${note.id}`, note.pitch, note.velocity, time);
+      synths.instrumentFor(layer).noteOn(`sched:${note.id}`, note.pitch, note.velocity, time);
     }
   },
   stopNote: (layer, note, time) => {
     if (layer.role !== "drums") {
-      synths.forLayer(layer).noteOff(`sched:${note.id}`, false, time);
+      synths.instrumentFor(layer).noteOff(`sched:${note.id}`, false, time);
     }
   },
   onStateChange: (state: TransportState) => {
@@ -269,7 +322,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 const mixPanel = buildMixPanel({
-  getPhrases: () => savedPhrases,
+  getPhrases: mixSources,
   onSongChange: persistSongSoon,
   // 保存した曲は、読むときに今の形へ直す（migrateSong は id を作業中の曲にするので、保存時の id を戻す）
   listSavedSongs: async () => (await loadSavedSongs()).map((raw) => ({ ...migrateSong(raw), id: raw.id })),
@@ -282,8 +335,13 @@ const mixPanel = buildMixPanel({
     allSoundsOff();
   },
   audio: { ctx: engine.ctx, out: engine.masterGain },
-  render: (phrase, bpm, opts) => renderPhrase(phrase, bpm, engine.ctx.sampleRate, opts),
+  render: (phrase, bpm, opts) =>
+    renderPhrase(phrase, bpm, engine.ctx.sampleRate, { ...opts, samples: (id) => soundLibrary.buffer(id) }),
   reverb: (pcm, seconds, toneHz) => reverbWet(pcm, engine.ctx.sampleRate, seconds, toneHz),
+  sounds: {
+    list: () => soundLibrary.sounds.map((s) => ({ id: s.id, name: s.name, durationSec: s.durationSec })),
+    pcm: (id) => soundPcm(id),
+  },
 });
 
 function toggleRecord(): void {
@@ -381,7 +439,8 @@ function syncSoundPanel(): void {
     visualizer.drawStatic();
   }
   synthHeading.textContent =
-    target === scratchLayer ? "シンセ" : `シンセ（編集中：${roleLabels[target.role]}の層）`;
+    (target === scratchLayer ? "シンセ" : `シンセ（編集中：${roleLabels[target.role]}の層）`) +
+    (usesSampler(target) ? " ※この層はいまサンプラーで鳴っています（サンプラータブ）" : "");
 }
 
 // 自分の音色：いま編集中の層の音色を名前を付けて保存し、あとで別の層にも使える
@@ -449,7 +508,8 @@ let appliedGuide: number | null | undefined = undefined;
 /** 調やコードの材料にする音（ドラム以外の全レイヤー）。 */
 function harmonicNotes(): Note[] {
   if (!currentPhrase) return [];
-  return currentPhrase.layers.filter((l) => l.role !== "drums").flatMap((l) => l.notes);
+  // パッド型のサンプラーの層は、音の高さではなく断片の番号なので入れない
+  return currentPhrase.layers.filter((l) => l.role !== "drums" && !isPadLayer(l)).flatMap((l) => l.notes);
 }
 
 function currentKey(): Key | null {
@@ -892,7 +952,7 @@ phraseTab.className = "tab-panel phrase-tab";
 phraseTab.append(phraseSplit, rollDock);
 const videoPanel = buildVideoPanel({
   mix: mixPanel,
-  getPhrases: () => savedPhrases,
+  getPhrases: mixSources,
   materials: { load: loadMaterials, save: saveMaterial, remove: deleteMaterial },
   gotoMix: () => selectTab("mix"),
   audio: {
@@ -905,7 +965,55 @@ const videoPanel = buildVideoPanel({
     },
   },
 });
-main.append(phraseTab, mixPanel.el, videoPanel.el);
+/** サンプラーの層が使う音を、先に音にしておく（押したらすぐ鳴るように）。 */
+function preloadSamples(): void {
+  for (const layer of [scratchLayer, ...(currentPhrase?.layers ?? [])]) {
+    if (usesSampler(layer)) void soundLibrary.buffer(layer.sampler!.soundId);
+  }
+}
+soundLibrary.subscribe(preloadSamples);
+soundLibrary.subscribe(() => mixPanel.refreshMaterials());
+
+const soundPanel = buildSoundPanel({
+  library: soundLibrary,
+  instrument: {
+    target: () => {
+      const layer = soundLayer();
+      return { layer, label: layer === scratchLayer ? "試し弾き（まだフレーズがありません）" : `${roleLabels[layer.role]}の層` };
+    },
+    useSound: (soundId) => {
+      const layer = soundLayer();
+      allSoundsOff();
+      if (soundId === null) {
+        layer.instrument = "synth";
+      } else {
+        // 前に使っていた音と同じなら、鳴らし方の設定はそのまま
+        layer.sampler = layer.sampler?.soundId === soundId ? layer.sampler : defaultSamplerParams(soundId);
+        layer.instrument = "sampler";
+        void soundLibrary.buffer(soundId);
+      }
+      refreshPhraseUI();
+      if (layer !== scratchLayer) persistSoon();
+    },
+    change: (patch: Partial<SamplerParams>) => {
+      const layer = soundLayer();
+      if (!layer.sampler) return;
+      layer.sampler = { ...layer.sampler, ...patch };
+      synths.instrumentFor(layer);
+      if (layer !== scratchLayer) persistSoon();
+    },
+  },
+  audio: { ctx: engine.ctx, out: engine.masterGain },
+  prepareAudio: async () => {
+    await ensureAudio();
+    stopPreview();
+    mixPanel.stop();
+    if (transport.state !== "stopped") transport.stop();
+    allSoundsOff();
+  },
+});
+refreshSamplerUi = () => soundPanel.refreshInstrument();
+main.append(phraseTab, mixPanel.el, videoPanel.el, soundPanel.el);
 
 // --- タブ切り替え ---------------------------------------------------------
 
@@ -916,6 +1024,7 @@ const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "phrase", label: "フレーズ", panel: phraseTab },
   { id: "mix", label: "刻む", panel: mixPanel.el },
   { id: "video", label: "映像", panel: videoPanel.el },
+  { id: "sound", label: "サンプラー", panel: soundPanel.el },
 ];
 let currentTab = "perform";
 function selectTab(id: string): void {
@@ -924,6 +1033,7 @@ function selectTab(id: string): void {
   document.body.dataset.tab = id;
   // 映像タブは刻むタブの曲を鳴らして見るので、行き来しても止めない
   if (id !== "mix" && id !== "video") mixPanel.stop();
+  if (id !== "sound") soundPanel.stop();
   pianoRoll.deleteButton.hidden = id !== "phrase"; // ノート削除はピアノロールのあるタブだけ
   for (const tab of tabs) {
     const active = tab.id === id;
@@ -1021,7 +1131,8 @@ const arpVoices = new Set<number>();
 
 function lockedNote(raw: number): number {
   const key = currentKey();
-  return currentPhrase?.scaleLock && key ? snapToScale(raw, key) : raw;
+  // パッド型ではスケールロックで寄せない（寄せると別の断片が鳴ってしまう）
+  return currentPhrase?.scaleLock && key && !isPadLayer(soundLayer()) ? snapToScale(raw, key) : raw;
 }
 
 function noteOn(raw: number): void {
@@ -1095,11 +1206,18 @@ window.addEventListener("keydown", (e) => {
       e.preventDefault();
       if (currentTab === "mix") mixPanel.togglePlay();
       else if (currentTab === "video") videoPanel.togglePlay();
+      else if (currentTab === "sound") soundPanel.togglePlay();
       else togglePlay();
     } else if (currentTab === "mix" && target && ["range", "checkbox"].includes((target as HTMLInputElement).type) && mixPanel.key(e.code)) {
       // スライダーを動かしたあとも、M・S・Home は使える
       e.preventDefault();
     }
+    return;
+  }
+  if (currentTab === "sound" && e.code === "Space") {
+    // サンプラータブ：スペースは選んだ音の試聴⇔停止。ほかのキーは、ふだんどおり鍵盤を鳴らす
+    e.preventDefault();
+    soundPanel.togglePlay();
     return;
   }
   if (currentTab === "video") {
@@ -1228,12 +1346,15 @@ initCloud({
     void reloadPhraseList();
     void reloadUserPresets();
     mixPanel.refreshLibrary();
+    void soundLibrary.reload();
   },
+  onSoundsChanged: () => void soundLibrary.reload(),
   // 別のアカウントに切り替えて端末のデータを消したら、刻む曲も空にする（前の人の曲を新しい人の所に保存しない）
   onCleared: () => {
     if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
     persistSongTimer = null;
     pendingSong = null;
     mixPanel.setSong(createEmptySong());
+    soundPanel.stop();
   },
 });

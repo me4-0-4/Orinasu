@@ -1,6 +1,6 @@
 import { DEFAULT_VOLUME, MAX_VOLUME } from "../audio/layerSynths";
 import { quantizeGrids } from "../phrase/quantize";
-import { roleLabels, type Layer, type LayerRole, type Phrase } from "../phrase/types";
+import { roleLabels, usesSampler, type Layer, type LayerRole, type Phrase } from "../phrase/types";
 
 export interface LayerPanelHandlers {
   onAddLayer: (role: LayerRole) => void;
@@ -70,7 +70,7 @@ export function buildLayerPanel(handlers: LayerPanelHandlers): LayerPanel {
 
     const label = document.createElement("span");
     label.className = "layer-role-label";
-    label.textContent = `${roleLabels[layer.role]}${layer.generated ? "・候補" : ""}（${layer.notes.length}音）`;
+    label.textContent = `${roleLabels[layer.role]}${layer.generated ? "・候補" : ""}${usesSampler(layer) ? "・サンプラー" : ""}（${layer.notes.length}音）`;
 
     const muteBtn = document.createElement("button");
     muteBtn.type = "button";

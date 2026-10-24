@@ -71,6 +71,26 @@ export function knob(opts: {
   };
 }
 
+/** オン・オフの1行（押すたびに切り替わるボタン）。 */
+export function toggle(opts: { label: string; get: () => boolean; set: (v: boolean) => void; hint?: () => string }): Control {
+  const row = el("div", "ins-row ins-choice");
+  const name = el("span", "ins-label", opts.label);
+  const btn = button("", () => opts.set(!opts.get()), "layer-toggle ins-toggle");
+  const hint = el("div", "ins-hint");
+  row.append(name, btn, hint);
+  return {
+    el: row,
+    refresh() {
+      const on = opts.get();
+      btn.textContent = on ? "オン" : "オフ";
+      btn.classList.toggle("on", on);
+      const h = opts.hint?.() ?? "";
+      hint.textContent = h;
+      row.title = h;
+    },
+  };
+}
+
 /** 選択（セレクト）の1行。 */
 export function choice<T extends string>(opts: {
   label: string;

@@ -104,6 +104,19 @@ body {
   padding: 6px 16px;
   font-size: 0.82rem;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+/* タブが5つあるので、狭い画面では詰めて、それでも入らなければ横にずらせるようにする */
+@media (max-width: 720px) {
+  .tab-bar {
+    padding: 4px 8px 0;
+    overflow-x: auto;
+  }
+  .tab-button {
+    padding: 6px 10px;
+    flex: none;
+  }
 }
 
 .tab-button.active {
@@ -2417,4 +2430,182 @@ body[data-tab="video"] .app-footer {
   .vid-sw[aria-pressed="true"] .vid-lamp {
     box-shadow: none;
   }
+}
+
+/* --- サンプラー（音の棚） --- */
+.snd-shelf {
+  flex: 0 0 320px;
+}
+
+.snd-shelf.snd-drop {
+  border-color: var(--accent-green);
+}
+
+.snd-import {
+  align-self: flex-start;
+  flex: none;
+}
+
+.snd-hint {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: pre-line;
+}
+
+.snd-message,
+.snd-cloud {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: pre-line;
+}
+
+.snd-message:empty {
+  display: none;
+}
+
+.snd-message[data-kind="error"],
+.snd-cloud[data-kind="error"] {
+  color: var(--accent-orange);
+}
+
+.snd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.snd-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: var(--panel-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  padding: 6px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.snd-item.active {
+  border-left-color: var(--accent-green);
+}
+
+.snd-item.missing {
+  opacity: 0.7;
+}
+
+.snd-thumb {
+  width: 72px;
+  height: 32px;
+  flex: none;
+}
+
+.snd-item-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.snd-item-name {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snd-item-sub,
+.snd-item-cloud {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+}
+
+.snd-empty {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  padding: 12px 0;
+}
+
+.snd-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.snd-body[hidden],
+.snd-empty[hidden] {
+  display: none;
+}
+
+.snd-name {
+  flex: none;
+  max-width: 28em;
+}
+
+.snd-wave {
+  width: 100%;
+  height: 120px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+.snd-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.snd-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.snd-play {
+  min-width: 6.5em;
+}
+
+.snd-remove {
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .snd-shelf {
+    flex: none;
+  }
+}
+
+.snd-inst {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.snd-inst-target {
+  font-size: 0.82rem;
+}
+
+.snd-knobs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22em), 1fr));
+  gap: 2px 24px;
+}
+
+.snd-knobs[hidden],
+.snd-inst [hidden] {
+  display: none;
+}
+
+.ins-toggle {
+  justify-self: start;
+  min-width: 4em;
 }

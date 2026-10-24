@@ -1,3 +1,4 @@
+import { migrateDrops, type DropSettings } from "./drops.ts";
 import type { CutMode } from "./slicer.ts";
 import { migrateVideo, type VideoSettings } from "../video/settings.ts";
 import type { ShapeParams } from "./sequencer.ts";
@@ -115,6 +116,8 @@ export interface Song {
   params: SongParams;
   /** 映像（パネルの配置・層・配色など）。まだ映像タブを開いていなければ無い。 */
   video?: VideoSettings;
+  /** 置く音：読み込んだ音を、刻まずにまるごと曲の上に置く（置き場所は偶然）。まだ使っていなければ無い。 */
+  drops?: DropSettings;
   /** 「保存した曲」から開いた曲なら、そのid（「保存」で上書きする先）。作業中の曲にだけ付く。 */
   savedId?: string;
   updatedAt: number;
@@ -161,6 +164,8 @@ export function openedSong(saved: Song): Song {
 export const MIN_BPM = 40;
 export const MAX_BPM = 240;
 export const LENGTH_OPTIONS = [8, 16, 32, 64];
+/** 刻むタブで選べる拍子（1小節の拍数。4分音符で数える）。 */
+export const METER_OPTIONS = [2, 3, 4, 5, 6, 7];
 export const DEFAULT_BPM = 120;
 
 export const DEFAULT_PARAMS: SongParams = {
@@ -309,6 +314,8 @@ export function migrateSong(raw: unknown): Song {
   if (typeof r.drumId === "string" || r.drumId === null) song.drumId = r.drumId;
   if (r.bedMuted === true) song.bedMuted = true;
   if (typeof r.video === "object" && r.video !== null) song.video = migrateVideo(r.video);
+  const drops = migrateDrops(r.drops);
+  if (drops) song.drops = drops;
   if (typeof r.savedId === "string" && isSavedSongId(r.savedId)) song.savedId = r.savedId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(

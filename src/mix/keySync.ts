@@ -1,10 +1,10 @@
 import { detectKeys, type Key } from "../theory/key.ts";
-import type { Phrase } from "../phrase/types.ts";
+import { isPadLayer, type Phrase } from "../phrase/types.ts";
 
-/** フレーズの調：手動指定があればそれ、なければドラム以外の音から判定。分からなければnull。 */
+/** フレーズの調：手動指定があればそれ、なければドラム以外の音（パッド型のサンプラーは除く）から判定。分からなければnull。 */
 export function phraseKey(phrase: Phrase): Key | null {
   if (phrase.keyOverride) return phrase.keyOverride;
-  const notes = phrase.layers.filter((l) => l.role !== "drums").flatMap((l) => l.notes);
+  const notes = phrase.layers.filter((l) => l.role !== "drums" && !isPadLayer(l)).flatMap((l) => l.notes);
   return detectKeys(notes, 1)[0] ?? null;
 }
 

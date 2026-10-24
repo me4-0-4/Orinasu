@@ -457,3 +457,28 @@ test("ソロ：存在しない層（外した素材）のソロは数えない�
   // 存在する層のソロは効く
   assert.deepEqual(levels(songFaders(song, { lanes: new Set(["gone", "a"]), bed: false })), [1, 0, 0]);
 });
+
+test("拍子：2〜7拍でも、音楽・素材のどちらのモードでも曲ができる。長さは小節×拍子", async () => {
+  const sr = 2000;
+  for (const beatsPerBar of [2, 3, 5, 6, 7]) {
+    for (const style of ["music", "material"] as const) {
+      const a = phrase("a", 100);
+      a.beatsPerBar = beatsPerBar;
+      const phrases = [a, phrase("b", 120, 62)];
+      const base = createEmptySong();
+      const song: Song = { ...base, materialIds: ["a", "b"], bpm: 120, beatsPerBar, lengthBars: 8, params: { ...base.params, style } };
+      song.lanes = syncLanes(song, seq);
+      const render = async (p: Phrase, bpm: number): Promise<Pcm> => {
+        const len = Math.round((p.lengthBars * p.beatsPerBar * 60 * sr) / bpm);
+        const l = new Float32Array(len).map((_, i) => (i % 300 < 20 ? 0.5 : 0.01));
+        return { l, r: l.slice() };
+      };
+      const result = (await buildCollage(song, phrases, render, sr))!;
+      const expected = Math.round((8 * beatsPerBar * 60 * sr) / 120);
+      assert.ok(Math.abs(result.pcm.l.length - expected) <= 1, `${beatsPerBar}拍 ${style}`);
+      assert.ok(result.pcm.l.every((v) => Number.isFinite(v)), `${beatsPerBar}拍 ${style}：音が壊れていない`);
+      assert.ok(result.lanes.every((l) => l.events.every((e) => e.step >= 0 && e.step < result.totalSteps)), `${beatsPerBar}拍 ${style}：曲の中に打つ`);
+      assert.ok(result.lanes.some((l) => l.events.length > 0));
+    }
+  }
+});

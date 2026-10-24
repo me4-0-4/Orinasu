@@ -1,6 +1,7 @@
 import type { SynthParams } from "../audio/synthParams";
 import type { Key } from "../theory/key";
 import type { ChordSlot } from "../theory/chords";
+import type { SamplerParams } from "../sound/sampler";
 
 export type LayerRole = "melody" | "bass" | "drums" | "chords" | "other";
 
@@ -40,6 +41,20 @@ export interface Layer {
   mix?: LayerMix;
   /** この層の音色（シンセのツマミの値）。ドラム層は使わない。未設定なら役割ごとの初期音色。 */
   synth?: SynthParams;
+  /** この層を鳴らす楽器。未設定はシンセ。ドラム層は使わない。 */
+  instrument?: "synth" | "sampler";
+  /** サンプラーの設定（読み込んだ音・鳴らし方）。シンセに戻しても残しておく。 */
+  sampler?: SamplerParams;
+}
+
+/** パッド型のサンプラーの層か（鍵盤は音の高さではなく断片を選ぶので、調の判定などには使わない）。 */
+export function isPadLayer(layer: Pick<Layer, "role" | "instrument" | "sampler">): boolean {
+  return usesSampler(layer) && layer.sampler!.mode === "pads";
+}
+
+/** この層をサンプラーで鳴らすか。 */
+export function usesSampler(layer: Pick<Layer, "role" | "instrument" | "sampler">): boolean {
+  return layer.role !== "drums" && layer.instrument === "sampler" && !!layer.sampler;
 }
 
 export interface Phrase {
