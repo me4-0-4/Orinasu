@@ -29,6 +29,7 @@ import { musicSlotSteps } from "../mix/musicChop";
 import { divisionsFor, sliceLimits, type CutMode } from "../mix/slicer";
 import {
   LENGTH_OPTIONS,
+  METER_OPTIONS,
   MAX_BPM,
   MAX_LANE_VOLUME,
   MIN_BPM,
@@ -138,6 +139,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   let rebuildTimer: number | null = null;
   /** BPMを自分で触ったか。触っていなければ、最初に刻むときだけ、いちばん上のトラックの曲のテンポから始める。 */
   let bpmTouched = false;
+  /** 拍子を自分で選んだか（選んでいなければ、最初に刻むとき、いちばん上の素材の拍子にする）。 */
+  let meterTouched = false;
   /** ひとつ戻す・やり直す：層の種と、置く音の種。 */
   const undoStack: { lanes: SeedSnapshot; dropSeed?: number }[] = [];
   const redoStack: { lanes: SeedSnapshot; dropSeed?: number }[] = [];
@@ -300,6 +303,20 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   });
   const lengthBox = el("label", "tp-field");
   lengthBox.append(el("span", "tp-label", "長さ"), lengthSelect);
+  const meterSelect = el("select", "quantize-select tp-meter");
+  meterSelect.title = "拍子（1小節の拍数）。変えると、小節の区切りが変わるので、曲を作り直す";
+  for (const n of METER_OPTIONS) {
+    const o = el("option", undefined, `${n}/4`);
+    o.value = String(n);
+    meterSelect.appendChild(o);
+  }
+  meterSelect.addEventListener("change", () => {
+    song.beatsPerBar = Number(meterSelect.value);
+    meterTouched = true;
+    changed();
+  });
+  const meterBox = el("label", "tp-field");
+  meterBox.append(el("span", "tp-label", "拍子"), meterSelect);
   // 刻む（▾で、部分だけ刻み直す）
   const chopButton = button("刻む", () => void chop("all"), "roll-button tp-chop", "選んだ素材を、新しく刻む（固定したトラックは残す）");
   const chopMore = button("▾", () => {
@@ -337,7 +354,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const exportButton = button("書き出し", () => void saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
   const exportBox = el("div", "tp-export");
   exportBox.append(exportButton, loopSelect);
-  transport.append(playButton, posBox, bpmBox, lengthBox, chopBox, undoButton, redoButton, statusText, exportBox);
+  transport.append(playButton, posBox, bpmBox, meterBox, lengthBox, chopBox, undoButton, redoButton, statusText, exportBox);
 
   // ------------------------------------------------------------------ アレンジ画面（トラックヘッダー＋線）
 
@@ -1515,6 +1532,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     song.lanes = first ? lanes : rerollLanes(lanes, part, randomSeed);
     // まるごと振り直すときは、固定していない置く音の場所も変える
     if (!first && part === "all" && song.drops && !song.drops.locked) song.drops = { ...song.drops, seed: randomSeed() };
+    if (first && !meterTouched) {
+      // 最初に刻むときだけ、いちばん上のトラックの曲の拍子から始める（あとで変えられる）
+      const top = sources.find((p) => p.id === song.lanes![0].phraseId) ?? sources[0];
+      if (METER_OPTIONS.includes(top.beatsPerBar)) song.beatsPerBar = top.beatsPerBar;
+    }
     if (first && !bpmTouched) {
       // 最初に刻むときだけ、いちばん上のトラックの曲のテンポから始める（このあとは曲のBPMだけで決まる）
       const top = sources.find((p) => p.id === song.lanes![0].phraseId) ?? sources[0];
@@ -1691,6 +1713,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       o.textContent = `${n}小節（${formatDuration(songSeconds({ ...song, lengthBars: n }))}）`;
     }
     lengthSelect.value = String(song.lengthBars);
+    if (!METER_OPTIONS.includes(song.beatsPerBar) && ![...meterSelect.options].some((o) => o.value === String(song.beatsPerBar))) {
+      // 選べる拍子にない曲（前に作った曲など）でも、その拍子を出しておく
+      const o = el("option", undefined, `${song.beatsPerBar}/4`);
+      o.value = String(song.beatsPerBar);
+      meterSelect.appendChild(o);
+    }
+    meterSelect.value = String(song.beatsPerBar);
     chopMore.disabled = !song.lanes;
     undoButton.disabled = undoStack.length === 0;
     redoButton.disabled = redoStack.length === 0;
@@ -1912,6 +1941,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       undoStack.length = 0;
       redoStack.length = 0;
       bpmTouched = !!next.lanes;
+      meterTouched = !!next.lanes;
       shapeBackup = null;
       removedLanes.clear();
       sel = { type: "song" };

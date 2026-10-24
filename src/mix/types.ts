@@ -164,6 +164,8 @@ export function openedSong(saved: Song): Song {
 export const MIN_BPM = 40;
 export const MAX_BPM = 240;
 export const LENGTH_OPTIONS = [8, 16, 32, 64];
+/** 刻むタブで選べる拍子（1小節の拍数。4分音符で数える）。 */
+export const METER_OPTIONS = [2, 3, 4, 5, 6, 7];
 export const DEFAULT_BPM = 120;
 
 export const DEFAULT_PARAMS: SongParams = {
