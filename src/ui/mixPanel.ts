@@ -13,6 +13,7 @@ import {
   hasDrums,
   pickDrum,
   rerollLanes,
+  pinMixSeeds,
   seedSnapshot,
   syncLanes,
   type ReverbFn,
@@ -1064,7 +1065,17 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   // --- トラック ---
   const trackTitle = el("div", "ins-title");
-  const lockButton = button("固定", () => sel.type === "track" && updateLane(sel.key, (l) => ({ ...l, locked: !l.locked }), false), "preset-button", "固定すると、刻み直してもこのトラックは変わらない");
+  const lockButton = button(
+    "固定",
+    () => {
+      if (sel.type !== "track" || !song.lanes) return;
+      updateLane(sel.key, (l) => ({ ...l, locked: !l.locked }), false);
+      // 混ぜるとき：固定した時点の上の層の種を控える（このあと上の層を振り直しても、このトラックは変わらない）
+      song.lanes = pinMixSeeds(song.lanes);
+    },
+    "preset-button",
+    "固定すると、刻み直してもこのトラックは変わらない",
+  );
   const muteButton = button("ミュート", () => sel.type === "track" && updateFader(sel.key, (l) => ({ ...l, muted: !l.muted })), "preset-button");
   const resetButton = button(
     "全体に戻す",
@@ -1528,7 +1539,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       redoStack.length = 0;
     }
     const first = !song.lanes;
-    const lanes = syncLanes(song, randomSeed);
+    // 振り直す前に、固定した層へ、いまの上の層の種を控える（混ぜるとき、固定した層が上の層と一緒に変わらないように）
+    const lanes = pinMixSeeds(syncLanes(song, randomSeed));
     song.lanes = first ? lanes : rerollLanes(lanes, part, randomSeed);
     // まるごと振り直すときは、固定していない置く音の場所も変える
     if (!first && part === "all" && song.drops && !song.drops.locked) song.drops = { ...song.drops, seed: randomSeed() };

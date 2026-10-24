@@ -79,6 +79,28 @@ export function rerollLanes(lanes: Lane[], part: RerollPart, seed: () => number)
 }
 
 /** 種だけの控え（「ひとつ戻す」用）。形のずらしや固定は戻さない。 */
+/**
+ * 「混ぜる」で固定した層に、いまのいちばん上の層の種を控える（固定を外した層・いちばん上の層からは消す）。
+ * 振り直す前と、固定したときに呼ぶ。控えた種で作り続けるので、上の層を振り直しても、固定した層の打ち方は変わらない。
+ */
+export function pinMixSeeds(lanes: Lane[]): Lane[] {
+  const lead = lanes[0];
+  return lanes.map((l, i) => {
+    if (i > 0 && l.locked) {
+      return l.mixSeeds ? l : { ...l, mixSeeds: { cutSeed: lead.cutSeed, rhythmSeed: lead.rhythmSeed, orderSeed: lead.orderSeed } };
+    }
+    if (!l.mixSeeds) return l;
+    const { mixSeeds: _m, ...rest } = l;
+    return rest;
+  });
+}
+
+/** 固定した層が、上の層と別の種（控えた種）で作られるか。 */
+function pinnedApart(lane: Lane, lead: Lane, i: number): boolean {
+  const m = lane.mixSeeds;
+  return i > 0 && !!lane.locked && !!m && (m.cutSeed !== lead.cutSeed || m.rhythmSeed !== lead.rhythmSeed || m.orderSeed !== lead.orderSeed);
+}
+
 export type SeedSnapshot = Pick<Lane, "phraseId" | "cutSeed" | "rhythmSeed" | "orderSeed">[];
 
 export function seedSnapshot(lanes: Lane[]): SeedSnapshot {
@@ -277,7 +299,8 @@ export async function buildStems(
       const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし（混ぜるときは、1つのリズムなので全体の形）
       const params = mixing ? effectiveParams(song.params, {}) : effectiveParams(song.params, lane);
-      const seeds = mixing ? lead : lane;
+      // 混ぜる：上の層の種。ただし固定した層は、固定したときに控えた上の層の種
+      const seeds = mixing ? (pinnedApart(lane, lead, i) ? lane.mixSeeds! : lead) : lane;
       let slices: Slice[];
       let events: LaneEvent[];
       if (song.params.style === "music") {
@@ -294,7 +317,7 @@ export async function buildStems(
           laneIndex: turn.laneIndex,
           laneCount: turn.laneCount,
           turns: song.params.turns,
-          srcRng: mixing ? createRng(lead.orderSeed ^ 0x2545f491) : undefined,
+          srcRng: mixing ? createRng(seeds.orderSeed ^ 0x2545f491) : undefined,
           srcWeights: mixing ? srcWeights : undefined,
           varyRng: createRng(seeds.rhythmSeed ^ 0x7f4a7c15),
           params,
@@ -329,6 +352,22 @@ export async function buildStems(
       return { collage, view, pad, fx: lane.fx, takes: reverb ? (lane.takes ?? []) : [] };
     }),
   );
+  // 混ぜる：固定した層が前のリズムのままなので、ほかの層は、固定した層が鳴っている所には打たない（1つのリズムに聞こえるように）
+  if (mixing) {
+    const pinned = lanes.map((l, i) => pinnedApart(l, lead, i));
+    if (pinned.some(Boolean)) {
+      const busy = new Uint8Array(totalSteps);
+      built.forEach((b, i) => {
+        if (!pinned[i]) return;
+        for (const e of b.collage.events) for (let s = e.step; s < Math.min(totalSteps, e.step + Math.max(1, e.len)); s++) busy[s] = 1;
+      });
+      built.forEach((b, i) => {
+        if (pinned[i]) return;
+        b.collage.events = b.collage.events.filter((e) => !busy[e.step]);
+        b.view.events = b.view.events.filter((e) => !busy[e.step]);
+      });
+    }
+  }
   const swing = song.params.swing;
   const grid: Grid = { totalSteps, stepsPerBar: song.beatsPerBar * STEPS_PER_BEAT, stepSamples, sampleRate, swing };
   const collageOpts = { totalSteps, stepSamples, sampleRate, swing };

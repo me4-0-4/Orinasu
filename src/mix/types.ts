@@ -26,6 +26,11 @@ export interface Lane {
   orderSeed: number;
   /** 固定：刻み直しても、この層は変えない。 */
   locked?: boolean;
+  /**
+   * 「混ぜる」のとき、固定した時点の、いちばん上の層の種。混ぜるときは全部の層が上の層の種で1つのリズムを作るので、
+   * 固定した層はこの種で作り続ける（上の層を振り直しても、この層の打ち方は変わらない）。
+   */
+  mixSeeds?: { cutSeed: number; rhythmSeed: number; orderSeed: number };
   /** 全体の形からの「ずらし」（-1〜1）。無い項目は0（全体と同じ）。全体を動かすと、差を保ったまま一緒に動く。 */
   shift?: Partial<Record<ShapeKey, number>>;
   /** この層だけの切り方。無ければ全体と同じ。 */
@@ -359,6 +364,10 @@ export function migrateSong(raw: unknown): Song {
 function sanitizeLane(raw: Lane, legacy: LegacyContext): Lane {
   const lane: Lane = { phraseId: raw.phraseId, cutSeed: raw.cutSeed, rhythmSeed: raw.rhythmSeed, orderSeed: raw.orderSeed };
   if (raw.locked) lane.locked = true;
+  const ms = raw.mixSeeds;
+  if (raw.locked && ms && isNum(ms.cutSeed) && isNum(ms.rhythmSeed) && isNum(ms.orderSeed)) {
+    lane.mixSeeds = { cutSeed: ms.cutSeed, rhythmSeed: ms.rhythmSeed, orderSeed: ms.orderSeed };
+  }
   if (raw.muted) lane.muted = true;
   if (raw.mode === "transient" || raw.mode === "divide") lane.mode = raw.mode;
   if (isNum(raw.volume)) lane.volume = Math.min(MAX_LANE_VOLUME, Math.max(0, raw.volume));
