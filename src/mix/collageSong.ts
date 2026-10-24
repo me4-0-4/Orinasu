@@ -78,29 +78,54 @@ export function rerollLanes(lanes: Lane[], part: RerollPart, seed: () => number)
   });
 }
 
-/** 種だけの控え（「ひとつ戻す」用）。形のずらしや固定は戻さない。 */
+/** 種の組（切る・打つ・並べる）。 */
+export type SeedSet = Pick<Lane, "cutSeed" | "rhythmSeed" | "orderSeed">;
+
 /**
- * 「混ぜる」で固定した層に、いまのいちばん上の層の種を控える（固定を外した層・いちばん上の層からは消す）。
- * 振り直す前と、固定したときに呼ぶ。控えた種で作り続けるので、上の層を振り直しても、固定した層の打ち方は変わらない。
+ * 「混ぜる」で全部の層が使う、共有の種。曲が持つ（Song.mixSeeds）。
+ * 無い曲（前に作った曲）は、いちばん上の層の種（前と同じ音になる）。
  */
-export function pinMixSeeds(lanes: Lane[]): Lane[] {
-  const lead = lanes[0];
-  return lanes.map((l, i) => {
-    if (i > 0 && l.locked) {
-      return l.mixSeeds ? l : { ...l, mixSeeds: { cutSeed: lead.cutSeed, rhythmSeed: lead.rhythmSeed, orderSeed: lead.orderSeed } };
-    }
+export function sharedSeeds(song: Pick<Song, "mixSeeds" | "lanes">): SeedSet | null {
+  if (song.mixSeeds) return song.mixSeeds;
+  const lead = song.lanes?.[0];
+  return lead ? { cutSeed: lead.cutSeed, rhythmSeed: lead.rhythmSeed, orderSeed: lead.orderSeed } : null;
+}
+
+/** 共有の種を振り直す（rerollLanes と同じく、part の部分だけ）。 */
+export function rerollShared(cur: SeedSet, part: RerollPart, seed: () => number): SeedSet {
+  return {
+    cutSeed: part === "all" || part === "cut" ? seed() : cur.cutSeed,
+    rhythmSeed: part === "all" || part === "rhythm" ? seed() : cur.rhythmSeed,
+    orderSeed: part === "all" || part === "order" ? seed() : cur.orderSeed,
+  };
+}
+
+/** 固定した層に、いまの共有の種を控える（もう控えていればそのまま）。控えた種で作り続けるので、共有の種を振り直しても、その層の打ち方は変わらない。 */
+export function pinLane(lane: Lane, shared: SeedSet | null): Lane {
+  if (!lane.locked || lane.mixSeeds || !shared) return lane;
+  return { ...lane, mixSeeds: { ...shared } };
+}
+
+/**
+ * 刻み直す前に呼ぶ：固定した層には共有の種を控え、固定を外した層の控えは消す（これから共有の種に戻る）。
+ * 固定を外しただけでは控えを消さない（押した瞬間に音が変わらないように。次に刻み直すときに戻る）。
+ */
+export function pinMixSeeds(lanes: Lane[], shared: SeedSet | null): Lane[] {
+  return lanes.map((l) => {
+    if (l.locked) return pinLane(l, shared);
     if (!l.mixSeeds) return l;
     const { mixSeeds: _m, ...rest } = l;
     return rest;
   });
 }
 
-/** 固定した層が、上の層と別の種（控えた種）で作られるか。 */
-function pinnedApart(lane: Lane, lead: Lane, i: number): boolean {
+/** この層が、共有の種と別の種（控えた種）で作られるか。 */
+function pinnedApart(lane: Lane, shared: SeedSet): boolean {
   const m = lane.mixSeeds;
-  return i > 0 && !!lane.locked && !!m && (m.cutSeed !== lead.cutSeed || m.rhythmSeed !== lead.rhythmSeed || m.orderSeed !== lead.orderSeed);
+  return !!m && (m.cutSeed !== shared.cutSeed || m.rhythmSeed !== shared.rhythmSeed || m.orderSeed !== shared.orderSeed);
 }
 
+/** 種だけの控え（「ひとつ戻す」用）。形のずらしや固定は戻さない。 */
 export type SeedSnapshot = Pick<Lane, "phraseId" | "cutSeed" | "rhythmSeed" | "orderSeed">[];
 
 export function seedSnapshot(lanes: Lane[]): SeedSnapshot {
@@ -287,8 +312,8 @@ export async function buildStems(
   // ミュートは「このトラックを抜いたら、同じ曲がどう聞こえるか」を聞くためのもの。
   // ミュートしても、ほかのトラックの打つ内容（交代・掛け合い・混ぜるの番や、リズムの種）は変えない。ミュートした層は、打つ予定は同じまま、音だけ出さない
   const mixing = song.params.style === "music" && song.params.turns === "mix" && lanes.length > 1;
-  // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種と形は、いちばん上の層のもの（形は全体のつまみ）
-  const lead = lanes[0];
+  // 混ぜる（音楽モード）：全部の層で1つのリズムを作る。リズムの種は曲の共有の種（無ければ上の層の種）、形は全体のつまみ
+  const shared = sharedSeeds({ mixSeeds: song.mixSeeds, lanes })!;
   // 混ぜるとき、層の「密度」は、その層の断片が選ばれる多さになる（全部の層が同じ密度なら、重みは付けない）
   const weights = lanes.map((l) => 0.25 + 0.75 * effectiveParams(song.params, l).busy);
   const srcWeights = weights.every((w) => Math.abs(w - weights[0]) < 1e-9) ? undefined : weights;
@@ -299,8 +324,8 @@ export async function buildStems(
       const pcm = await render(phrase, song.bpm, { dry: song.params.dry });
       // 層に効く形＝全体＋その層のずらし（混ぜるときは、1つのリズムなので全体の形）
       const params = mixing ? effectiveParams(song.params, {}) : effectiveParams(song.params, lane);
-      // 混ぜる：上の層の種。ただし固定した層は、固定したときに控えた上の層の種
-      const seeds = mixing ? (pinnedApart(lane, lead, i) ? lane.mixSeeds! : lead) : lane;
+      // 混ぜる：共有の種。ただし固定した層は、固定したときに控えた種
+      const seeds = mixing ? (pinnedApart(lane, shared) ? lane.mixSeeds! : shared) : lane;
       let slices: Slice[];
       let events: LaneEvent[];
       if (song.params.style === "music") {
@@ -354,7 +379,7 @@ export async function buildStems(
   );
   // 混ぜる：固定した層が前のリズムのままなので、ほかの層は、固定した層が鳴っている所には打たない（1つのリズムに聞こえるように）
   if (mixing) {
-    const pinned = lanes.map((l, i) => pinnedApart(l, lead, i));
+    const pinned = lanes.map((l) => pinnedApart(l, shared));
     if (pinned.some(Boolean)) {
       const busy = new Uint8Array(totalSteps);
       built.forEach((b, i) => {

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
-import { applySeeds, bedEvents, buildCollage, balanceFader, buildStems, collectSources, faderOf, mixdown, panGains, songFaders, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes, pinMixSeeds } from "./collageSong.ts";
+import { applySeeds, bedEvents, buildCollage, balanceFader, buildStems, collectSources, faderOf, mixdown, panGains, songFaders, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes, pinMixSeeds, pinLane, rerollShared, sharedSeeds } from "./collageSong.ts";
 import { createEmptySong, migrateSong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
 import { newGroup } from "./groups.ts";
@@ -483,33 +483,75 @@ test("拍子：2〜7拍でも、音楽・素材のどちらのモードでも曲
   }
 });
 
-test("混ぜる：固定したトラックは、上のトラックを振り直しても打ち方が変わらない。ほかのトラックは、そこに重ならない", async () => {
+/** 刻むタブの「刻む」（まるごと振り直す）と同じ手順。 */
+function rechop(song: Song): void {
+  const shared = sharedSeeds(song);
+  song.lanes = rerollLanes(pinMixSeeds(syncLanes(song, seq), shared), "all", seq);
+  if (shared) song.mixSeeds = rerollShared(shared, "all", seq);
+}
+
+async function mixSong() {
   const sr = 2000;
   const phrases = [phrase("a", 100), phrase("b", 100, 62), phrase("c", 100, 64)];
   const base = createEmptySong();
   const song: Song = { ...base, materialIds: ["a", "b", "c"], bpm: 120, lengthBars: 16, params: { ...base.params, style: "music", turns: "mix", busy: 0.8 } };
-  assert.equal(song.params.turns, "mix");
   const render = async (p: Phrase, bpm: number): Promise<Pcm> => {
     const len = Math.round((p.lengthBars * p.beatsPerBar * 60 * sr) / bpm);
     const l = new Float32Array(len).map((_, i) => (i % 300 < 20 ? 0.5 : 0.01));
     return { l, r: l.slice() };
   };
   song.lanes = syncLanes(song, seq);
-  const before = (await buildCollage(song, phrases, render, sr))!;
-  // b を固定して、まるごと振り直す（a＝いちばん上は固定していない）
-  song.lanes[1] = { ...song.lanes[1], locked: true };
-  song.lanes = rerollLanes(pinMixSeeds(song.lanes), "all", seq);
-  assert.ok(song.lanes[1].mixSeeds);
-  const after = (await buildCollage(song, phrases, render, sr))!;
+  const build = async () => (await buildCollage(song, phrases, render, sr))!;
+  return { song, build };
+}
+
+const busySteps = (events: { step: number; len: number }[]): Set<number> => {
+  const busy = new Set<number>();
+  for (const e of events) for (let s = e.step; s < e.step + Math.max(1, e.len); s++) busy.add(s);
+  return busy;
+};
+
+test("混ぜる：固定したトラックは、刻み直しても打ち方が変わらない。ほかのトラックは変わり、そこに重ならない", async () => {
+  const { song, build } = await mixSong();
+  const before = await build();
+  song.lanes![1] = pinLane({ ...song.lanes![1], locked: true }, sharedSeeds(song));
+  // 固定しただけでは音は変わらない
+  assert.deepEqual((await build()).lanes.map((l) => l.events), before.lanes.map((l) => l.events));
+  rechop(song);
+  const after = await build();
   assert.deepEqual(after.lanes[1].events, before.lanes[1].events);
   assert.notDeepEqual(after.lanes[0].events, before.lanes[0].events);
-  // 固定したトラックが鳴っている所には、ほかのトラックは打たない
-  const busy = new Set<number>();
-  for (const e of after.lanes[1].events) for (let s = e.step; s < e.step + Math.max(1, e.len); s++) busy.add(s);
+  const busy = busySteps(after.lanes[1].events);
   for (const i of [0, 2]) for (const e of after.lanes[i].events) assert.ok(!busy.has(e.step));
-  // 保存して読み直しても、控えた種は残る。固定を外すと消える
+});
+
+test("混ぜる：いちばん上のトラックを固定しても、ほかのトラックは刻み直せる", async () => {
+  const { song, build } = await mixSong();
+  const before = await build();
+  song.lanes![0] = pinLane({ ...song.lanes![0], locked: true }, sharedSeeds(song));
+  rechop(song);
+  const after = await build();
+  assert.deepEqual(after.lanes[0].events, before.lanes[0].events);
+  assert.notDeepEqual([after.lanes[1].events, after.lanes[2].events], [before.lanes[1].events, before.lanes[2].events]);
+  // もう一度刻み直しても、上のトラックは同じ
+  rechop(song);
+  assert.deepEqual((await build()).lanes[0].events, before.lanes[0].events);
+});
+
+test("混ぜる：共有の種が無い曲（前に作った曲）は、いちばん上のトラックの種で作る。保存して読み直しても種は残る", async () => {
+  const { song, build } = await mixSong();
+  const a = await build();
+  const lead = song.lanes![0];
+  song.mixSeeds = { cutSeed: lead.cutSeed, rhythmSeed: lead.rhythmSeed, orderSeed: lead.orderSeed };
+  assert.deepEqual((await build()).lanes.map((l) => l.events), a.lanes.map((l) => l.events));
+  song.lanes![1] = pinLane({ ...song.lanes![1], locked: true }, sharedSeeds(song));
+  rechop(song);
   const again = migrateSong(JSON.parse(JSON.stringify(song)));
-  assert.deepEqual(again.lanes![1].mixSeeds, song.lanes[1].mixSeeds);
-  const unlocked = pinMixSeeds(song.lanes.map((l, i) => (i === 1 ? { ...l, locked: false } : l)));
-  assert.equal(unlocked[1].mixSeeds, undefined);
+  assert.deepEqual(again.mixSeeds, song.mixSeeds);
+  assert.deepEqual(again.lanes![1].mixSeeds, song.lanes![1].mixSeeds);
+  // 固定を外して刻み直すと、控えは消えて共有の種に戻る
+  song.lanes![1] = { ...song.lanes![1], locked: false };
+  assert.ok(song.lanes![1].mixSeeds); // 外しただけでは消えない（音が変わらない）
+  rechop(song);
+  assert.equal(song.lanes![1].mixSeeds, undefined);
 });
