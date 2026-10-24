@@ -58,6 +58,13 @@ export class LayerSynths {
     return usesSampler(layer) ? this.samplerFor(layer) : this.forLayer(layer);
   }
 
+  /** 曲のテンポ（テンポの分かる音を鳴らすサンプラーが、速さを合わせる）。 */
+  setTempo(bpm: number): void {
+    this.tempo = bpm;
+    for (const engine of this.samplers.values()) engine.setTempo(bpm);
+  }
+  private tempo: number | undefined;
+
   /** 層のサンプラーを返す（なければ作る）。 */
   samplerFor(layer: Layer): SamplerEngine {
     const params = layer.sampler!;
@@ -72,6 +79,7 @@ export class LayerSynths {
         this.getSample,
       );
       engine.setFilterOffset(this.filterOffset);
+      engine.setTempo(this.tempo);
       this.samplers.set(layer.id, engine);
     } else if (engine.params !== params) {
       engine.updateParams(params);

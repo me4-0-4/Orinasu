@@ -33,6 +33,7 @@ import {
   type SliceCut,
 } from "../sound/sampler";
 import { detectOnsets } from "../mix/slicer";
+import { soundBars } from "../sound/soundPhrase";
 
 export interface SoundPanelDeps {
   library: SoundLibrary;
@@ -518,9 +519,11 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
         ? `黄色い線が切れ目（${padSlices(s)!.length}個。ドラッグで動かせる）。断片を押すと、その断片だけ鳴らします`
         : `波形をタップすると、そこから鳴らします。オレンジの線が1拍目（${formatSeconds(s.downbeatSec ?? 0)}）`;
     const bars = barsOf(s);
+    const useBars = soundBars(s);
     tempoNote.textContent = s.bpm
-      ? `1拍目から終わりまで 約${Math.round((bars ?? 0) * 100) / 100}小節。線は拍、太い線は小節の頭`
-      : "テンポが分かると、刻むや曲に置くときに拍に合わせられます（後の段階）。分からなければ空のままで大丈夫です";
+      ? `1拍目から終わりまで 約${Math.round((bars ?? 0) * 100) / 100}小節。線は拍、太い線は小節の頭。` +
+        `刻むタブの材料に「${useBars}小節の音」として並びます（1拍目から。曲のテンポに合わせて速さと高さが変わります）`
+      : "テンポを入れると、刻むタブの材料に並びます。分からなければ空のままで大丈夫です（サンプラーでは使えます）";
     drawPeaks(canvas, s, { grid: true });
   }
 

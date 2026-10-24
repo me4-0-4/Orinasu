@@ -51,6 +51,7 @@ import {
   type TurnStyle,
 } from "../mix/types";
 import type { Phrase } from "../phrase/types";
+import { isSoundPhraseId } from "../sound/soundPhrase";
 import { createRng, randomSeed } from "../theory/rng";
 import { makeId } from "../phrase/types";
 import { ENV_H, HEAD_H, ROW_H, buildLaneView, type Row } from "./laneView";
@@ -586,7 +587,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   // --- 曲：素材 ---
   const materialList = el("div", "mix-list");
-  const materialEmpty = el("div", "layer-empty", "フレーズタブで保存したフレーズが、ここに並ぶ");
+  const materialEmpty = el("div", "layer-empty", "フレーズタブで保存したフレーズと、サンプラータブでテンポを入れた音が、ここに並ぶ");
   function renderMaterials(): void {
     const phrases = deps.getPhrases();
     materialList.innerHTML = "";
@@ -607,7 +608,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         }
         changed();
       });
-      row.append(check, el("span", "layer-role-label", `${p.name}（${p.lengthBars}小節・元${p.bpm}BPM）`));
+      const kind = isSoundPhraseId(p.id) ? "読み込んだ音・" : "";
+      row.append(check, el("span", "layer-role-label", `${p.name}（${kind}${p.lengthBars}小節・元${p.bpm}BPM）`));
       materialList.appendChild(row);
     }
   }

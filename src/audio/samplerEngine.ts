@@ -40,6 +40,8 @@ export class SamplerEngine {
   private readonly reverbSend: GainNode;
   private readonly delaySend: GainNode;
   private readonly voices = new Map<string, Voice>();
+  /** 鳴らしている曲のテンポ（音のテンポが分かる設定のとき、速さを合わせる）。 */
+  private tempo: number | undefined;
 
   constructor(
     ctx: BaseAudioContext,
@@ -79,6 +81,10 @@ export class SamplerEngine {
     this.params = params;
   }
 
+  setTempo(bpm: number | undefined): void {
+    this.tempo = bpm;
+  }
+
   noteOn(voiceId: string, note: number, velocity = 1, time?: number): void {
     const buffer = this.getBuffer(this.params.soundId);
     if (!buffer) return;
@@ -87,7 +93,7 @@ export class SamplerEngine {
     if (this.voices.has(voiceId)) this.noteOff(voiceId, true, at);
 
     const p = this.params;
-    const r = noteRegion(p, note);
+    const r = noteRegion(p, note, this.tempo);
     const rate = r.rate;
     const region = playRegion(p.reverse ? reversedRange(r) : r, buffer.duration);
     const source = this.ctx.createBufferSource();

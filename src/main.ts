@@ -74,6 +74,7 @@ import { buildMixPanel } from "./ui/mixPanel";
 import { buildVideoPanel } from "./ui/videoPanel";
 import { buildSoundPanel } from "./ui/soundPanel";
 import { SoundLibrary } from "./sound/library";
+import { soundPhrase } from "./sound/soundPhrase";
 import { renderPhrase } from "./audio/renderPhrase";
 import { reverbWet } from "./audio/reverbWet";
 import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
@@ -102,6 +103,12 @@ function soundLayer(): Layer {
   }
   const last = currentPhrase?.layers.find((l) => l.id === lastSoundLayerId && l.role !== "drums");
   return last ?? scratchLayer;
+}
+
+/** 刻むタブ・映像タブの材料：保存したフレーズと、テンポを入れた読み込んだ音。 */
+function mixSources(): Phrase[] {
+  const sounds = soundLibrary.sounds.map(soundPhrase).filter((p): p is Phrase => p !== null);
+  return [...savedPhrases, ...sounds];
 }
 
 /** サンプラータブの「鍵盤で鳴らす」欄を、編集中の層に合わせる（タブを作ったあとで差し替える）。 */
@@ -284,7 +291,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 const mixPanel = buildMixPanel({
-  getPhrases: () => savedPhrases,
+  getPhrases: mixSources,
   onSongChange: persistSongSoon,
   // 保存した曲は、読むときに今の形へ直す（migrateSong は id を作業中の曲にするので、保存時の id を戻す）
   listSavedSongs: async () => (await loadSavedSongs()).map((raw) => ({ ...migrateSong(raw), id: raw.id })),
@@ -910,7 +917,7 @@ phraseTab.className = "tab-panel phrase-tab";
 phraseTab.append(phraseSplit, rollDock);
 const videoPanel = buildVideoPanel({
   mix: mixPanel,
-  getPhrases: () => savedPhrases,
+  getPhrases: mixSources,
   materials: { load: loadMaterials, save: saveMaterial, remove: deleteMaterial },
   gotoMix: () => selectTab("mix"),
   audio: {
@@ -930,6 +937,7 @@ function preloadSamples(): void {
   }
 }
 soundLibrary.subscribe(preloadSamples);
+soundLibrary.subscribe(() => mixPanel.refreshMaterials());
 
 const soundPanel = buildSoundPanel({
   library: soundLibrary,

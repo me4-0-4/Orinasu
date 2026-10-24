@@ -56,6 +56,7 @@ export async function renderPhrase(
     synthDelaySend: opts.dry ? deadEnd : buses.synthDelaySend,
     drumOut: buses.drumOut,
   }, (id) => samples.get(id) ?? null);
+  synths.setTempo(bpm);
   const drums = new DrumMachine(ctx, createNoiseBuffer(ctx), buses.drumOut);
 
   // 元のフレーズは触らない（シンセの初期音色を層に入れるため、複製して使う）

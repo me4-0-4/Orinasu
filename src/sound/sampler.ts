@@ -35,6 +35,8 @@ export interface SamplerParams {
   sensitivity: number;
   /** 拍で切るとき、何拍ごとか（0.5＝8分、1＝1拍、4＝1小節…）。 */
   beatsPerSlice: number;
+  /** 音のテンポ。あるときは、鳴らす曲のテンポに合わせて速さを変える（音の高さも一緒に変わる。レコードと同じ）。 */
+  sourceBpm?: number;
 }
 
 /** パッド型：この鍵盤から右へ、断片を1つずつ並べる（C4＝PCキーボードの A）。 */
@@ -157,12 +159,13 @@ export function sliceRange(slices: number[], i: number): { start: number; end: n
 }
 
 /** この鍵盤を押したときに鳴らす範囲（0〜1）と速さ。鍵盤型は start〜end を高さに応じた速さで、パッド型は断片をそのままの速さで。 */
-export function noteRegion(p: SamplerParams, pitch: number): { start: number; end: number; rate: number } {
+export function noteRegion(p: SamplerParams, pitch: number, tempo?: number): { start: number; end: number; rate: number } {
+  const sync = p.sourceBpm && tempo ? tempo / p.sourceBpm : 1;
   if (p.mode === "pads") {
     const r = sliceRange(p.slices, sliceIndexFor(pitch, p.slices.length));
-    return { ...r, rate: Math.pow(2, p.tune / 1200) };
+    return { ...r, rate: Math.pow(2, p.tune / 1200) * sync };
   }
-  return { start: p.start, end: p.end, rate: playbackRate(pitch, p) };
+  return { start: p.start, end: p.end, rate: playbackRate(pitch, p) * sync };
 }
 
 /** 逆さまに鳴らすとき、元の範囲（0〜1）を、逆さまの音の中の範囲に置き換える。 */
