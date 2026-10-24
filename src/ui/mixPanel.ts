@@ -14,6 +14,9 @@ import {
   pickDrum,
   rerollLanes,
   pinMixSeeds,
+  pinLane,
+  rerollShared,
+  sharedSeeds,
   seedSnapshot,
   syncLanes,
   type ReverbFn,
@@ -143,12 +146,15 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   /** 拍子を自分で選んだか（選んでいなければ、最初に刻むとき、いちばん上の素材の拍子にする）。 */
   let meterTouched = false;
   /** ひとつ戻す・やり直す：層の種と、置く音の種。 */
-  const undoStack: { lanes: SeedSnapshot; dropSeed?: number }[] = [];
-  const redoStack: { lanes: SeedSnapshot; dropSeed?: number }[] = [];
-  const undoEntry = (): { lanes: SeedSnapshot; dropSeed?: number } => ({ lanes: seedSnapshot(song.lanes ?? []), dropSeed: song.drops?.seed });
-  const applyEntry = (e: { lanes: SeedSnapshot; dropSeed?: number }): void => {
+  type UndoEntry = { lanes: SeedSnapshot; dropSeed?: number; mixSeeds?: Song["mixSeeds"] };
+  const undoStack: UndoEntry[] = [];
+  const redoStack: UndoEntry[] = [];
+  const undoEntry = (): UndoEntry => ({ lanes: seedSnapshot(song.lanes ?? []), dropSeed: song.drops?.seed, mixSeeds: song.mixSeeds });
+  const applyEntry = (e: UndoEntry): void => {
     song.lanes = applySeeds(song.lanes ?? [], e.lanes);
     if (song.drops && e.dropSeed !== undefined) song.drops = { ...song.drops, seed: e.dropSeed };
+    if (e.mixSeeds) song.mixSeeds = e.mixSeeds;
+    else delete song.mixSeeds;
   };
   /** 最後に作ったときの、トラックの曲の更新時刻（フレーズを直したら作り直すため）。 */
   let builtStamps = "";
@@ -1069,9 +1075,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     "固定",
     () => {
       if (sel.type !== "track" || !song.lanes) return;
-      updateLane(sel.key, (l) => ({ ...l, locked: !l.locked }), false);
-      // 混ぜるとき：固定した時点の上の層の種を控える（このあと上の層を振り直しても、このトラックは変わらない）
-      song.lanes = pinMixSeeds(song.lanes);
+      // 混ぜるとき：固定した時点の共有の種を控える（このあと振り直しても、このトラックは変わらない）
+      const shared = sharedSeeds(song);
+      updateLane(sel.key, (l) => pinLane({ ...l, locked: !l.locked }, shared), false);
     },
     "preset-button",
     "固定すると、刻み直してもこのトラックは変わらない",
@@ -1539,9 +1545,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       redoStack.length = 0;
     }
     const first = !song.lanes;
-    // 振り直す前に、固定した層へ、いまの上の層の種を控える（混ぜるとき、固定した層が上の層と一緒に変わらないように）
-    const lanes = pinMixSeeds(syncLanes(song, randomSeed));
+    // 振り直す前に、固定した層へ、いまの共有の種を控える（混ぜるとき、固定した層が一緒に変わらないように）
+    const shared = sharedSeeds(song);
+    const lanes = pinMixSeeds(syncLanes(song, randomSeed), shared);
     song.lanes = first ? lanes : rerollLanes(lanes, part, randomSeed);
+    // 混ぜるときの共有の種も振り直す（どのトラックを固定していても、固定していないトラックは変わる）
+    if (!first && shared) song.mixSeeds = rerollShared(shared, part, randomSeed);
     // まるごと振り直すときは、固定していない置く音の場所も変える
     if (!first && part === "all" && song.drops && !song.drops.locked) song.drops = { ...song.drops, seed: randomSeed() };
     if (first && !meterTouched) {

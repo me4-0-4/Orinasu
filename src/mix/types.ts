@@ -27,8 +27,8 @@ export interface Lane {
   /** 固定：刻み直しても、この層は変えない。 */
   locked?: boolean;
   /**
-   * 「混ぜる」のとき、固定した時点の、いちばん上の層の種。混ぜるときは全部の層が上の層の種で1つのリズムを作るので、
-   * 固定した層はこの種で作り続ける（上の層を振り直しても、この層の打ち方は変わらない）。
+   * 「混ぜる」のとき、固定した時点の共有の種（Song.mixSeeds）。混ぜるときは全部の層が共有の種で1つのリズムを作るので、
+   * 固定した層はこの種で作り続ける（共有の種を振り直しても、この層の打ち方は変わらない）。固定を外すと、次に刻み直すときに消える。
    */
   mixSeeds?: { cutSeed: number; rhythmSeed: number; orderSeed: number };
   /** 全体の形からの「ずらし」（-1〜1）。無い項目は0（全体と同じ）。全体を動かすと、差を保ったまま一緒に動く。 */
@@ -123,6 +123,8 @@ export interface Song {
   video?: VideoSettings;
   /** 置く音：読み込んだ音を、刻まずにまるごと曲の上に置く（置き場所は偶然）。まだ使っていなければ無い。 */
   drops?: DropSettings;
+  /** 「混ぜる」で全部の層が使う、共有の種。無ければ、いちばん上の層の種（前に作った曲と同じ音）。 */
+  mixSeeds?: { cutSeed: number; rhythmSeed: number; orderSeed: number };
   /** 「保存した曲」から開いた曲なら、そのid（「保存」で上書きする先）。作業中の曲にだけ付く。 */
   savedId?: string;
   updatedAt: number;
@@ -321,6 +323,10 @@ export function migrateSong(raw: unknown): Song {
   if (typeof r.video === "object" && r.video !== null) song.video = migrateVideo(r.video);
   const drops = migrateDrops(r.drops);
   if (drops) song.drops = drops;
+  const ms = r.mixSeeds as Song["mixSeeds"] | undefined;
+  if (ms && typeof ms === "object" && isNum(ms.cutSeed) && isNum(ms.rhythmSeed) && isNum(ms.orderSeed)) {
+    song.mixSeeds = { cutSeed: ms.cutSeed, rhythmSeed: ms.rhythmSeed, orderSeed: ms.orderSeed };
+  }
   if (typeof r.savedId === "string" && isSavedSongId(r.savedId)) song.savedId = r.savedId;
   if (Array.isArray(r.lanes)) {
     const lanes = r.lanes.filter(
@@ -365,7 +371,7 @@ function sanitizeLane(raw: Lane, legacy: LegacyContext): Lane {
   const lane: Lane = { phraseId: raw.phraseId, cutSeed: raw.cutSeed, rhythmSeed: raw.rhythmSeed, orderSeed: raw.orderSeed };
   if (raw.locked) lane.locked = true;
   const ms = raw.mixSeeds;
-  if (raw.locked && ms && isNum(ms.cutSeed) && isNum(ms.rhythmSeed) && isNum(ms.orderSeed)) {
+  if (ms && isNum(ms.cutSeed) && isNum(ms.rhythmSeed) && isNum(ms.orderSeed)) {
     lane.mixSeeds = { cutSeed: ms.cutSeed, rhythmSeed: ms.rhythmSeed, orderSeed: ms.orderSeed };
   }
   if (raw.muted) lane.muted = true;
