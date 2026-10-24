@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRng } from "../theory/rng.ts";
 import { createEmptyLayer, createEmptyPhrase, type Phrase } from "../phrase/types.ts";
-import { applySeeds, bedEvents, buildCollage, balanceFader, buildStems, collectSources, faderOf, mixdown, panGains, songFaders, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes } from "./collageSong.ts";
+import { applySeeds, bedEvents, buildCollage, balanceFader, buildStems, collectSources, faderOf, mixdown, panGains, songFaders, sumStems, hasDrums, pickDrum, rerollLanes, seedSnapshot, syncLanes, pinMixSeeds } from "./collageSong.ts";
 import { createEmptySong, migrateSong, type Song } from "./types.ts";
 import { newPlugin, type FxPlugin } from "./fx.ts";
 import { newGroup } from "./groups.ts";
@@ -481,4 +481,35 @@ test("拍子：2〜7拍でも、音楽・素材のどちらのモードでも曲
       assert.ok(result.lanes.some((l) => l.events.length > 0));
     }
   }
+});
+
+test("混ぜる：固定したトラックは、上のトラックを振り直しても打ち方が変わらない。ほかのトラックは、そこに重ならない", async () => {
+  const sr = 2000;
+  const phrases = [phrase("a", 100), phrase("b", 100, 62), phrase("c", 100, 64)];
+  const base = createEmptySong();
+  const song: Song = { ...base, materialIds: ["a", "b", "c"], bpm: 120, lengthBars: 16, params: { ...base.params, style: "music", turns: "mix", busy: 0.8 } };
+  assert.equal(song.params.turns, "mix");
+  const render = async (p: Phrase, bpm: number): Promise<Pcm> => {
+    const len = Math.round((p.lengthBars * p.beatsPerBar * 60 * sr) / bpm);
+    const l = new Float32Array(len).map((_, i) => (i % 300 < 20 ? 0.5 : 0.01));
+    return { l, r: l.slice() };
+  };
+  song.lanes = syncLanes(song, seq);
+  const before = (await buildCollage(song, phrases, render, sr))!;
+  // b を固定して、まるごと振り直す（a＝いちばん上は固定していない）
+  song.lanes[1] = { ...song.lanes[1], locked: true };
+  song.lanes = rerollLanes(pinMixSeeds(song.lanes), "all", seq);
+  assert.ok(song.lanes[1].mixSeeds);
+  const after = (await buildCollage(song, phrases, render, sr))!;
+  assert.deepEqual(after.lanes[1].events, before.lanes[1].events);
+  assert.notDeepEqual(after.lanes[0].events, before.lanes[0].events);
+  // 固定したトラックが鳴っている所には、ほかのトラックは打たない
+  const busy = new Set<number>();
+  for (const e of after.lanes[1].events) for (let s = e.step; s < e.step + Math.max(1, e.len); s++) busy.add(s);
+  for (const i of [0, 2]) for (const e of after.lanes[i].events) assert.ok(!busy.has(e.step));
+  // 保存して読み直しても、控えた種は残る。固定を外すと消える
+  const again = migrateSong(JSON.parse(JSON.stringify(song)));
+  assert.deepEqual(again.lanes![1].mixSeeds, song.lanes[1].mixSeeds);
+  const unlocked = pinMixSeeds(song.lanes.map((l, i) => (i === 1 ? { ...l, locked: false } : l)));
+  assert.equal(unlocked[1].mixSeeds, undefined);
 });
