@@ -1,6 +1,7 @@
 import type { SynthParams } from "../audio/synthParams";
 import type { Phrase } from "../phrase/types";
 import { isSavedSongId, type Song } from "../mix/types";
+import type { StoredSound } from "../sound/types";
 
 export interface UserPreset {
   id: string;
@@ -18,6 +19,11 @@ export const storageHooks: {
   /** 名前を付けて残した曲だけ通知する（作業中の曲は同期しない）。 */
   songSaved?: (song: Song) => void;
   songDeleted?: (id: string) => void;
+  /** 新しく読み込んだ音（中身ごとクラウドへ上げる）。 */
+  soundAdded?: (sound: StoredSound) => void;
+  /** 音の情報（名前・テンポなど）だけ変えた。 */
+  soundUpdated?: (sound: StoredSound) => void;
+  soundDeleted?: (id: string) => void;
 } = {};
 
 /** silent: true にすると通知しない（クラウドから取り込んだデータを書くときに使う）。 */
@@ -26,12 +32,14 @@ export interface WriteOptions {
 }
 
 const DB_NAME = "orinasu";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const STORE = "phrases";
 const PRESET_STORE = "presets";
 const SONG_STORE = "songs";
 /** 映像の素材（写真・動画）。重いので端末の中だけに置く（クラウドには上げない）。 */
 const MATERIAL_STORE = "materials";
+/** 読み込んだ音（サンプラーなどの材料）。中身もクラウドに上げる。 */
+const SOUND_STORE = "sounds";
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -49,6 +57,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(MATERIAL_STORE)) {
         db.createObjectStore(MATERIAL_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(SOUND_STORE)) {
+        db.createObjectStore(SOUND_STORE, { keyPath: "id" });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -183,8 +194,9 @@ export async function deleteSong(id: string, opts: WriteOptions = {}): Promise<v
 export async function clearLocalData(): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([STORE, PRESET_STORE, SONG_STORE, MATERIAL_STORE], "readwrite");
+    const tx = db.transaction([STORE, PRESET_STORE, SONG_STORE, MATERIAL_STORE, SOUND_STORE], "readwrite");
     tx.objectStore(MATERIAL_STORE).clear();
+    tx.objectStore(SOUND_STORE).clear();
     tx.objectStore(STORE).clear();
     tx.objectStore(PRESET_STORE).clear();
     tx.objectStore(SONG_STORE).clear();
@@ -235,6 +247,45 @@ export async function loadMaterials(): Promise<StoredMaterial[]> {
     const tx = db.transaction(MATERIAL_STORE, "readonly");
     const req = tx.objectStore(MATERIAL_STORE).getAll();
     req.onsuccess = () => resolve(req.result as StoredMaterial[]);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return result.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** silent でなければ、added＝新しい音（中身ごと上げる）、そうでなければ情報だけ変えた、として通知する。 */
+export async function saveSound(sound: StoredSound, opts: WriteOptions & { added?: boolean } = {}): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(SOUND_STORE, "readwrite");
+    tx.objectStore(SOUND_STORE).put(sound);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+  if (opts.silent) return;
+  if (opts.added) storageHooks.soundAdded?.(sound);
+  else storageHooks.soundUpdated?.(sound);
+}
+
+export async function deleteSound(id: string, opts: WriteOptions = {}): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(SOUND_STORE, "readwrite");
+    tx.objectStore(SOUND_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+  if (!opts.silent) storageHooks.soundDeleted?.(id);
+}
+
+/** 読み込んだ音を、古い順に全部。 */
+export async function loadSounds(): Promise<StoredSound[]> {
+  const db = await openDb();
+  const result = await new Promise<StoredSound[]>((resolve, reject) => {
+    const req = db.transaction(SOUND_STORE, "readonly").objectStore(SOUND_STORE).getAll();
+    req.onsuccess = () => resolve(req.result as StoredSound[]);
     req.onerror = () => reject(req.error);
   });
   db.close();

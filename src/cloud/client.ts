@@ -9,4 +9,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 
-export type CloudTable = "phrases" | "presets" | "songs";
+export type CloudTable = "phrases" | "presets" | "songs" | "sounds";
+
+/** 読み込んだ音の中身を置く場所（Supabase Storage のバケット）。中身は「ユーザーID/音のID」に置く。 */
+export const SOUND_BUCKET = "sounds";

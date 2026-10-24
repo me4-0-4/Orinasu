@@ -70,6 +70,8 @@ import { createCloudPanel } from "./ui/cloudPanel";
 import { buildUserPresets } from "./ui/userPresets";
 import { buildMixPanel } from "./ui/mixPanel";
 import { buildVideoPanel } from "./ui/videoPanel";
+import { buildSoundPanel } from "./ui/soundPanel";
+import { SoundLibrary } from "./sound/library";
 import { renderPhrase } from "./audio/renderPhrase";
 import { reverbWet } from "./audio/reverbWet";
 import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
@@ -905,7 +907,19 @@ const videoPanel = buildVideoPanel({
     },
   },
 });
-main.append(phraseTab, mixPanel.el, videoPanel.el);
+const soundLibrary = new SoundLibrary(engine.ctx);
+const soundPanel = buildSoundPanel({
+  library: soundLibrary,
+  audio: { ctx: engine.ctx, out: engine.masterGain },
+  prepareAudio: async () => {
+    await ensureAudio();
+    stopPreview();
+    mixPanel.stop();
+    if (transport.state !== "stopped") transport.stop();
+    allSoundsOff();
+  },
+});
+main.append(phraseTab, mixPanel.el, videoPanel.el, soundPanel.el);
 
 // --- タブ切り替え ---------------------------------------------------------
 
@@ -916,6 +930,7 @@ const tabs: { id: string; label: string; panel: HTMLElement }[] = [
   { id: "phrase", label: "フレーズ", panel: phraseTab },
   { id: "mix", label: "刻む", panel: mixPanel.el },
   { id: "video", label: "映像", panel: videoPanel.el },
+  { id: "sound", label: "サンプラー", panel: soundPanel.el },
 ];
 let currentTab = "perform";
 function selectTab(id: string): void {
@@ -924,6 +939,7 @@ function selectTab(id: string): void {
   document.body.dataset.tab = id;
   // 映像タブは刻むタブの曲を鳴らして見るので、行き来しても止めない
   if (id !== "mix" && id !== "video") mixPanel.stop();
+  if (id !== "sound") soundPanel.stop();
   pianoRoll.deleteButton.hidden = id !== "phrase"; // ノート削除はピアノロールのあるタブだけ
   for (const tab of tabs) {
     const active = tab.id === id;
@@ -1095,10 +1111,19 @@ window.addEventListener("keydown", (e) => {
       e.preventDefault();
       if (currentTab === "mix") mixPanel.togglePlay();
       else if (currentTab === "video") videoPanel.togglePlay();
+      else if (currentTab === "sound") soundPanel.togglePlay();
       else togglePlay();
     } else if (currentTab === "mix" && target && ["range", "checkbox"].includes((target as HTMLInputElement).type) && mixPanel.key(e.code)) {
       // スライダーを動かしたあとも、M・S・Home は使える
       e.preventDefault();
+    }
+    return;
+  }
+  if (currentTab === "sound") {
+    // サンプラータブ：スペースは選んだ音の試聴⇔停止（鍵盤で鳴らすのは次の段階）
+    if (e.code === "Space") {
+      e.preventDefault();
+      soundPanel.togglePlay();
     }
     return;
   }
@@ -1229,11 +1254,13 @@ initCloud({
     void reloadUserPresets();
     mixPanel.refreshLibrary();
   },
+  onSoundsChanged: () => void soundLibrary.reload(),
   // 別のアカウントに切り替えて端末のデータを消したら、刻む曲も空にする（前の人の曲を新しい人の所に保存しない）
   onCleared: () => {
     if (persistSongTimer !== null) window.clearTimeout(persistSongTimer);
     persistSongTimer = null;
     pendingSong = null;
     mixPanel.setSong(createEmptySong());
+    soundPanel.stop();
   },
 });
