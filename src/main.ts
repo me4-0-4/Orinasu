@@ -75,6 +75,7 @@ import { buildVideoPanel } from "./ui/videoPanel";
 import { buildSoundPanel } from "./ui/soundPanel";
 import { SoundLibrary } from "./sound/library";
 import { soundPhrase } from "./sound/soundPhrase";
+import type { Pcm } from "./mix/pcm";
 import { renderPhrase } from "./audio/renderPhrase";
 import { reverbWet } from "./audio/reverbWet";
 import { SONG_ID, createEmptySong, migrateSong, type Song } from "./mix/types";
@@ -109,6 +110,36 @@ function soundLayer(): Layer {
 function mixSources(): Phrase[] {
   const sounds = soundLibrary.sounds.map(soundPhrase).filter((p): p is Phrase => p !== null);
   return [...savedPhrases, ...sounds];
+}
+
+/** 置く音（刻むタブ）：読み込んだ音を、曲のサンプリングレートのステレオの波形にする（音ごとに1回だけ）。 */
+const soundPcms = new Map<string, Promise<Pcm | null>>();
+function soundPcm(id: string): Promise<Pcm | null> {
+  let hit = soundPcms.get(id);
+  if (!hit) {
+    hit = (async () => {
+      const buffer = await soundLibrary.buffer(id);
+      if (!buffer) return null;
+      const rate = engine.ctx.sampleRate;
+      let b = buffer;
+      if (buffer.sampleRate !== rate) {
+        // サンプリングレートが違う音は、オフラインで鳴らし直してそろえる
+        const off = new OfflineAudioContext(2, Math.max(1, Math.ceil(buffer.duration * rate)), rate);
+        const src = off.createBufferSource();
+        src.buffer = buffer;
+        src.connect(off.destination);
+        src.start();
+        b = await off.startRendering();
+      }
+      const l = new Float32Array(b.getChannelData(0));
+      const r = b.numberOfChannels > 1 ? new Float32Array(b.getChannelData(1)) : new Float32Array(l);
+      return { l, r };
+    })();
+    // 中身がまだ無かった（取り寄せ中）ときは覚えない
+    hit.then((p) => p === null && soundPcms.delete(id)).catch(() => soundPcms.delete(id));
+    soundPcms.set(id, hit);
+  }
+  return hit;
 }
 
 /** サンプラータブの「鍵盤で鳴らす」欄を、編集中の層に合わせる（タブを作ったあとで差し替える）。 */
@@ -307,6 +338,10 @@ const mixPanel = buildMixPanel({
   render: (phrase, bpm, opts) =>
     renderPhrase(phrase, bpm, engine.ctx.sampleRate, { ...opts, samples: (id) => soundLibrary.buffer(id) }),
   reverb: (pcm, seconds, toneHz) => reverbWet(pcm, engine.ctx.sampleRate, seconds, toneHz),
+  sounds: {
+    list: () => soundLibrary.sounds.map((s) => ({ id: s.id, name: s.name, durationSec: s.durationSec })),
+    pcm: (id) => soundPcm(id),
+  },
 });
 
 function toggleRecord(): void {
