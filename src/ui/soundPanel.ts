@@ -14,9 +14,25 @@ import {
   type StoredSound,
 } from "../sound/types";
 import { getCloudState, subscribeCloud, subscribeSoundCloud, type SoundCloudState } from "../cloud/sync";
-import { button, choice, el, knob, type Control } from "./mixWidgets";
+import { button, choice, el, knob, toggle, type Control } from "./mixWidgets";
 import { usesSampler, type Layer } from "../phrase/types";
-import { MAX_ATTACK, MAX_RELEASE, pitchName, type SamplerHold, type SamplerParams } from "../sound/sampler";
+import {
+  MAX_ATTACK,
+  MAX_RELEASE,
+  MAX_SLICES,
+  PAD_BASE_PITCH,
+  beatSlices,
+  divideSlices,
+  normalizeSlices,
+  onsetSlices,
+  pitchName,
+  sliceRange,
+  type SamplerHold,
+  type SamplerMode,
+  type SamplerParams,
+  type SliceCut,
+} from "../sound/sampler";
+import { detectOnsets } from "../mix/slicer";
 
 export interface SoundPanelDeps {
   library: SoundLibrary;
@@ -136,74 +152,202 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     refreshInstrument();
   };
   const sec = (v: number): string => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}秒`);
-  const controls: Control[] = [
-    knob({
-      label: "元の高さ",
-      min: 24,
-      max: 96,
-      step: 1,
-      get: () => sampler()?.rootPitch ?? 60,
-      set: (v) => change({ rootPitch: v }),
-      format: (v) => pitchName(v),
-      hint: () => "この鍵盤を押すと、読み込んだときの高さで鳴ります。右の鍵盤ほど高く（速く）なります",
-    }),
-    knob({
-      label: "細かい音程",
-      min: -100,
-      max: 100,
-      step: 1,
-      get: () => sampler()?.tune ?? 0,
-      set: (v) => change({ tune: v }),
-      format: (v) => `${v > 0 ? "+" : ""}${v}セント`,
-      hint: () => "半音より細かく、高さを合わせます（100セント＝半音）",
-    }),
-    knob({
-      label: "始まり",
-      get: () => sampler()?.start ?? 0,
-      set: (v) => change({ start: Math.min(v, (sampler()?.end ?? 1) - 0.001) }),
-      format: (v) => formatSeconds(v * (selectedSoundOfLayer()?.durationSec ?? 0)),
-      hint: () => "音のどこから鳴らすか（波形の明るい所が鳴る範囲）",
-    }),
-    knob({
-      label: "終わり",
-      get: () => sampler()?.end ?? 1,
-      set: (v) => change({ end: Math.max(v, (sampler()?.start ?? 0) + 0.001) }),
-      format: (v) => formatSeconds(v * (selectedSoundOfLayer()?.durationSec ?? 0)),
-      hint: () => "音のどこまで鳴らすか",
-    }),
-    knob({
-      label: "立ち上がり",
-      min: 0,
-      max: MAX_ATTACK,
-      step: 0.001,
-      get: () => sampler()?.attack ?? 0,
-      set: (v) => change({ attack: v }),
-      format: sec,
-      hint: () => "押してから、いちばん大きくなるまでの時間。長くすると、ふわっと入ります",
-    }),
-    knob({
-      label: "消え方",
-      min: 0,
-      max: MAX_RELEASE,
-      step: 0.001,
-      get: () => sampler()?.release ?? 0,
-      set: (v) => change({ release: v }),
-      format: sec,
-      hint: () => "離してから、消えるまでの時間",
-    }),
-    choice<SamplerHold>({
-      label: "鳴らし方",
-      options: () => [
-        ["gate", "押している間だけ"],
-        ["oneshot", "最後まで鳴らす"],
-      ],
-      get: () => sampler()?.hold ?? "gate",
-      set: (v) => change({ hold: v }),
-      hint: () => "「最後まで鳴らす」は、すぐ離しても範囲の終わりまで鳴ります（ドラムや短い音に）",
-    }),
+  /** 型ごとに出すつまみ。show が false のときは隠す。 */
+  const modeIs = (m: SamplerMode) => (): boolean => sampler()?.mode === m;
+  const always = (): boolean => true;
+  const controls: { c: Control; show: () => boolean }[] = [
+    {
+      show: always,
+      c: choice<SamplerMode>({
+        label: "型",
+        options: () => [
+          ["keys", "鍵盤型（1つの音を高さを変えて弾く）"],
+          ["pads", "パッド型（切った断片を鍵盤に並べる）"],
+        ],
+        get: () => sampler()?.mode ?? "keys",
+        // パッド型は、すぐ離しても断片の終わりまで鳴るほうが叩きやすい
+        set: (v) => change(v === "pads" ? { mode: v, hold: "oneshot" } : { mode: v, hold: "gate" }),
+        hint: () => "鍵盤型：右の鍵盤ほど高く（速く）鳴る。パッド型：C4（PCキーボードの A）から右へ、断片が1つずつ並ぶ。左の鍵盤には後ろの断片が並ぶ",
+      }),
+    },
+    {
+      show: modeIs("pads"),
+      c: choice<SliceCut>({
+        label: "切り方",
+        options: () => [
+          ["divide", "等分"],
+          ["transient", "音の頭（アタック）"],
+          ...(selectedSoundOfLayer()?.bpm ? ([["beats", "拍"]] as [SliceCut, string][]) : []),
+        ],
+        get: () => sampler()?.cut ?? "divide",
+        set: (v) => void recut({ cut: v }),
+        hint: () => "切れ目は、波形の上の黄色い線をドラッグしても動かせます。「拍」はテンポを入れた音だけ",
+      }),
+    },
+    {
+      show: () => modeIs("pads")() && sampler()?.cut === "divide",
+      c: knob({
+        label: "数",
+        min: 2,
+        max: MAX_SLICES,
+        step: 1,
+        get: () => sampler()?.divisions ?? 8,
+        set: (v) => void recut({ divisions: v }),
+        format: (v) => `${v}個`,
+        hint: () => "同じ長さに、いくつに切るか",
+      }),
+    },
+    {
+      show: () => modeIs("pads")() && sampler()?.cut === "transient",
+      c: knob({
+        label: "拾いやすさ",
+        get: () => sampler()?.sensitivity ?? 0.5,
+        set: (v) => void recut({ sensitivity: v }),
+        hint: () => "大きいほど、小さな音の頭でも切ります",
+      }),
+    },
+    {
+      show: () => modeIs("pads")() && sampler()?.cut === "beats",
+      c: choice<string>({
+        label: "何拍ごと",
+        options: () => [
+          ["0.5", "8分（半拍）"],
+          ["1", "1拍"],
+          ["2", "2拍"],
+          [String(selectedSoundOfLayer()?.beatsPerBar ?? 4), "1小節"],
+        ],
+        get: () => String(sampler()?.beatsPerSlice ?? 1),
+        set: (v) => void recut({ beatsPerSlice: Number(v) }),
+      }),
+    },
+    {
+      show: modeIs("keys"),
+      c: knob({
+        label: "元の高さ",
+        min: 24,
+        max: 96,
+        step: 1,
+        get: () => sampler()?.rootPitch ?? 60,
+        set: (v) => change({ rootPitch: v }),
+        format: (v) => pitchName(v),
+        hint: () => "この鍵盤を押すと、読み込んだときの高さで鳴ります。右の鍵盤ほど高く（速く）なります",
+      }),
+    },
+    {
+      show: always,
+      c: knob({
+        label: "細かい音程",
+        min: -100,
+        max: 100,
+        step: 1,
+        get: () => sampler()?.tune ?? 0,
+        set: (v) => change({ tune: v }),
+        format: (v) => `${v > 0 ? "+" : ""}${v}セント`,
+        hint: () => "半音より細かく、高さを合わせます（100セント＝半音）",
+      }),
+    },
+    {
+      show: modeIs("keys"),
+      c: knob({
+        label: "始まり",
+        get: () => sampler()?.start ?? 0,
+        set: (v) => change({ start: Math.min(v, (sampler()?.end ?? 1) - 0.001) }),
+        format: (v) => formatSeconds(v * (selectedSoundOfLayer()?.durationSec ?? 0)),
+        hint: () => "音のどこから鳴らすか（波形の明るい所が鳴る範囲）",
+      }),
+    },
+    {
+      show: modeIs("keys"),
+      c: knob({
+        label: "終わり",
+        get: () => sampler()?.end ?? 1,
+        set: (v) => change({ end: Math.max(v, (sampler()?.start ?? 0) + 0.001) }),
+        format: (v) => formatSeconds(v * (selectedSoundOfLayer()?.durationSec ?? 0)),
+        hint: () => "音のどこまで鳴らすか",
+      }),
+    },
+    {
+      show: always,
+      c: knob({
+        label: "立ち上がり",
+        min: 0,
+        max: MAX_ATTACK,
+        step: 0.001,
+        get: () => sampler()?.attack ?? 0,
+        set: (v) => change({ attack: v }),
+        format: sec,
+        hint: () => "押してから、いちばん大きくなるまでの時間。長くすると、ふわっと入ります",
+      }),
+    },
+    {
+      show: always,
+      c: knob({
+        label: "消え方",
+        min: 0,
+        max: MAX_RELEASE,
+        step: 0.001,
+        get: () => sampler()?.release ?? 0,
+        set: (v) => change({ release: v }),
+        format: sec,
+        hint: () => "離してから、消えるまでの時間",
+      }),
+    },
+    {
+      show: always,
+      c: choice<SamplerHold>({
+        label: "鳴らし方",
+        options: () => [
+          ["gate", "押している間だけ"],
+          ["oneshot", "最後まで鳴らす"],
+        ],
+        get: () => sampler()?.hold ?? "gate",
+        set: (v) => change({ hold: v }),
+        hint: () => "「最後まで鳴らす」は、すぐ離しても範囲（断片）の終わりまで鳴ります",
+      }),
+    },
+    {
+      show: () => modeIs("keys")() && sampler()?.hold === "gate",
+      c: toggle({
+        label: "ループ",
+        get: () => sampler()?.loop ?? false,
+        set: (v) => change({ loop: v }),
+        hint: () => "押している間、範囲をくり返します（伸ばす音に）",
+      }),
+    },
+    {
+      show: always,
+      c: toggle({
+        label: "逆再生",
+        get: () => sampler()?.reverse ?? false,
+        set: (v) => change({ reverse: v }),
+        hint: () => "音を逆さまに鳴らします",
+      }),
+    },
   ];
   const knobBox = el("div", "snd-knobs");
-  knobBox.append(...controls.map((c) => c.el));
+  knobBox.append(...controls.map((x) => x.c.el));
+
+  /** パッド型の切り方を変えて、切り直す。 */
+  async function recut(patch: Partial<SamplerParams>): Promise<void> {
+    const p = sampler();
+    if (!p) return;
+    const next = { ...p, ...patch };
+    const meta = library.get(p.soundId);
+    let slices: number[] | null = null;
+    if (next.cut === "divide") slices = divideSlices(next.divisions);
+    else if (next.cut === "beats" && meta) slices = beatSlices(meta, next.beatsPerSlice);
+    else if (next.cut === "transient") {
+      const buffer = await library.buffer(p.soundId);
+      if (buffer) {
+        const l = buffer.getChannelData(0);
+        const pcm = { l, r: buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : l };
+        // 拾いやすさが低いほど、断片は長め（音の頭どうしの最小の間を広げる）
+        const minMs = 40 + (1 - next.sensitivity) * 160;
+        slices = onsetSlices(detectOnsets(pcm, buffer.sampleRate, next.sensitivity, minMs), buffer.length);
+      }
+    }
+    change({ ...patch, ...(slices ? { slices } : {}) });
+  }
   instBox.append(instHead, instTarget, instRow, instNote, knobBox);
   body.append(instBox);
 
@@ -236,7 +380,10 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     instNote.textContent = p
       ? "下の鍵盤（PCキーボードの A・S・D… でも）で弾けます。フレーズタブで録音すると、この音で録れます"
       : "選んだ音を、編集中の層の楽器にします。どの層を編集するかは、フレーズタブで選びます";
-    for (const c of controls) c.refresh();
+    for (const x of controls) {
+      x.c.el.hidden = !x.show();
+      x.c.refresh();
+    }
     renderDetail();
   }
 
@@ -367,7 +514,9 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     downbeatButton.classList.toggle("on", placing);
     waveNote.textContent = placing
       ? "波形をタップした所を1拍目にします"
-      : `波形をタップすると、そこから鳴らします。オレンジの線が1拍目（${formatSeconds(s.downbeatSec ?? 0)}）`;
+      : padSlices(s)
+        ? `黄色い線が切れ目（${padSlices(s)!.length}個。ドラッグで動かせる）。断片を押すと、その断片だけ鳴らします`
+        : `波形をタップすると、そこから鳴らします。オレンジの線が1拍目（${formatSeconds(s.downbeatSec ?? 0)}）`;
     const bars = barsOf(s);
     tempoNote.textContent = s.bpm
       ? `1拍目から終わりまで 約${Math.round((bars ?? 0) * 100) / 100}小節。線は拍、太い線は小節の頭`
@@ -424,6 +573,19 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
       }
       g.fillStyle = orange;
       g.fillRect(Math.round(x(s.downbeatSec ?? 0)) - 1, 0, 3, h);
+      // パッド型の切れ目と、その断片を鳴らす鍵盤の名前
+      const slices = padSlices(s);
+      if (slices) {
+        const yellow = css.getPropertyValue("--accent-yellow").trim() || "#ffd166";
+        g.font = "10px system-ui, sans-serif";
+        slices.forEach((v, i) => {
+          const px = Math.round(v * w);
+          g.fillStyle = yellow;
+          if (i > 0) g.fillRect(px - 1, 0, 2, h);
+          const next = (slices[i + 1] ?? 1) * w;
+          if (next - px > 18) g.fillText(pitchName(PAD_BASE_PITCH + i), px + 3, 11);
+        });
+      }
       if (source) {
         g.fillStyle = "#ffffff";
         g.fillRect(Math.round(x(playheadSec())), 0, 2, h);
@@ -431,25 +593,72 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     }
   }
 
+  /** パッド型で、この音を切っているとき：その切れ目。 */
+  function padSlices(s: StoredSound): number[] | null {
+    const p = sampler();
+    return p && p.mode === "pads" && p.soundId === s.id ? (dragSlices ?? p.slices) : null;
+  }
+
+  let dragSlices: number[] | null = null;
+  let dragIndex = -1;
   canvas.addEventListener("pointerdown", (e) => {
     const s = selected();
     if (!s) return;
     const rect = canvas.getBoundingClientRect();
-    const sec = Math.min(s.durationSec, Math.max(0, ((e.clientX - rect.left) / rect.width) * s.durationSec));
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const sec = frac * s.durationSec;
     if (placing) {
       setPlacing(false);
       void library.update(s.id, { downbeatSec: Math.round(sec * 1000) / 1000 });
       return;
     }
+    const slices = padSlices(s);
+    if (slices) {
+      // 切れ目の近く（指で押しやすいよう 12px 以内）を押したら、その切れ目を動かす。頭（0）は動かさない
+      const near = slices.findIndex((v, i) => i > 0 && Math.abs(v * rect.width - (e.clientX - rect.left)) < 12);
+      if (near > 0) {
+        dragSlices = [...slices];
+        dragIndex = near;
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+      // 断片の中を押したら、その断片だけ鳴らす
+      let i = 0;
+      while (i + 1 < slices.length && slices[i + 1] <= frac) i++;
+      const r = sliceRange(slices, i);
+      void play(r.start * s.durationSec, r.end * s.durationSec);
+      return;
+    }
     void play(sec);
   });
+  canvas.addEventListener("pointermove", (e) => {
+    const s = selected();
+    if (!s || !dragSlices || dragIndex <= 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    // 隣の切れ目は越えない
+    const lo = dragSlices[dragIndex - 1] + 0.002;
+    const hi = (dragSlices[dragIndex + 1] ?? 1) - 0.002;
+    dragSlices[dragIndex] = Math.min(hi, Math.max(lo, frac));
+    drawPeaks(canvas, s, { grid: true });
+  });
+  const endDrag = (): void => {
+    if (!dragSlices) return;
+    const slices = normalizeSlices(dragSlices);
+    dragSlices = null;
+    dragIndex = -1;
+    inst.change({ slices });
+    refreshInstrument();
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
 
   // --- 試聴 -------------------------------------------------------------------------
   function playheadSec(): number {
     return playOffset + (deps.audio.ctx.currentTime - playStartedAt);
   }
 
-  async function play(fromSec = 0): Promise<void> {
+  async function play(fromSec = 0, untilSec?: number): Promise<void> {
     const s = selected();
     if (!s) return;
     stop();
@@ -471,7 +680,8 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     };
     playStartedAt = ctx.currentTime;
     playOffset = fromSec;
-    node.start(0, fromSec);
+    if (untilSec !== undefined) node.start(0, fromSec, Math.max(0.005, untilSec - fromSec));
+    else node.start(0, fromSec);
     source = node;
     const tick = (): void => {
       if (!source) return;

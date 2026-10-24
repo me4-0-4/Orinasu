@@ -47,6 +47,11 @@ export interface Layer {
   sampler?: SamplerParams;
 }
 
+/** パッド型のサンプラーの層か（鍵盤は音の高さではなく断片を選ぶので、調の判定などには使わない）。 */
+export function isPadLayer(layer: Pick<Layer, "role" | "instrument" | "sampler">): boolean {
+  return usesSampler(layer) && layer.sampler!.mode === "pads";
+}
+
 /** この層をサンプラーで鳴らすか。 */
 export function usesSampler(layer: Pick<Layer, "role" | "instrument" | "sampler">): boolean {
   return layer.role !== "drums" && layer.instrument === "sampler" && !!layer.sampler;

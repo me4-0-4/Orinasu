@@ -1,6 +1,22 @@
 import { MixStage } from "./mixStage";
 import type { LayerMix } from "../phrase/types";
-import { playRegion, playbackRate, type SamplerParams } from "../sound/sampler";
+import { noteRegion, playRegion, reversedRange, type SamplerParams } from "../sound/sampler";
+
+/** 逆さまにした音（元の音ごとに1回だけ作る）。 */
+const reversedCache = new WeakMap<AudioBuffer, AudioBuffer>();
+function reversedOf(ctx: BaseAudioContext, buffer: AudioBuffer): AudioBuffer {
+  let r = reversedCache.get(buffer);
+  if (!r) {
+    r = ctx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+      const src = buffer.getChannelData(ch);
+      const dst = r.getChannelData(ch);
+      for (let i = 0, n = src.length; i < n; i++) dst[i] = src[n - 1 - i];
+    }
+    reversedCache.set(buffer, r);
+  }
+  return r;
+}
 
 interface Voice {
   source: AudioBufferSourceNode;
@@ -71,24 +87,36 @@ export class SamplerEngine {
     if (this.voices.has(voiceId)) this.noteOff(voiceId, true, at);
 
     const p = this.params;
-    const rate = playbackRate(note, p);
-    const region = playRegion(p, buffer.duration);
+    const r = noteRegion(p, note);
+    const rate = r.rate;
+    const region = playRegion(p.reverse ? reversedRange(r) : r, buffer.duration);
     const source = this.ctx.createBufferSource();
-    source.buffer = buffer;
+    source.buffer = p.reverse ? reversedOf(this.ctx, buffer) : buffer;
     source.playbackRate.value = rate;
+    // ループ：鍵盤型で「押している間だけ」のとき、離すまで範囲をくり返す
+    const looping = p.loop && p.mode === "keys" && p.hold === "gate";
     const amp = this.ctx.createGain();
     const peak = Math.max(0.0001, Math.min(1, velocity));
     amp.gain.setValueAtTime(0, at);
     amp.gain.linearRampToValueAtTime(peak, at + Math.max(0.002, p.attack));
     source.connect(amp);
     amp.connect(this.filter);
-    const playSeconds = region.length / rate;
-    // 範囲の終わりで切れるとプツッと鳴るので、最後だけ少しだけ絞る
-    const fade = Math.min(0.01, playSeconds / 4);
-    amp.gain.setValueAtTime(peak, Math.max(at + p.attack, at + playSeconds - fade));
-    amp.gain.linearRampToValueAtTime(0, at + playSeconds);
-    source.start(at, region.offset, region.length);
-    const voice: Voice = { source, amp, endsAt: at + playSeconds, releasing: false };
+    let endsAt = Infinity;
+    if (looping) {
+      source.loop = true;
+      source.loopStart = region.offset;
+      source.loopEnd = region.offset + region.length;
+      source.start(at, region.offset);
+    } else {
+      const playSeconds = region.length / rate;
+      // 範囲の終わりで切れるとプツッと鳴るので、最後だけ少しだけ絞る
+      const fade = Math.min(0.01, playSeconds / 4);
+      amp.gain.setValueAtTime(peak, Math.max(at + p.attack, at + playSeconds - fade));
+      amp.gain.linearRampToValueAtTime(0, at + playSeconds);
+      source.start(at, region.offset, region.length);
+      endsAt = at + playSeconds;
+    }
+    const voice: Voice = { source, amp, endsAt, releasing: false };
     this.voices.set(voiceId, voice);
     source.onended = () => {
       if (this.voices.get(voiceId) === voice) this.voices.delete(voiceId);
@@ -101,7 +129,7 @@ export class SamplerEngine {
     const voice = this.voices.get(voiceId);
     if (!voice) return;
     // 最後まで鳴らす音は、離しても止めない（鳴り終われば onended で片付く）
-    if (!immediate && this.params.hold === "oneshot") return;
+    if (!immediate && this.params.hold === "oneshot" && voice.endsAt !== Infinity) return;
     const at = Math.max(time ?? this.ctx.currentTime, this.ctx.currentTime);
     if (at >= voice.endsAt) return;
     this.voices.delete(voiceId);

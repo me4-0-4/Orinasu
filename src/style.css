@@ -2604,3 +2604,8 @@ body[data-tab="video"] .app-footer {
 .snd-inst [hidden] {
   display: none;
 }
+
+.ins-toggle {
+  justify-self: start;
+  min-width: 4em;
+}

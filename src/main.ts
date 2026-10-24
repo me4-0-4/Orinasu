@@ -25,6 +25,7 @@ import {
   type Note,
   type Phrase,
   usesSampler,
+  isPadLayer,
 } from "./phrase/types";
 import { defaultSamplerParams, type SamplerParams } from "./sound/sampler";
 import { Arpeggiator } from "./audio/arpeggiator";
@@ -465,7 +466,8 @@ let appliedGuide: number | null | undefined = undefined;
 /** 調やコードの材料にする音（ドラム以外の全レイヤー）。 */
 function harmonicNotes(): Note[] {
   if (!currentPhrase) return [];
-  return currentPhrase.layers.filter((l) => l.role !== "drums").flatMap((l) => l.notes);
+  // パッド型のサンプラーの層は、音の高さではなく断片の番号なので入れない
+  return currentPhrase.layers.filter((l) => l.role !== "drums" && !isPadLayer(l)).flatMap((l) => l.notes);
 }
 
 function currentKey(): Key | null {
@@ -1086,7 +1088,8 @@ const arpVoices = new Set<number>();
 
 function lockedNote(raw: number): number {
   const key = currentKey();
-  return currentPhrase?.scaleLock && key ? snapToScale(raw, key) : raw;
+  // パッド型ではスケールロックで寄せない（寄せると別の断片が鳴ってしまう）
+  return currentPhrase?.scaleLock && key && !isPadLayer(soundLayer()) ? snapToScale(raw, key) : raw;
 }
 
 function noteOn(raw: number): void {
