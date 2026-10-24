@@ -43,6 +43,8 @@ export function mulberry(a: number): () => number { return () => { a |= 0; a = a
 
 let events: VEvent[] = [], tonal: VEvent[] = [], chops: VEvent[] = [], kicks: VEvent[] = [];
 let PITCHES: number[] = [60], STEPS = 64, BPM = 120, SONG_SEC = 32;
+/** 1小節のステップ数（16分の数）と拍の数。4/4 なら 16 と 4、3/4 なら 12 と 3。 */
+let SPB = 16, BEATS = 4;
 let TRACKS = [{ ja: "刻む1", en: "CH 1" }, { ja: "刻む2", en: "CH 2" }, { ja: "ドラム", en: "DRUM" }, { ja: "パッド", en: "PAD" }];
 let an: Analysis | null = null;
 /** 描く曲を入れ替える。 */
@@ -50,6 +52,7 @@ export function bindTimeline(tl: Timeline, analysis: Analysis): void {
   events = tl.events; tonal = tl.tonal; chops = tl.chops; kicks = tl.kicks;
   PITCHES = tl.pitches.length ? tl.pitches : [60];
   STEPS = tl.totalSteps; BPM = tl.bpm; SONG_SEC = tl.seconds; an = analysis;
+  SPB = tl.stepsPerBar; BEATS = Math.max(1, Math.round(SPB / 4));
   TOT = [0, 1, 2, 3].map((t) => Math.max(1e-6, events.filter((e) => e.tr === t).reduce((a, e) => a + e.len * e.vel, 0)));
   // トラックの名前（刻む曲の名前）。表の欄に収まるよう、長いものは切る
   const short = (s: string): string => ([...s].length > 5 ? [...s].slice(0, 4).join("") + "…" : s);
@@ -188,14 +191,14 @@ export const PANELS: Record<string, PanelDef> = {
     } },
 
   dial: { ja: "時計", en: "DIAL", g: "拍", draw(ctx, c, f, P, u) {
-      const cx = c.x + c.w / 2, cy = c.y + c.h / 2, R = Math.min(c.w, c.h) * .44, b0 = f.bar * 16, gapA = .045;
-      for (let i = 0; i < 16; i++) {
-        const a0 = -Math.PI / 2 + i / 16 * Math.PI * 2 + gapA, a1 = a0 + Math.PI * 2 / 16 - gapA * 2;
+      const cx = c.x + c.w / 2, cy = c.y + c.h / 2, R = Math.min(c.w, c.h) * .44, b0 = f.bar * SPB, gapA = .045;
+      for (let i = 0; i < SPB; i++) {
+        const a0 = -Math.PI / 2 + i / SPB * Math.PI * 2 + gapA, a1 = a0 + Math.PI * 2 / SPB - gapA * 2;
         const ev = chops.find(e => e.s === b0 + i), passed = b0 + i <= f.S, cur = i === f.step;
         ctx.strokeStyle = ev && passed ? trackColor(P, ev.tr) : cur ? P.ink : P.line; ctx.lineWidth = R * .16;
         ctx.globalAlpha = ev && !passed ? .45 : 1; ctx.beginPath(); ctx.arc(cx, cy, R * .9, a0, a1); ctx.stroke();
       }
-      for (let b = 0; b < 4; b++) { const a0 = -Math.PI / 2 + b / 4 * Math.PI * 2 + gapA, a1 = a0 + Math.PI / 2 - gapA * 2; ctx.strokeStyle = b <= f.beat ? P.a1 : P.line; ctx.globalAlpha = 1; ctx.lineWidth = R * .06; ctx.beginPath(); ctx.arc(cx, cy, R * .7, a0, a1); ctx.stroke(); }
+      for (let b = 0; b < BEATS; b++) { const a0 = -Math.PI / 2 + b / BEATS * Math.PI * 2 + gapA, a1 = a0 + Math.PI * 2 / BEATS - gapA * 2; ctx.strokeStyle = b <= f.beat ? P.a1 : P.line; ctx.globalAlpha = 1; ctx.lineWidth = R * .06; ctx.beginPath(); ctx.arc(cx, cy, R * .7, a0, a1); ctx.stroke(); }
       ctx.fillStyle = P.ink; ctx.font = `${R * .5}px ${DOT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(f.bar + 1).padStart(2, "0"), cx, cy - R * .04);
       ctx.fillStyle = P.dim; ctx.font = `${Math.max(u * .9, R * .12)}px ${SANS}`; ctx.fillText(rt.lang === "ja" ? "小節" : "BAR", cx, cy + R * .34); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
     } },
@@ -229,14 +232,14 @@ export const PANELS: Record<string, PanelDef> = {
     } },
 
   lattice: { ja: "格子", en: "LATTICE", g: "拍", draw(ctx, c, f, P, u) {
-      const lab = u * 4.5, cs = Math.min((c.w - lab) / 16, c.h / 4.4), b0 = f.bar * 16, ox = c.x + lab, oy = c.y + (c.h - cs * 4) / 2;
+      const lab = u * 4.5, cs = Math.min((c.w - lab) / SPB, c.h / 4.4), b0 = f.bar * SPB, ox = c.x + lab, oy = c.y + (c.h - cs * 4) / 2;
       ctx.fillStyle = P.ink; ctx.fillRect(ox + f.step * cs, oy - u * .4, cs, cs * 4 + u * .8);
       for (let tr = 0; tr < 4; tr++) {
         ctx.fillStyle = P.dim; ctx.font = `${u * .95}px ${DOT}`; ctx.fillText(TRACKS[tr][rt.lang], c.x, oy + cs * tr + cs * .65);
-        for (let s = 0; s < 16; s++) { ctx.fillStyle = s === f.step ? mix(P.ink, P.bg, .3) : P.line; ctx.fillRect(ox + s * cs + cs * .1, oy + tr * cs + cs * .1, cs * .8, cs * .8); }
+        for (let s = 0; s < SPB; s++) { ctx.fillStyle = s === f.step ? mix(P.ink, P.bg, .3) : P.line; ctx.fillRect(ox + s * cs + cs * .1, oy + tr * cs + cs * .1, cs * .8, cs * .8); }
       }
       for (const e of events) {
-        if (e.s < b0 || e.s >= b0 + 16) continue;
+        if (e.s < b0 || e.s >= b0 + SPB) continue;
         const s = e.s - b0, past = e.s <= f.S, x = ox + s * cs, y = oy + e.tr * cs;
         ctx.fillStyle = trackColor(P, e.tr); ctx.globalAlpha = past ? 1 : .3;
         if (e.fill) { ctx.strokeStyle = trackColor(P, e.tr); ctx.lineWidth = cs * .12; line(ctx, x + cs * .2, y + cs * .2, x + cs * .8, y + cs * .8); line(ctx, x + cs * .8, y + cs * .2, x + cs * .2, y + cs * .8); }
@@ -384,7 +387,7 @@ export const PANELS: Record<string, PanelDef> = {
         const y = c.y + rh * (t + 1), next = events.find(e => e.tr === t && e.s > f.S) || events.find(e => e.tr === t);
         if (!next) continue;
         const wait = Math.round(((next.s - f.S) + STEPS) % STEPS);
-        const now = events.some(e => e.tr === t && e.s <= f.S && f.S < e.s + Math.max(1, e.len) && f.S - e.s < 16);
+        const now = events.some(e => e.tr === t && e.s <= f.S && f.S < e.s + Math.max(1, e.len) && f.S - e.s < SPB);
         ctx.fillStyle = P.line; ctx.fillRect(c.x, y, c.w, u * .08);
         ctx.font = `${fs}px ${DOT}`; ctx.fillStyle = trackColor(P, t); ctx.fillText(TRACKS[t][rt.lang], c.x + c.w * cols[0], y + rh * .68);
         ctx.fillStyle = P.ink; ctx.fillText(next.kind ? (ja ? { kick: "鼓", snare: "締", hat: "鈴" }[next.kind] : next.kind.toUpperCase()) : pfull(next.p), c.x + c.w * cols[1], y + rh * .68);
@@ -417,7 +420,7 @@ export const PANELS: Record<string, PanelDef> = {
     } },
 
   stamp: { ja: "判子", en: "STAMP", g: "拍", draw(ctx, c, f, P) {
-      const KAN = ["打", "刻", "鳴", "響", "織", "返", "破", "急", "爆", "音"], blk = Math.floor(f.S / 128) * 128;
+      const KAN = ["打", "刻", "鳴", "響", "織", "返", "破", "急", "爆", "音"], blk = Math.floor(f.S / (SPB * 8)) * SPB * 8;
       const list = chops.filter(e => e.s >= blk && e.s <= f.S).slice(-40), sz0 = Math.min(c.w, c.h) * .2;
       list.forEach((e, i) => {
         const idx = chops.indexOf(e), x = c.x + c.w * (.12 + .76 * noise(idx, 21)), y = c.y + c.h * (.14 + .72 * noise(idx, 22)), age = f.S - e.s;
@@ -432,7 +435,7 @@ export const PANELS: Record<string, PanelDef> = {
     } },
 
   ink: { ja: "墨", en: "INK", g: "響き", draw(ctx, c, f, P) {
-      const b0 = f.bar * 16, R = Math.min(c.w, c.h);
+      const b0 = f.bar * SPB, R = Math.min(c.w, c.h);
       for (const e of events) {
         if (e.s < b0 || e.s > f.S || (e.kind !== "kick" && e.kind !== "snare")) continue;
         const age = f.S - e.s, cx = c.x + c.w * (.15 + .7 * noise(e.s, 31)), cy = c.y + c.h * (.15 + .7 * noise(e.s, 32));
@@ -442,7 +445,7 @@ export const PANELS: Record<string, PanelDef> = {
         ctx.fill();
         for (let k = 0; k < 8; k++) { const a = noise(k, e.s + 5) * Math.PI * 2, d = r * (1.2 + noise(k, e.s + 6)); circle(ctx, cx + Math.cos(a) * d, cy + Math.sin(a) * d, r * .06 * noise(k, e.s + 7)); ctx.fill(); }
       }
-      if (f.bar % 4 === 3 && f.step >= 8) { ctx.globalAlpha = .95; brush(ctx, c.x + c.w * .05, c.y + c.h * .55, c.x + c.w * .95, c.y + c.h * .4, R * .14, Math.min(1, (f.S % 16 - 8) / 3), f.bar, P.ink); }
+      if (f.isFill) { ctx.globalAlpha = .95; brush(ctx, c.x + c.w * .05, c.y + c.h * .55, c.x + c.w * .95, c.y + c.h * .4, R * .14, Math.min(1, f.fillAmt * 3), f.bar, P.ink); }
       ctx.globalAlpha = 1;
     } },
 };
@@ -450,7 +453,7 @@ Object.assign(PANELS, {
   threads: { ja: "糸譜", en: "THREADS", draw(ctx, c, f, P, u, lf) {
       const lo = 36, hi = 84, rowH = c.h / (hi - lo), W = 32, S = f.S, X = (s: number) => c.x + c.w / 2 + (s - S) / W * c.w;
       ctx.strokeStyle = P.line; ctx.lineWidth = u * .08;
-      for (let b = Math.ceil((S - W / 2) / 4) * 4; b < S + W / 2; b += 4) { ctx.globalAlpha = b % 16 === 0 ? .9 : .35; line(ctx, X(b), c.y, X(b), c.y + c.h); }
+      for (let b = Math.ceil((S - W / 2) / 4) * 4; b < S + W / 2; b += 4) { ctx.globalAlpha = b % SPB === 0 ? .9 : .35; line(ctx, X(b), c.y, X(b), c.y + c.h); }
       ctx.globalAlpha = 1; ctx.lineCap = "round"; let topY = null;
       for (const e of tonal) {
         let s = e.s; if (s - S > STEPS / 2) s -= STEPS; if (S - s > STEPS / 2) s += STEPS;
@@ -500,7 +503,7 @@ Object.assign(PANELS, {
         ctx.globalAlpha = 1;
       }
       ctx.strokeStyle = P.bg; ctx.lineWidth = u * .35;
-      for (let b = Math.ceil(sMin / 16) * 16; b < sMax; b += 16) line(ctx, x0, Y(b) - rh / 2, x0 + cardW, Y(b) - rh / 2);
+      for (let b = Math.ceil(sMin / SPB) * SPB; b < sMax; b += SPB) line(ctx, x0, Y(b) - rh / 2, x0 + cardW, Y(b) - rh / 2);
       const colOf = (e: VEvent) => e.tr === 0 ? e.p % 3 : e.tr === 1 ? 3 + e.p % 3 : e.kind === "kick" ? 6 : 7;
       for (const e of events) {
         if (e.tr === 3) continue;
@@ -533,8 +536,8 @@ Object.assign(PANELS, {
     } },
 
   stitch: { ja: "一目刺し", en: "STITCH", draw(ctx, c, f, P, u) {
-      const cols = 16, cell = c.w / cols, rows = Math.max(2, Math.floor(c.h / cell)), oy = c.y + (c.h - rows * cell) / 2;
-      const b0 = f.bar * 16, blk = Math.floor(f.S / 128) * 128;
+      const cols = SPB, cell = c.w / cols, rows = Math.max(2, Math.floor(c.h / cell)), oy = c.y + (c.h - rows * cell) / 2;
+      const b0 = f.bar * SPB, blk = Math.floor(f.S / (SPB * 8)) * SPB * 8;
       const colBit = []; for (let j = 0; j <= cols; j++) colBit.push(chops.some(e => e.s === b0 + j) ? 1 : 0);
       const hits = chops.filter(e => e.s >= blk && e.s <= f.S), shown = Math.min(rows + 1, hits.length);
       ctx.fillStyle = P.dim; ctx.globalAlpha = .35;
@@ -595,14 +598,14 @@ Object.assign(PANELS, {
     } },
 
   wheel: { ja: "糸車", en: "WHEEL", draw(ctx, c, f, P, u) {
-      const R = Math.min(c.w * .38, c.h * .42), cx = c.x + Math.min(c.w * .4, c.w / 2), cy = c.y + c.h / 2, b0 = f.bar * 16;
-      const rot = -(f.S - b0) / 16 * Math.PI * 2, A = (s: number) => -Math.PI / 2 + (s - b0) / 16 * Math.PI * 2 + rot;
+      const R = Math.min(c.w * .38, c.h * .42), cx = c.x + Math.min(c.w * .4, c.w / 2), cy = c.y + c.h / 2, b0 = f.bar * SPB;
+      const rot = -(f.S - b0) / SPB * Math.PI * 2, A = (s: number) => -Math.PI / 2 + (s - b0) / SPB * Math.PI * 2 + rot;
       ctx.strokeStyle = P.ink; ctx.lineWidth = u * .25; circle(ctx, cx, cy, R); ctx.stroke(); ctx.lineWidth = u * .1; circle(ctx, cx, cy, R * .9); ctx.stroke();
       ctx.strokeStyle = P.dim;
-      for (let i = 0; i < 16; i++) { const a = A(b0 + i); ctx.lineWidth = u * (i % 4 === 0 ? .18 : .07); line(ctx, cx + Math.cos(a) * R * .12, cy + Math.sin(a) * R * .12, cx + Math.cos(a) * R * .9, cy + Math.sin(a) * R * .9); }
+      for (let i = 0; i < SPB; i++) { const a = A(b0 + i); ctx.lineWidth = u * (i % 4 === 0 ? .18 : .07); line(ctx, cx + Math.cos(a) * R * .12, cy + Math.sin(a) * R * .12, cx + Math.cos(a) * R * .9, cy + Math.sin(a) * R * .9); }
       circle(ctx, cx, cy, R * .12); ctx.fillStyle = P.ink; ctx.fill();
       for (const e of events) {
-        if (e.tr === 3 || e.s < b0 || e.s >= b0 + 16 || e.kind === "hat") continue;
+        if (e.tr === 3 || e.s < b0 || e.s >= b0 + SPB || e.kind === "hat") continue;
         const a = A(e.s), r = e.tr === 2 ? R * .78 : R * .95;
         ctx.globalAlpha = e.s <= f.S ? 1 : .3; ctx.fillStyle = trackColor(P, e.tr); circle(ctx, cx + Math.cos(a) * r, cy + Math.sin(a) * r, u * (e.tr === 2 ? .4 : .6)); ctx.fill();
       }
