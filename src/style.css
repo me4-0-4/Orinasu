@@ -2609,3 +2609,11 @@ body[data-tab="video"] .app-footer {
   justify-self: start;
   min-width: 4em;
 }
+
+/* 刻むタブの素材：テンポを入れていない読み込んだ音（まだ刻めない） */
+.mix-material-off {
+  opacity: 0.55;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

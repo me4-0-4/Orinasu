@@ -555,3 +555,21 @@ test("混ぜる：共有の種が無い曲（前に作った曲）は、いち�
   rechop(song);
   assert.equal(song.lanes![1].mixSeeds, undefined);
 });
+
+test("読み込んだ音（sound: の素材）は伸ばさない（パッドのステムを作らない）。フレーズは今まで通り伸ばす", async () => {
+  const sr = 2000;
+  const a = phrase("a", 100);
+  const snd = phrase("sound:x", 100, 62);
+  const base = createEmptySong();
+  const song: Song = { ...base, materialIds: ["sound:x", "a"], bpm: 120, lengthBars: 16 };
+  song.lanes = syncLanes(song, seq);
+  const render = async (p: Phrase, bpm: number): Promise<Pcm> => {
+    const len = Math.round((p.lengthBars * p.beatsPerBar * 60 * sr) / bpm);
+    const l = new Float32Array(len).map((_, i) => Math.sin(i / 7) * 0.3);
+    return { l, r: l.slice() };
+  };
+  const set = (await buildStems(song, [a, snd], render, sr))!;
+  const pads = set.stems.filter((s) => s.kind === "pad").map((s) => s.phraseId);
+  assert.ok(!pads.includes("sound:x"));
+  assert.ok(pads.includes("a"));
+});

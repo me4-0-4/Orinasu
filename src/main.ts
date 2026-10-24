@@ -339,8 +339,12 @@ const mixPanel = buildMixPanel({
     renderPhrase(phrase, bpm, engine.ctx.sampleRate, { ...opts, samples: (id) => soundLibrary.buffer(id) }),
   reverb: (pcm, seconds, toneHz) => reverbWet(pcm, engine.ctx.sampleRate, seconds, toneHz),
   sounds: {
-    list: () => soundLibrary.sounds.map((s) => ({ id: s.id, name: s.name, durationSec: s.durationSec })),
+    list: () => soundLibrary.sounds.map((s) => ({ id: s.id, name: s.name, durationSec: s.durationSec, bpm: s.bpm })),
     pcm: (id) => soundPcm(id),
+    open: (id) => {
+      selectTab("sound");
+      soundPanel.select(id);
+    },
   },
 });
 

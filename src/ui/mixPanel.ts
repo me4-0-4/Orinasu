@@ -85,8 +85,10 @@ export interface MixPanelDeps {
   reverb: ReverbFn;
   /** 置く音に使える、読み込んだ音と、その中身（曲のサンプリングレートの波形）。 */
   sounds: {
-    list: () => { id: string; name: string; durationSec: number }[];
+    list: () => { id: string; name: string; durationSec: number; bpm?: number }[];
     pcm: SoundSource;
+    /** サンプラータブで、その音を開く（テンポを入れてもらうため）。 */
+    open: (id: string) => void;
   };
 }
 
@@ -659,6 +661,16 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       });
       const kind = isSoundPhraseId(p.id) ? "読み込んだ音・" : "";
       row.append(check, el("span", "layer-role-label", `${p.name}（${kind}${p.lengthBars}小節・元${p.bpm}BPM）`));
+      materialList.appendChild(row);
+    }
+    // テンポを入れていない読み込んだ音は、まだ刻めない。薄く並べて、サンプラータブで入れてもらう
+    const noTempo = deps.sounds.list().filter((x) => !x.bpm);
+    if (noTempo.length > 0) materialEmpty.hidden = true;
+    for (const x of noTempo) {
+      const row = el("div", "layer-row mix-material-off");
+      row.title = "テンポを入れると刻める（サンプラータブで、テンポと1拍目を決める）";
+      const label = el("span", "layer-role-label", `${x.name}（読み込んだ音・テンポ未設定）`);
+      row.append(label, button("テンポを入れる", () => deps.sounds.open(x.id), "layer-toggle"));
       materialList.appendChild(row);
     }
   }
