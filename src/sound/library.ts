@@ -17,7 +17,8 @@ import {
 export class SoundLibrary {
   sounds: StoredSound[] = [];
   private readonly ctx: BaseAudioContext;
-  private readonly buffers = new Map<string, { blob: Blob; buffer: Promise<AudioBuffer> }>();
+  /** 音の中身は id ごとに変わらないので、一度音にしたら使い回す（読み直しても Blob は別物になるため、Blob では比べない）。 */
+  private readonly buffers = new Map<string, { buffer: Promise<AudioBuffer>; ready?: AudioBuffer }>();
   private readonly listeners = new Set<() => void>();
 
   constructor(ctx: BaseAudioContext) {
@@ -76,7 +77,7 @@ export class SoundLibrary {
         updatedAt: now,
         blob: file,
       };
-      this.buffers.set(sound.id, { blob: file, buffer: Promise.resolve(buffer) });
+      this.buffers.set(sound.id, { buffer: Promise.resolve(buffer), ready: buffer });
       await saveSound(sound, { added: true });
       added.push(sound);
     }
@@ -106,10 +107,20 @@ export class SoundLibrary {
     const s = this.get(id);
     if (!s?.blob) return null;
     const cached = this.buffers.get(id);
-    if (cached && cached.blob === s.blob) return cached.buffer.catch(() => null);
-    const blob = s.blob;
-    const buffer = blob.arrayBuffer().then((data) => this.ctx.decodeAudioData(data));
-    this.buffers.set(id, { blob, buffer });
-    return buffer.catch(() => null);
+    if (cached) return cached.buffer.catch(() => null);
+    const entry: { buffer: Promise<AudioBuffer>; ready?: AudioBuffer } = {
+      buffer: s.blob.arrayBuffer().then((data) => this.ctx.decodeAudioData(data)),
+    };
+    entry.buffer.then((b) => (entry.ready = b)).catch(() => undefined);
+    this.buffers.set(id, entry);
+    return entry.buffer.catch(() => null);
+  }
+
+  /** もう音にしてある中身（すぐ鳴らす所で使う）。まだなら null で、裏で用意を始める。 */
+  cached(id: string): AudioBuffer | null {
+    const entry = this.buffers.get(id);
+    if (entry?.ready) return entry.ready;
+    if (!entry) void this.buffer(id);
+    return null;
   }
 }

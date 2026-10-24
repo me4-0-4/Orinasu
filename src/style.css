@@ -361,8 +361,7 @@ body {
 
 /* 刻むタブでは、下の鍵盤を使わない */
 body[data-tab="mix"] .app-footer,
-body[data-tab="video"] .app-footer,
-body[data-tab="sound"] .app-footer {
+body[data-tab="video"] .app-footer {
   display: none;
 }
 
@@ -2548,7 +2547,7 @@ body[data-tab="sound"] .app-footer {
 
 .snd-wave {
   width: 100%;
-  height: 160px;
+  height: 120px;
   background: var(--bg);
   border: 1px solid var(--border);
   touch-action: manipulation;
@@ -2580,4 +2579,28 @@ body[data-tab="sound"] .app-footer {
   .snd-shelf {
     flex: none;
   }
+}
+
+.snd-inst {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.snd-inst-target {
+  font-size: 0.82rem;
+}
+
+.snd-knobs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22em), 1fr));
+  gap: 2px 24px;
+}
+
+.snd-knobs[hidden],
+.snd-inst [hidden] {
+  display: none;
 }

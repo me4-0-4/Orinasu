@@ -2,7 +2,7 @@ import { AudioBuses, createNoiseBuffer } from "./context";
 import { DrumMachine, noteNumberToDrum } from "./drums";
 import { DEFAULT_VOLUME, LayerSynths } from "./layerSynths";
 import { quantizeBeat } from "../phrase/quantize";
-import { totalBeats, type Phrase } from "../phrase/types";
+import { totalBeats, usesSampler, type Phrase } from "../phrase/types";
 import type { Pcm } from "../mix/pcm";
 import { foldTail } from "../mix/loopFold";
 
@@ -16,6 +16,8 @@ export interface RenderOptions {
   drumsOnly?: boolean;
   /** スウィング（0〜1）：16分の裏の音を後ろにずらす（1で3連符のはね）。 */
   swing?: number;
+  /** サンプラーの層が鳴らす音の中身。渡さない・用意できない音は鳴らない。 */
+  samples?: (soundId: string) => Promise<AudioBuffer | null>;
 }
 
 /**
@@ -40,13 +42,20 @@ export async function renderPhrase(
   const buses = new AudioBuses(ctx, master);
   // 余韻なし：リバーブ・ディレイの送り先を、どこにもつながっていない行き止まりにする（刻んだ断片がにじまない）
   const deadEnd = ctx.createGain();
+  // サンプラーの層が使う音を、先に全部用意しておく（鳴らす所は待てないので）
+  const samples = new Map<string, AudioBuffer | null>();
+  for (const layer of phrase.layers) {
+    if (!usesSampler(layer) || !opts.samples) continue;
+    const id = layer.sampler!.soundId;
+    if (!samples.has(id)) samples.set(id, await opts.samples(id));
+  }
   const synths = new LayerSynths({
     ctx,
     synthDry: buses.synthDry,
     synthReverbSend: opts.dry ? deadEnd : buses.synthReverbSend,
     synthDelaySend: opts.dry ? deadEnd : buses.synthDelaySend,
     drumOut: buses.drumOut,
-  });
+  }, (id) => samples.get(id) ?? null);
   const drums = new DrumMachine(ctx, createNoiseBuffer(ctx), buses.drumOut);
 
   // 元のフレーズは触らない（シンセの初期音色を層に入れるため、複製して使う）
@@ -61,7 +70,7 @@ export async function renderPhrase(
         const id = noteNumberToDrum[note.pitch];
         if (id) drums.trigger(id, note.velocity * (layer.volume ?? DEFAULT_VOLUME), start, synths.drumOut(layer));
       } else {
-        const engine = synths.forLayer(layer);
+        const engine = synths.instrumentFor(layer);
         engine.noteOn(`r:${note.id}`, note.pitch, note.velocity, start);
         engine.noteOff(`r:${note.id}`, false, start + Math.max(0.02, note.durationBeats * secondsPerBeat));
       }

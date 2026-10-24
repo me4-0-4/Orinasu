@@ -14,13 +14,22 @@ import {
   type StoredSound,
 } from "../sound/types";
 import { getCloudState, subscribeCloud, subscribeSoundCloud, type SoundCloudState } from "../cloud/sync";
-import { button, el } from "./mixWidgets";
+import { button, choice, el, knob, type Control } from "./mixWidgets";
+import { usesSampler, type Layer } from "../phrase/types";
+import { MAX_ATTACK, MAX_RELEASE, pitchName, type SamplerHold, type SamplerParams } from "../sound/sampler";
 
 export interface SoundPanelDeps {
   library: SoundLibrary;
   audio: { ctx: AudioContext; out: AudioNode };
   /** 鳴らす前に呼ぶ：音を出す準備と、ほかの音を止める。 */
   prepareAudio: () => Promise<void>;
+  /** 鍵盤で鳴らす楽器（編集中の層）。 */
+  instrument: {
+    target: () => { layer: Layer; label: string };
+    /** この層を、その音で鳴らす。null ならシンセに戻す。 */
+    useSound: (soundId: string | null) => void;
+    change: (patch: Partial<SamplerParams>) => void;
+  };
 }
 
 export interface SoundPanel {
@@ -28,6 +37,8 @@ export interface SoundPanel {
   /** スペース：選んだ音の試聴 ⇔ 停止。 */
   togglePlay: () => void;
   stop: () => void;
+  /** 編集中の層が変わったとき。 */
+  refreshInstrument: () => void;
 }
 
 const BAR_CHOICES = [1, 2, 4, 8, 16, 32];
@@ -103,6 +114,132 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
 
   const removeButton = button("この音を消す", () => void removeSelected(), "layer-toggle snd-remove");
   body.append(nameInput, info, canvas, waveNote, playRow, tempoRow, barsRow, tempoNote, removeButton);
+
+  // --- 鍵盤で鳴らす（編集中の層の楽器） -------------------------------------------------
+  const inst = deps.instrument;
+  const instBox = el("div", "snd-inst");
+  const instHead = el("div", "panel-heading", "鍵盤で鳴らす");
+  const instTarget = el("div", "snd-inst-target");
+  const useButton = button("この層を、選んだ音で鳴らす", () => {
+    if (selectedId) inst.useSound(selectedId);
+  }, "preset-button");
+  const backButton = button("シンセに戻す", () => inst.useSound(null), "layer-toggle");
+  const instRow = el("div", "snd-row");
+  instRow.append(useButton, backButton);
+  const instNote = el("div", "snd-hint");
+  const sampler = (): SamplerParams | undefined => {
+    const layer = inst.target().layer;
+    return usesSampler(layer) ? layer.sampler : undefined;
+  };
+  const change = (patch: Partial<SamplerParams>): void => {
+    inst.change(patch);
+    refreshInstrument();
+  };
+  const sec = (v: number): string => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}秒`);
+  const controls: Control[] = [
+    knob({
+      label: "元の高さ",
+      min: 24,
+      max: 96,
+      step: 1,
+      get: () => sampler()?.rootPitch ?? 60,
+      set: (v) => change({ rootPitch: v }),
+      format: (v) => pitchName(v),
+      hint: () => "この鍵盤を押すと、読み込んだときの高さで鳴ります。右の鍵盤ほど高く（速く）なります",
+    }),
+    knob({
+      label: "細かい音程",
+      min: -100,
+      max: 100,
+      step: 1,
+      get: () => sampler()?.tune ?? 0,
+      set: (v) => change({ tune: v }),
+      format: (v) => `${v > 0 ? "+" : ""}${v}セント`,
+      hint: () => "半音より細かく、高さを合わせます（100セント＝半音）",
+    }),
+    knob({
+      label: "始まり",
+      get: () => sampler()?.start ?? 0,
+      set: (v) => change({ start: Math.min(v, (sampler()?.end ?? 1) - 0.001) }),
+      format: (v) => formatSeconds(v * (selectedSoundOfLayer()?.durationSec ?? 0)),
+      hint: () => "音のどこから鳴らすか（波形の明るい所が鳴る範囲）",
+    }),
+    knob({
+      label: "終わり",
+      get: () => sampler()?.end ?? 1,
+      set: (v) => change({ end: Math.max(v, (sampler()?.start ?? 0) + 0.001) }),
+      format: (v) => formatSeconds(v * (selectedSoundOfLayer()?.durationSec ?? 0)),
+      hint: () => "音のどこまで鳴らすか",
+    }),
+    knob({
+      label: "立ち上がり",
+      min: 0,
+      max: MAX_ATTACK,
+      step: 0.001,
+      get: () => sampler()?.attack ?? 0,
+      set: (v) => change({ attack: v }),
+      format: sec,
+      hint: () => "押してから、いちばん大きくなるまでの時間。長くすると、ふわっと入ります",
+    }),
+    knob({
+      label: "消え方",
+      min: 0,
+      max: MAX_RELEASE,
+      step: 0.001,
+      get: () => sampler()?.release ?? 0,
+      set: (v) => change({ release: v }),
+      format: sec,
+      hint: () => "離してから、消えるまでの時間",
+    }),
+    choice<SamplerHold>({
+      label: "鳴らし方",
+      options: () => [
+        ["gate", "押している間だけ"],
+        ["oneshot", "最後まで鳴らす"],
+      ],
+      get: () => sampler()?.hold ?? "gate",
+      set: (v) => change({ hold: v }),
+      hint: () => "「最後まで鳴らす」は、すぐ離しても範囲の終わりまで鳴ります（ドラムや短い音に）",
+    }),
+  ];
+  const knobBox = el("div", "snd-knobs");
+  knobBox.append(...controls.map((c) => c.el));
+  instBox.append(instHead, instTarget, instRow, instNote, knobBox);
+  body.append(instBox);
+
+  /** 編集中の層が鳴らしている音（棚にあれば）。 */
+  function selectedSoundOfLayer(): StoredSound | undefined {
+    const p = sampler();
+    return p ? library.get(p.soundId) : undefined;
+  }
+
+  function refreshInstrument(): void {
+    const { layer, label } = inst.target();
+    const p = sampler();
+    const s = selected();
+    const using = p ? library.get(p.soundId) : undefined;
+    if (layer.role === "drums") {
+      instTarget.textContent = `編集中：${label}`;
+      instNote.textContent = "ドラムの層はサンプラーにできません。フレーズタブで、ほかの層を選んでください";
+      useButton.hidden = true;
+      backButton.hidden = true;
+      knobBox.hidden = true;
+      return;
+    }
+    instTarget.textContent = p
+      ? `編集中：${label} ・ サンプラー（${using?.name ?? "棚に無い音"}）`
+      : `編集中：${label} ・ シンセ`;
+    useButton.hidden = !s || p?.soundId === s.id;
+    useButton.textContent = p ? "選んだ音に替える" : "この層を、選んだ音で鳴らす";
+    backButton.hidden = !p;
+    knobBox.hidden = !p;
+    instNote.textContent = p
+      ? "下の鍵盤（PCキーボードの A・S・D… でも）で弾けます。フレーズタブで録音すると、この音で録れます"
+      : "選んだ音を、編集中の層の楽器にします。どの層を編集するかは、フレーズタブで選びます";
+    for (const c of controls) c.refresh();
+    renderDetail();
+  }
+
   detail.append(detailHead, empty, body);
   root.append(shelf, detail);
 
@@ -136,6 +273,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
       showMessage("音を読み込めませんでした", "error");
     }
     render();
+    refreshInstrument();
   }
 
   fileInput.addEventListener("change", () => {
@@ -188,6 +326,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
         selectedId = s.id;
         setPlacing(false);
         render();
+        refreshInstrument();
       });
       list.append(row);
       requestAnimationFrame(() => drawPeaks(thumb, s, { grid: false }));
@@ -269,6 +408,13 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
       const px = (i / n) * w;
       const ph = Math.max(1, s.peaks[i] * (h / 2 - 2));
       g.fillRect(px, mid - ph, Math.max(1, w / n - 0.5), ph * 2);
+    }
+    // サンプラーで鳴らす範囲の外を暗くする（編集中の層がこの音を鳴らしているとき）
+    const p = sampler();
+    if (opts.grid && p && p.soundId === s.id && (p.start > 0 || p.end < 1)) {
+      g.fillStyle = "rgba(0,0,0,0.55)";
+      g.fillRect(0, 0, p.start * w, h);
+      g.fillRect(p.end * w, 0, w - p.end * w, h);
     }
     if (opts.grid) {
       // 拍の線は波形の上に重ねる（音の頭と重なっても見えるように）
@@ -418,6 +564,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
   library.subscribe(() => {
     if (selectedId && !library.get(selectedId)) selectedId = null;
     render();
+    refreshInstrument();
   });
   subscribeCloud((st) => {
     signedIn = st.status !== "signedOut";
@@ -432,7 +579,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
   new ResizeObserver(() => renderDetail()).observe(canvas);
   void library.reload();
 
-  return { el: root, togglePlay, stop };
+  return { el: root, togglePlay, stop, refreshInstrument };
 }
 
 function round(v: number): number {
