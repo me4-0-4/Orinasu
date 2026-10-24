@@ -1,4 +1,5 @@
 import { planDrops, renderDrops, type Drop } from "./drops.ts";
+import { isSoundPhraseId } from "../sound/soundPhrase.ts";
 import { createRng } from "../theory/rng.ts";
 import { keyShortName } from "../theory/key.ts";
 import { totalBeats, type Phrase } from "../phrase/types.ts";
@@ -494,16 +495,18 @@ export async function buildStems(
   const glueSeed = lanes[0].cutSeed;
   // 伸ばし：元の曲の和音を引き伸ばして、うしろでうっすら鳴らす（断片の間をつなぐ）。曲（トラック）ごとのステムにして、その層のフェーダーに従わせる
   // 量（パッドの量）は掛け算だけなので、いちばん大きい量で作って、ミキサーのフェーダー（@pad）で下げる
-  {
-    const padKey = JSON.stringify([built.map((b) => [cache ? cache.idOf(b.pad.pcm) : 0, b.pad.srcBars, b.pad.keyShift]), glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm, pumpKey]);
+  // 読み込んだ音（声・ループなど）は伸ばさない：和音ではないので、ちぎって重ねると、ずっと何かが鳴っている音になる
+  const padBuilt = built.filter((b) => !isSoundPhraseId(b.view.phraseId));
+  if (padBuilt.length > 0) {
+    const padKey = JSON.stringify([padBuilt.map((b) => [cache ? cache.idOf(b.pad.pcm) : 0, b.pad.srcBars, b.pad.keyShift]), glueSeed, grid, fxOn(song.fx.pad) ? song.fx.pad : null, song.bpm, pumpKey]);
     const pads = await cached(`pad|${padKey}`, async () => {
-      const raw = renderPadStems(built.map((b) => b.pad), grid, 1, createRng(glueSeed ^ 0x51ed270b));
+      const raw = renderPadStems(padBuilt.map((b) => b.pad), grid, 1, createRng(glueSeed ^ 0x51ed270b));
       const out: Pcm[] = [];
       for (const r of raw) out.push(pumped(fxOn(song.fx.pad) ? await applyTrack(r, song.fx.pad, fxEnv!) : r));
       return out;
     });
     // 偶然で一度も選ばれなかった曲の伸ばしは、無音なので入れない（メモリの節約）
-    built.forEach((b, i) => {
+    padBuilt.forEach((b, i) => {
       if (pads[i].l.some((x) => x !== 0)) stems.push({ id: `pad:${b.view.phraseId}`, kind: "pad", phraseId: b.view.phraseId, channel: "pad", pcm: pads[i] });
     });
   }

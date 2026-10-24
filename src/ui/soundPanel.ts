@@ -56,6 +56,8 @@ export interface SoundPanel {
   stop: () => void;
   /** 編集中の層が変わったとき。 */
   refreshInstrument: () => void;
+  /** 棚のこの音を選ぶ（ほかのタブから飛んできたとき）。 */
+  select: (id: string) => void;
 }
 
 const BAR_CHOICES = [1, 2, 4, 8, 16, 32];
@@ -792,7 +794,18 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
   new ResizeObserver(() => renderDetail()).observe(canvas);
   void library.reload();
 
-  return { el: root, togglePlay, stop, refreshInstrument };
+  function select(id: string): void {
+    if (!library.get(id)) return;
+    if (selectedId !== id) stop();
+    selectedId = id;
+    setPlacing(false);
+    render();
+    refreshInstrument();
+    // 選んだ音の、テンポの所が見えるように
+    tempoRow.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  return { el: root, togglePlay, stop, refreshInstrument, select };
 }
 
 function round(v: number): number {
