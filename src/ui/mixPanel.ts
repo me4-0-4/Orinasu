@@ -313,7 +313,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const lengthBox = el("label", "tp-field");
   lengthBox.append(el("span", "tp-label", "長さ"), lengthSelect);
   const meterSelect = el("select", "quantize-select tp-meter");
-  meterSelect.title = "拍子（1小節の拍数）。変えると、小節の区切りが変わるので、曲を作り直す";
+  meterSelect.title = "拍子（1小節の拍数）。変えると小節の区切りが変わるので、曲を作り直します";
   for (const n of METER_OPTIONS) {
     const o = el("option", undefined, `${n}/4`);
     o.value = String(n);
@@ -363,7 +363,19 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const exportButton = button("書き出し", () => void saveWav(), "preset-button", "刻んだ曲を、WAVファイルにして保存する");
   const exportBox = el("div", "tp-export");
   exportBox.append(exportButton, loopSelect);
-  transport.append(playButton, posBox, bpmBox, meterBox, lengthBox, chopBox, undoButton, redoButton, statusText, exportBox);
+  // 操作を種類ごとの島に分ける：再生まわり｜曲の枠｜刻む｜（状態）｜書き出し
+  const island = (...children: HTMLElement[]): HTMLElement => {
+    const box = el("div", "tp-island");
+    box.append(...children);
+    return box;
+  };
+  transport.append(
+    island(playButton, posBox),
+    island(bpmBox, meterBox, lengthBox),
+    island(chopBox, undoButton, redoButton),
+    statusText,
+    exportBox,
+  );
 
   // ------------------------------------------------------------------ アレンジ画面（トラックヘッダー＋線）
 
@@ -542,7 +554,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       );
       // ヘッダーは短い名前（ドラムループの元のフレーズは、乗せたときの説明とインスペクタで）
       name.textContent =
-        kind === "drop" ? `${song.drops?.locked ? "🔒 " : ""}置く音` : `${lane?.locked ? "🔒 " : ""}${kind === "bed" ? "ドラムループ" : trackName(key)}`;
+        kind === "drop" ? `置く音${song.drops?.locked ? "（固定）" : ""}` : `${kind === "bed" ? "ドラムループ" : trackName(key)}${lane?.locked ? "（固定）" : ""}`;
       name.title = `${trackName(key)}（タップで選ぶ）`;
       if (mute) mute.classList.toggle("on", kind === "bed" ? !!song.bedMuted : kind === "drop" ? !!song.drops?.muted : !!lane?.muted);
       if (soloButton) soloButton.classList.toggle("on", kind === "bed" ? solo.bed : !!lane && solo.lanes.has(lane.phraseId));
@@ -638,7 +650,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   // --- 曲：素材 ---
   const materialList = el("div", "mix-list");
-  const materialEmpty = el("div", "layer-empty", "フレーズタブで保存したフレーズと、サンプラータブでテンポを入れた音が、ここに並ぶ");
+  const materialEmpty = el("div", "layer-empty", "フレーズタブで保存したフレーズと、サンプラータブでテンポを入れた音が、ここに並びます。");
   function renderMaterials(): void {
     const phrases = deps.getPhrases();
     materialList.innerHTML = "";
@@ -677,7 +689,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   // --- 曲：置く音 ---
   const dropList = el("div", "mix-list");
-  const dropEmpty = el("div", "layer-empty", "サンプラータブで音を読み込むと、ここに並ぶ");
+  const dropEmpty = el("div", "layer-empty", "サンプラータブで音を読み込むと、ここに並びます。");
   let dropSignature = "";
   function renderDropList(): void {
     const sounds = deps.sounds.list();
@@ -704,7 +716,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       label: "置く多さ",
       get: () => song.drops?.amount ?? 0.5,
       set: (v) => setDrops((d) => ({ ...d, amount: v }), true),
-      hint: () => "多いほど、たくさん置く（区切りの頭から埋まっていく）",
+      hint: () => "多いほど、たくさん置きます（区切りの頭から埋まります）",
     }),
   );
   const dropReroll = button("置き場所を振り直す", () => {
@@ -744,8 +756,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       },
       hint: () =>
         song.params.style === "music"
-          ? "拍の格子で切って、元の同じ小節（コード）から取る。1〜2小節のパターンをくり返し、4小節目はフィル"
-          : "音の立ち上がりか等分で自由に切って、偶然で打つ。複数のトラックは重なる",
+          ? "拍の格子で切り、元の同じ小節（コード）から取ります。1〜2小節のパターンをくり返し、4小節目はフィルにします"
+          : "音の立ち上がりか等分で自由に切り、偶然で打ちます。複数のトラックは重なります",
     }),
   );
   const turnsChoice = reg(
@@ -763,9 +775,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       },
       hint: () =>
         ({
-          mix: "1つのリズムの中で、打つ1回ごとにどのトラックの断片を使うかを偶然で決める（刻み方は全体のつまみ。トラックごとのずらしは効かない）",
-          call: "前半2拍と後半2拍を別のトラックが受け持つ（4小節ごとに呼ぶ側が替わる）",
-          swap: "4小節ごとに、鳴らすトラックが替わる",
+          mix: "1つのリズムの中で、打つたびにどのトラックの断片を使うかを偶然で決めます（刻み方は全体のつまみで決まり、トラックごとのずらしは効きません）",
+          call: "前半2拍と後半2拍を、別のトラックが受け持ちます（4小節ごとに呼ぶ側が替わります）",
+          swap: "4小節ごとに、鳴らすトラックが替わります",
         })[song.params.turns],
     }),
   );
@@ -799,24 +811,24 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const sizeHint = (v: number): string => {
     if (song.params.style === "music") {
       const words = { 1: "16分", 2: "8分", 4: "1拍" } as const;
-      return `${words[musicSlotSteps(v)]}ごとに刻む（元の拍の位置にそろう）`;
+      return `${words[musicSlotSteps(v)]}ごとに刻みます（元の拍の位置にそろいます）`;
     }
     const { minMs, maxMs } = sliceLimits(v);
     return song.params.mode === "divide" ? `曲を ${divisionsFor(v)} 等分` : `最短 ${minMs}ms・最長 ${maxMs}ms`;
   };
   const shapeDefs: [ShapeKey, string, (v: number) => string, "music" | "material" | "both"][] = [
     ["busy", "密度", () => "どれくらい打つか", "both"],
-    ["breaks", "休み", (v) => `曲の約${Math.round(v * 50)}%を、まとめて休みにする`, "both"],
-    ["onBeat", "拍に寄せる", () => "1・2・3・4拍目に打ちやすく", "both"],
+    ["breaks", "休み", (v) => `曲の約${Math.round(v * 50)}%を、まとめて休みにします`, "both"],
+    ["onBeat", "拍に寄せる", () => "1・2・3・4拍目に打ちやすくします", "both"],
     ["size", "断片の長さ", sizeHint, "both"],
-    ["hold", "音の長さ", (v) => `次に打つ所までの ${Math.round(holdFraction(v, song.params.style) * 100)}% で切る`, "material"],
-    ["crisp", "キレ", (v) => `小節の約${Math.round(v * 100)}%を、短い隙間でメリハリをつける（残りは隙間なくつなぐ）`, "music"],
-    ["motion", "音程の動き", () => (song.params.style === "music" ? "繰り返しの1オクターブ上げ、フィルの終わりの階段" : "断片の高さを近い高さへ動かす"), "both"],
-    ["pan", "パン", () => "刻んだ所を左右に交互に振る", "music"],
+    ["hold", "音の長さ", (v) => `次に打つ所までの ${Math.round(holdFraction(v, song.params.style) * 100)}% で切ります`, "material"],
+    ["crisp", "キレ", (v) => `小節の約${Math.round(v * 100)}%に、短いすき間でメリハリをつけます（残りはすき間なくつなぎます）`, "music"],
+    ["motion", "音程の動き", () => (song.params.style === "music" ? "繰り返しの1オクターブ上げ、フィルの終わりの階段" : "断片の高さを、近い高さへ動かします"), "both"],
+    ["pan", "パン", () => "刻んだ所を、左右に交互に振ります", "music"],
     ["fx", "フィルの加工", () => "フィルに、フィルター・テープストップ・音質下げ・逆再生のどれかを掛ける割合", "music"],
-    ["repeat", "くり返し", (v) => `打つ所の約${Math.round(v * 100)}%で、前と同じ断片をもう一度打つ（連打）`, "music"],
-    ["fills", "フィル", (v) => (v >= 1 ? "4小節ごと（と最後）の小節を、フィルにする" : v <= 0 ? "フィルなし。同じパターンを続ける" : `4小節ごと（と最後）の約${Math.round(v * 100)}%を、フィルにする`), "music"],
-    ["vary", "変化", (v) => (v <= 0 ? "決めたパターンを、そのままくり返す" : `小節の約${Math.round(v * 100)}%を、新しいパターンに替える（偶然の度合い）`), "music"],
+    ["repeat", "くり返し", (v) => `打つ所の約${Math.round(v * 100)}%で、前と同じ断片をもう一度打ちます（連打）`, "music"],
+    ["fills", "フィル", (v) => (v >= 1 ? "4小節ごと（と最後）の小節を、フィルにします" : v <= 0 ? "フィルなし。同じパターンを続けます" : `4小節ごと（と最後）の約${Math.round(v * 100)}%を、フィルにします`), "music"],
+    ["vary", "変化", (v) => (v <= 0 ? "決めたパターンを、そのままくり返します" : `小節の約${Math.round(v * 100)}%を、新しいパターンに替えます（偶然の度合い）`), "music"],
   ];
   // --- 形のランダム化（ひとつ前の形に戻せる） ---
   let shapeBackup: { params: Partial<Record<ShapeKey, number>>; shifts: (Partial<Record<ShapeKey, number>> | undefined)[] } | null = null;
@@ -876,7 +888,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         song.params.swing = v;
         changed();
       },
-      hint: () => "16分の裏を後ろにずらして、はねさせる（100%で3連符のはね。ドラムループにも掛かる）",
+      hint: () => "16分の裏を後ろにずらして、はねさせます（100%で3連符のはね。ドラムループにも掛かります）",
     }),
   );
 
@@ -890,7 +902,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         song.drumId = v === "" ? null : v;
         changed();
       },
-      hint: () => "選んだフレーズのドラムだけを、刻まずに最初から最後まで鳴らす（ノリの軸）。刻む素材と同じフレーズでもいい",
+      hint: () => "選んだフレーズのドラムだけを、刻まずに最初から最後まで鳴らします（ノリの軸）。刻む素材と同じフレーズでもかまいません",
     }),
   );
   const bedKnob = reg(
@@ -908,7 +920,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         song.params.pump = v;
         changed();
       },
-      hint: () => "ドラムループのキックに合わせて、刻んだ音とパッドを沈ませる（キックが無ければ4つ打ちで）",
+      hint: () => "ドラムループのキックに合わせて、刻んだ音とパッドを沈ませます（キックが無ければ4つ打ちで）",
     }),
   );
 
@@ -926,7 +938,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       label: "パッド",
       get: () => song.params.pad,
       set: (v) => setChannelParam("pad", v),
-      hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らし続ける（断片の間をつなぐ）",
+      hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らし続けます（断片の間をつなぎます）",
     }),
   );
   const dryChoice = reg(
@@ -949,7 +961,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   /** 保存した曲の一覧（新しい順）。保存・削除のたびに読み直す。 */
   let library: Song[] = [];
   const libraryList = el("div", "mix-list");
-  const libraryEmpty = el("div", "layer-empty", "まだ保存した曲はない");
+  const libraryEmpty = el("div", "layer-empty", "まだ保存した曲はありません。");
   const libraryStatus = el("div", "ins-meta");
   libraryStatus.setAttribute("role", "status");
   const saveButton = button("保存", () => void saveToLibrary(false), "preset-button", "いまの曲を、名前を付けて残す");
@@ -967,7 +979,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       library = await deps.listSavedSongs();
     } catch (err) {
       console.error("保存した曲を読み込めませんでした", err);
-      libraryStatus.textContent = "保存した曲を読み込めなかった";
+      libraryStatus.textContent = "保存した曲を読み込めませんでした。";
     }
     renderLibrary();
   }
@@ -994,7 +1006,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
 
   async function saveToLibrary(asNew: boolean): Promise<void> {
     if (!song.lanes) {
-      libraryStatus.textContent = "まだ刻んでいないので、保存する曲がない（先に「刻む」）";
+      libraryStatus.textContent = "まだ刻んでいないので、保存する曲がありません。先に「刻む」を押してください。";
       return;
     }
     const target = !asNew ? currentSaved() : undefined;
@@ -1003,45 +1015,45 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       await deps.putSavedSong(saved);
     } catch (err) {
       console.error("曲を保存できませんでした", err);
-      libraryStatus.textContent = "保存できなかった";
+      libraryStatus.textContent = "保存できませんでした。";
       return;
     }
     song.savedId = saved.id;
     touch(); // 作業中の曲にも、どの保存した曲から来たかを残す
-    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を${target ? "上書き" : ""}保存した`;
+    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を${target ? "上書き" : ""}保存しました`;
     await loadLibrary();
   }
 
   function openFromLibrary(saved: Song): void {
-    if (hasUnsavedWork() && !window.confirm("いまの曲は保存されていない。開くと入れ替わるけど、いい？")) return;
+    if (hasUnsavedWork() && !window.confirm("いまの曲は保存されていません。開くと入れ替わりますが、よろしいですか？")) return;
     const next = openedSong(saved);
     pruneMissing(next); // 消したフレーズは外す
     api.setSong(next);
     touch();
-    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を開いた`;
+    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を開きました`;
   }
 
   function startNewSong(): void {
-    if (hasUnsavedWork() && !window.confirm("いまの曲は保存されていない。新しい曲にすると消えるけど、いい？")) return;
+    if (hasUnsavedWork() && !window.confirm("いまの曲は保存されていません。新しい曲にすると消えますが、よろしいですか？")) return;
     api.setSong(createEmptySong());
     touch();
     libraryStatus.textContent = "";
   }
 
   async function deleteFromLibrary(saved: Song): Promise<void> {
-    if (!window.confirm(`保存した曲「${saved.name || "無題の曲"}」を削除する？`)) return;
+    if (!window.confirm(`保存した曲「${saved.name || "無題の曲"}」を削除しますか？`)) return;
     try {
       await deps.deleteSavedSong(saved.id);
     } catch (err) {
       console.error("保存した曲を削除できませんでした", err);
-      libraryStatus.textContent = "削除できなかった";
+      libraryStatus.textContent = "削除できませんでした。";
       return;
     }
     if (song.savedId === saved.id) {
       delete song.savedId; // いまの曲は残す。次の「保存」は新しい曲になる
       touch();
     }
-    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を削除した`;
+    libraryStatus.textContent = `「${saved.name || "無題の曲"}」を削除しました`;
     await loadLibrary();
   }
 
@@ -1049,13 +1061,13 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     section(
       "library",
       "保存した曲",
-      note("いまの曲は自動で残る。名前を付けて取っておきたい曲は「保存」。曲の中身は刻み方（種と設定）なので、素材のフレーズを直すと、保存した曲の音も変わる"),
+      note("いまの曲は自動で残ります。曲の中身は刻み方（種と設定）なので、素材のフレーズを直すと、保存した曲の音も変わります。"),
       libraryButtons,
       libraryStatus,
       libraryEmpty,
       libraryList,
     ),
-    section("material", "素材", note("刻むフレーズを選ぶ。1つのフレーズが、1つのトラックになる"), materialEmpty, materialList),
+    section("material", "素材", note("1つのフレーズが、1つのトラックになります。"), materialEmpty, materialList),
     section(
       "chop",
       "刻み方",
@@ -1070,14 +1082,14 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     section(
       "drops",
       "置く音",
-      note("サンプラータブで読み込んだ音を、刻まずにまるごと曲の上に置く。置く場所は偶然で決まる（区切りの頭に置かれやすい）。置いた音が鳴っている間は、次を置かない"),
+      note("サンプラータブで読み込んだ音を、刻まずにまるごと曲に置きます。置く場所は偶然で決まり、鳴っている間は次を置きません。"),
       dropEmpty,
       dropList,
       dropAmount.el,
       dropButtons,
     ),
     section("finish", "仕上げ", sfxKnob.el, padKnob.el, dryChoice.el, button("マスターのFXを開く", () => openTrackFx("master"), "preset-button")),
-    section("groups", "グループ", note("断片をいくつか選んで「グループにする」と、まとめて刻み方・ミュート・FXを変えられる"), groupList),
+    section("groups", "グループ", note("断片をいくつか選んで「グループにする」と、刻み方・ミュート・FXをまとめて変えられます。"), groupList),
     section("info", "曲の情報", nameRow, keyInfo),
   );
 
@@ -1092,7 +1104,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       updateLane(sel.key, (l) => pinLane({ ...l, locked: !l.locked }, shared), false);
     },
     "preset-button",
-    "固定すると、刻み直してもこのトラックは変わらない",
+    "固定すると、刻み直してもこのトラックは変わりません",
   );
   const muteButton = button("ミュート", () => sel.type === "track" && updateFader(sel.key, (l) => ({ ...l, muted: !l.muted })), "preset-button");
   const resetButton = button(
@@ -1128,7 +1140,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       max: 1,
       step: 0.01,
       format: (v) => (Math.abs(v) < 0.005 ? "中央" : v < 0 ? `左 ${Math.round(-v * 100)}%` : `右 ${Math.round(v * 100)}%`),
-      hint: () => "このトラックの左右の位置（ミキサーのパン。断片ごとのパンとは別）",
+      hint: () => "このトラックの左右の位置です（ミキサーのパン。断片ごとのパンとは別）",
       get: () => selLane()?.balance ?? 0,
       set: (v) => {
         if (sel.type !== "track") return;
@@ -1203,10 +1215,10 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   const bedPump = reg(knob({ label: "サイドチェイン", get: () => song.params.pump, set: (v) => {
     song.params.pump = v;
     changed();
-  }, hint: () => "このキックに合わせて、刻んだ音とパッドを沈ませる" }));
+  }, hint: () => "このキックに合わせて、刻んだ音とパッドを沈ませます" }));
   bedGroup.append(bedDrum.el, bedVol.el, bedPump.el);
   const padGroup = el("div", "ins-group");
-  const padAmount = reg(knob({ label: "量", get: () => song.params.pad, set: (v) => setChannelParam("pad", v), hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らす" }));
+  const padAmount = reg(knob({ label: "量", get: () => song.params.pad, set: (v) => setChannelParam("pad", v), hint: () => "元の曲の和音を引き伸ばして、うしろでうっすら鳴らします" }));
   padGroup.append(padAmount.el);
   const fxSummary = el("div", "ins-fx");
   const fxList = el("div", "ins-fx-list");
@@ -1250,7 +1262,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     hitTitle,
     hitMeta,
     hitGroupRow,
-    section("take", "テイクFX（この断片だけ）", note("トラックのFXより先に掛かる。位置で覚えるので、刻み直してこの位置に断片が無くなると掛からない"), takeList, takeButtons),
+    section("take", "テイクFX（この断片だけ）", note("トラックのFXより先に掛かります。位置で覚えるので、刻み直してこの位置の断片が無くなると掛かりません。"), takeList, takeButtons),
   );
 
   // --- 断片をいくつか選んだとき ---
@@ -1261,7 +1273,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     hitsTitle,
     hitsMeta,
     hitsButtons,
-    note("線の上をドラッグして四角で囲む／シフト（Ctrl）を押しながらタップで、断片を足したり外したりできる。タッチなら右上の「複数選択」をオンに"),
+    note("線の上をドラッグして囲むか、シフト（Ctrl）を押しながらタップすると、断片を足したり外したりできます。タッチ操作では右上の「複数選択」をオンにしてください。"),
   );
 
   // --- グループ ---
@@ -1309,7 +1321,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       get: () => selGroup()?.pitch ?? 0,
       set: (v) => editGroup((g) => ({ ...g, pitch: Math.round(v) })),
       format: (v) => (Math.round(v) === 0 ? "そのまま" : `${v > 0 ? "+" : ""}${Math.round(v)}半音`),
-      hint: () => "サンプラーと同じく、速さごと変わる（高いほど短く）",
+      hint: () => "サンプラーと同じく、速さごと変わります（高いほど短く）",
     }),
   );
   const groupPan = reg(
@@ -1351,7 +1363,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     groupMeta,
     groupButtons,
     section("groupShape", "刻み方（このグループだけ）", groupPitch.el, groupPan.el, groupGate.el, groupVel.el, groupResetShape),
-    section("groupFx", "グループのFX", note("このグループの断片にだけ掛かる（テイクFXのあと、トラックのFXの前）"), groupFxList, groupFxOpen),
+    section("groupFx", "グループのFX", note("このグループの断片にだけ掛かります（テイクFXのあと、トラックのFXの前）。"), groupFxList, groupFxOpen),
     el("div", "preset-row", undefined),
   );
   const groupFoot = groupPanel.lastElementChild as HTMLElement;
@@ -1513,7 +1525,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       if (token !== buildToken) return;
       result = out;
       builtStamps = stampsOf(song.lanes ?? []);
-      setNotice(out ? "" : "刻むフレーズが見つからない。右の「素材」で選び直して");
+      setNotice(out ? "" : "刻むフレーズが見つかりません。右の「素材」で選び直してください。");
       // ドラムループが無くなったら、そのソロも外す（見えないソロで、全部が無音にならないように）
       if (!out?.bed) solo.bed = false;
       live = out ? await mixer.load(out, currentFaders()) : false;
@@ -1537,7 +1549,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       console.error("曲の書き出しに失敗しました", err);
       result = null;
       live = false;
-      setNotice("曲を作れなかった。もう一度「刻む」を押して");
+      setNotice("曲を作れませんでした。もう一度「刻む」を押してください。");
     }
     busy = "";
     refresh();
@@ -1546,7 +1558,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
   async function chop(part: RerollPart): Promise<void> {
     const sources = collectSources(song, deps.getPhrases());
     if (sources.length === 0) {
-      setNotice(song.materialIds.length === 0 ? "先に、右の「素材」で刻むフレーズを選んで" : "選んだフレーズに、音符がない");
+      setNotice(song.materialIds.length === 0 ? "先に、右の「素材」で刻むフレーズを選んでください。" : "選んだフレーズに音符がありません。");
       sel = { type: "song" };
       refresh();
       return;
@@ -1654,7 +1666,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
     } catch (err) {
       console.error("WAVの書き出しに失敗しました", err);
-      setNotice("書き出せなかった。もう一度「書き出し」を押して");
+      setNotice("書き出せませんでした。もう一度「書き出し」を押してください。");
     } finally {
       busy = "";
       refresh();
@@ -1733,7 +1745,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     // 置く音
     renderDropList();
     dropLock.classList.toggle("on", !!song.drops?.locked);
-    dropLock.textContent = song.drops?.locked ? "🔒 固定中" : "固定";
+    dropLock.textContent = song.drops?.locked ? "固定中" : "固定";
     dropReroll.disabled = !song.drops?.soundIds.length;
 
     // トランスポート
@@ -1815,9 +1827,9 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       const drum = drumNow();
       show(bedKnob, !!drum);
       if (document.activeElement !== nameInput) nameInput.value = song.name;
-      keyInfo.textContent = result?.keyName ? `キー：${result.keyName}（いちばん上のトラックの調。ほかのトラックはこれに寄せる）` : "キー：まだ刻んでいない";
+      keyInfo.textContent = result?.keyName ? `キー：${result.keyName}（いちばん上のトラックの調です。ほかのトラックはこれに寄せます）` : "キー：まだ刻んでいません";
       groupList.innerHTML = "";
-      if (!song.groups?.length) groupList.appendChild(el("div", "ins-meta", "まだグループがない"));
+      if (!song.groups?.length) groupList.appendChild(el("div", "ins-meta", "まだグループがありません。"));
       for (const g of song.groups ?? []) {
         const b = button("", () => {
           sel = { type: "group", id: g.id };
@@ -1846,8 +1858,8 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
         show(laneCut, !music);
         const mixing = mixingNow();
         shiftNote.textContent = mixing
-          ? "いまは「混ぜる」なので、リズムは全体のつまみで決まる。ここで効くのは「密度」だけ（このトラックの断片が選ばれる多さ）"
-          : "全体のつまみからの差として持つ。全体を動かすと、差を保ったまま一緒に動く";
+          ? "いまは「混ぜる」なので、リズムは全体のつまみで決まります。ここで効くのは「密度」だけです（このトラックの断片が選ばれる多さ）"
+          : "全体のつまみからの差として持ちます。全体を動かすと、差を保ったまま一緒に動きます";
         shiftNote.classList.toggle("ins-warn", mixing);
         for (const s of laneShape) show(s.c, mixing ? s.key === "busy" : s.mode === "both" || (s.mode === "music") === music);
         restoreLaneButton.disabled = !shapeBackup;
@@ -1855,7 +1867,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       renderFxSummary(key);
     } else if (sel.type === "hits") {
       const hits = sel.hits;
-      hitsTitle.textContent = `${hits.length}個の断片を選んでいる`;
+      hitsTitle.textContent = `${hits.length}個の断片を選んでいます`;
       const byTrack = new Map<string, number>();
       for (const h of hits) byTrack.set(h.track, (byTrack.get(h.track) ?? 0) + 1);
       hitsMeta.textContent = [...byTrack].map(([t, n]) => `${trackName(t)} ${n}個`).join("・");
@@ -1885,7 +1897,7 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       if (document.activeElement !== groupNameInput) groupNameInput.value = g.name;
       const tracks = new Set(g.members.map((m) => m.phraseId));
       const alive = g.members.filter((m) => result?.lanes.some((l) => l.phraseId === m.phraseId && l.events.some((e) => e.step === m.step))).length;
-      groupMeta.textContent = `${g.members.length}個の断片（${tracks.size}トラック）${alive < g.members.length ? `・うち${g.members.length - alive}個は、刻み直してその位置に断片が無い` : ""}`;
+      groupMeta.textContent = `${g.members.length}個の断片（${tracks.size}トラック）${alive < g.members.length ? `・うち${g.members.length - alive}個は、刻み直してその位置に断片がありません` : ""}`;
       groupMute.textContent = g.muted ? "ミュート中" : "ミュート";
       groupMute.classList.toggle("on", g.muted);
       groupReverse.textContent = g.reverse ? "逆再生中" : "逆再生";

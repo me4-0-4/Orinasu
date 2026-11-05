@@ -148,7 +148,7 @@ export function buildFxWindow(deps: FxWindowDeps): FxWindow {
   function renderList(): void {
     const chain = fx().chain;
     list.innerHTML = "";
-    if (chain.length === 0) list.appendChild(el("div", "layer-empty", "プラグインがない。下で種類を選んで「追加」"));
+    if (chain.length === 0) list.appendChild(el("div", "layer-empty", "プラグインがありません。種類を選んで「追加」を押してください。"));
     chain.forEach((p, i) => {
       const row = el("div", "fx-item" + (p.id === selected ? " selected" : "") + (p.bypass ? " bypassed" : ""));
       row.draggable = true;
@@ -221,8 +221,8 @@ export function buildFxWindow(deps: FxWindowDeps): FxWindow {
       input.disabled = !!e?.active;
       note.textContent = e
         ? e.active
-          ? `エンベロープで動かしている（トラックの下の折れ線。${e.visible ? "表示中" : "隠し中"}）`
-          : "エンベロープは切ってある（つまみの値のまま）"
+          ? `エンベロープで動かしています（トラックの下の折れ線。${e.visible ? "表示中" : "非表示"}）`
+          : "エンベロープは切っています（つまみの値のまま）"
         : "";
       envButton?.classList.toggle("on", !!e);
     });
@@ -275,7 +275,7 @@ export function buildFxWindow(deps: FxWindowDeps): FxWindow {
       paramRefreshers = [];
       params.innerHTML = "";
       if (!p) {
-        params.appendChild(el("div", "layer-empty", "左の一覧からプラグインを選ぶと、ここにつまみが出る"));
+        params.appendChild(el("div", "layer-empty", "左の一覧からプラグインを選ぶと、ここにつまみが出ます。"));
       } else {
         const cur = (): FxPlugin => plugin() ?? p;
         params.appendChild(el("div", "fx-params-title", FX_LABELS[p.kind]));
@@ -326,10 +326,10 @@ export function buildFxWindow(deps: FxWindowDeps): FxWindow {
     titleEl.textContent = deps.title(target);
     foot.textContent =
       target.type === "take"
-        ? "テイクFX：この断片だけに掛かる（トラックのFXより先）。刻み直して、この位置に断片が無くなると掛からない"
+        ? "テイクFX：この断片だけに掛かります（トラックのFXより先）。刻み直してこの位置の断片が無くなると、掛からなくなります。"
         : target.type === "group"
-          ? "グループFX：このグループの断片にだけ掛かる（テイクFXのあと、トラックのFXの前）"
-        : "上から順に掛かる。チェックを外すとバイパス。[E] で、量・ウェットを時間で動かすエンベロープを出せる（点はトラックの下でタップ・ドラッグ、ダブルタップで消す）";
+          ? "グループFX：このグループの断片にだけ掛かります（テイクFXのあと、トラックのFXの前）。"
+        : "上から順に掛かります。チェックを外すとバイパスします。[E] で、量とウェットを時間で動かすエンベロープを出せます（点はトラックの下でタップ・ドラッグ、ダブルタップで消えます）。";
     renderList();
     renderParams();
   }

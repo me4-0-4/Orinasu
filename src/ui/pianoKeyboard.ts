@@ -83,8 +83,8 @@ export class PianoKeyboard {
     const g = this.guide;
     if (!g) return null;
     const pc = ((note % 12) + 12) % 12;
-    if (g.root === pc) return isBlack ? "#3c8fd9" : "#5eb4ff";
-    if (g.chordTones.has(pc)) return isBlack ? "#c9a13f" : "#ffd166";
+    if (g.root === pc) return isBlack ? "#4589ff" : "#78a9ff";
+    if (g.chordTones.has(pc)) return isBlack ? "#b8963f" : "#f1c95b";
     return null;
   }
 
@@ -154,44 +154,44 @@ export class PianoKeyboard {
     for (const key of this.keys) {
       if (key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
-      ctx.fillStyle = active ? "#3ee6b0" : (this.guideColor(key.note, false) ?? "#e9e9ee");
-      ctx.strokeStyle = "#15161c";
+      ctx.fillStyle = active ? "#3ee6b0" : (this.guideColor(key.note, false) ?? "#f4f4f4");
+      ctx.strokeStyle = "#161616";
       ctx.lineWidth = 1;
       ctx.fillRect(key.x, 0, key.width, this.height);
       ctx.strokeRect(key.x, 0, key.width, this.height);
       if (!active && this.isOutOfScale(key.note)) {
-        ctx.fillStyle = "rgba(20, 22, 30, 0.42)";
+        ctx.fillStyle = "rgba(22, 22, 22, 0.42)";
         ctx.fillRect(key.x, 0, key.width, this.height);
       }
       if (this.guide?.bassTones.has(((key.note % 12) + 12) % 12)) {
-        ctx.fillStyle = "#3c8fd9";
+        ctx.fillStyle = "#4589ff";
         ctx.fillRect(key.x + key.width / 2 - 3, this.height - 24, 6, 6);
       }
 
       const label = this.keyLabels.get(key.note);
       if (label) {
-        ctx.fillStyle = "#15161c";
+        ctx.fillStyle = "#161616";
         ctx.fillText(label, key.x + key.width / 2, this.height - 10);
       }
     }
     for (const key of this.keys) {
       if (!key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
-      ctx.fillStyle = active ? "#2bbd8f" : (this.guideColor(key.note, true) ?? "#101014");
+      ctx.fillStyle = active ? "#2bbd8f" : (this.guideColor(key.note, true) ?? "#1c1c1c");
       const blackHeight = this.height * 0.62;
       ctx.fillRect(key.x, 0, key.width, blackHeight);
       if (!active && this.isOutOfScale(key.note)) {
-        ctx.fillStyle = "rgba(233, 233, 238, 0.18)";
+        ctx.fillStyle = "rgba(244, 244, 244, 0.18)";
         ctx.fillRect(key.x, 0, key.width, blackHeight);
       }
       if (this.guide?.bassTones.has(((key.note % 12) + 12) % 12)) {
-        ctx.fillStyle = "#5eb4ff";
+        ctx.fillStyle = "#78a9ff";
         ctx.fillRect(key.x + key.width / 2 - 3, blackHeight - 22, 6, 6);
       }
 
       const label = this.keyLabels.get(key.note);
       if (label) {
-        ctx.fillStyle = "#e9e9ee";
+        ctx.fillStyle = "#f4f4f4";
         ctx.fillText(label, key.x + key.width / 2, blackHeight - 8);
       }
     }

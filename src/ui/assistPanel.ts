@@ -105,7 +105,7 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
   recommendationEl.className = "recommend-strip";
 
   // --- 調 ---
-  const keySec = section("調", "弾いた音から推定した候補。合っていなければ自分で選び直せる。");
+  const keySec = section("調", "弾いた音から推定しています。違っていたら選び直せます。");
   const candidateRow = document.createElement("div");
   candidateRow.className = "assist-row";
   const tonicSelect = selectField(
@@ -150,7 +150,7 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
   // --- コード ---
   const chordSec = section(
     "コード案",
-    "音は置かない。名前と、鍵盤の光り方で示すだけ。黄色＝構成音、青＝ルート、青い点＝ベースで弾く音。",
+    "音は置かず、鍵盤の光り方で示します。黄＝構成音、青＝ルート、青い点＝ベースの音。",
   );
   const chordControls = document.createElement("div");
   chordControls.className = "assist-row";
@@ -177,7 +177,7 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
   // --- ドラム ---
   const drumSec = section(
     "ドラム候補",
-    "ジャンルを選ぶとパターンを置く。固定した楽器は振り直しても変わらない。自分で録音したドラム層には触らない。",
+    "固定した楽器は、振り直しても変わりません。録音したドラムの層はそのまま残ります。",
   );
   const genreSelect = selectField(
     "ジャンル",
@@ -206,7 +206,7 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
   drumSec.body.append(genreSelect.el, lockRow, placeDrumsBtn);
 
   // --- アルペジエーター ---
-  const arpSec = section("アルペジエーター", "押さえた音を1音ずつ順番に鳴らす。シンセの演奏に挿さっている。");
+  const arpSec = section("アルペジエーター", "押さえた音を1音ずつ順に鳴らします。");
   const arpToggle = button("オフ", "layer-toggle arp-toggle", () => {
     handlers.onArpChange({ enabled: !arpToggle.classList.contains("on") });
   });
@@ -269,7 +269,7 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
     if (view.detected.length === 0) {
       keyStatus.textContent = view.key
         ? `${keyName(view.key)}（手動）`
-        : "まだ判定できない。メロディを2音以上録音してみよう。";
+        : "メロディを2音以上録音すると判定します。";
     } else {
       keyStatus.textContent = view.key
         ? `いまの調：${keyName(view.key)}${view.manual ? "（手動）" : "（自動）"}`
@@ -309,8 +309,8 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
       const empty = document.createElement("div");
       empty.className = "layer-empty";
       empty.textContent = view.key
-        ? "「コード案を出す」を押すと、この調に合う進行を提示する。"
-        : "調が決まるとコード案を出せる。";
+        ? "「コード案を出す」で、この調に合う進行を出します。"
+        : "調が決まると、コード案を出せます。";
       chordTimeline.appendChild(empty);
     } else {
       view.chords.forEach((c, i) => {

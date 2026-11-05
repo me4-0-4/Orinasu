@@ -139,15 +139,17 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     canvas.height = Math.round(height * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, width, height);
-    const dim = css("--text-dim", "#9a9ba6");
-    const border = css("--border", "#2a2c36");
+    const dim = css("--text-dim", "#c6c6c6");
+    const border = css("--border", "#474747");
     const green = css("--accent-green", "#3ee6b0");
-    g.font = "11px sans-serif";
+    g.font = '11px "IBM Plex Sans JP", sans-serif';
     g.textBaseline = "middle";
 
     if (!data || data.rows.length === 0) {
       g.fillStyle = dim;
-      g.fillText("右の「素材」でフレーズを選んで、上の「刻む」を押すと、ここにトラックが並ぶ", 8, height / 2);
+      // 狭い画面では「素材」が右ではなく下にあるので、場所を言わない短い文にする
+      const long = "右の「素材」でフレーズを選んで「刻む」を押すと、ここにトラックが並びます";
+      g.fillText(g.measureText(long).width <= width - 16 ? long : "「素材」でフレーズを選んで「刻む」を押してください", 8, height / 2);
       return;
     }
 
@@ -180,7 +182,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
           g.fillStyle = "rgba(255,255,255,0.03)";
           g.fillRect(0, top, width, h);
         } else if (row.locked) {
-          g.fillStyle = "rgba(94,180,255,0.10)";
+          g.fillStyle = "rgba(120,169,255,0.10)";
           g.fillRect(0, top, width, h);
         }
         if (row.kind === "lane" || row.kind === "bed") {
@@ -203,7 +205,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
           g.globalAlpha = 1;
           if (row.events.length === 0) {
             g.fillStyle = dim;
-            g.fillText("置く場所がまだない（右の「置く音」で多さを上げるか、振り直す）", GUTTER + 6, mid);
+            g.fillText("置く場所がまだありません（右の「置く音」で多さを上げるか、振り直してください）", GUTTER + 6, mid);
           }
         } else if (row.kind === "lane") {
           g.globalAlpha = row.muted ? 0.25 : 1;
@@ -230,7 +232,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
               g.fillRect(x, y - 4, Math.min(w, 6), 2);
             }
             if (sel.has(ev.step)) {
-              g.strokeStyle = "#ffc450";
+              g.strokeStyle = "#f1c95b";
               g.lineWidth = 2;
               g.strokeRect(x - 1, y - 2, w + 2, 10);
               g.lineWidth = 1;
@@ -244,9 +246,9 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
       } else {
         // エンベロープ：折れ線と点
         const points = drag?.id === row.key ? drag.points : row.points;
-        g.fillStyle = "rgba(255,196,80,0.05)";
+        g.fillStyle = "rgba(241,201,91,0.05)";
         g.fillRect(0, top, width, h);
-        g.strokeStyle = row.active ? "#ffc450" : "rgba(255,255,255,0.3)";
+        g.strokeStyle = row.active ? "#f1c95b" : "rgba(255,255,255,0.3)";
         g.lineWidth = 1.5;
         g.beginPath();
         const first = points[0];
@@ -256,7 +258,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
         g.lineTo(width, envY(top, last ? last.v : 0));
         g.stroke();
         g.lineWidth = 1;
-        g.fillStyle = row.active ? "#ffc450" : dim;
+        g.fillStyle = row.active ? "#f1c95b" : dim;
         for (const p of points) {
           g.beginPath();
           g.arc(xOf(p.t), envY(top, p.v), POINT_R, 0, Math.PI * 2);
@@ -272,8 +274,8 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     }
 
     if (rect?.active) {
-      g.fillStyle = "rgba(255,196,80,0.12)";
-      g.strokeStyle = "#ffc450";
+      g.fillStyle = "rgba(241,201,91,0.12)";
+      g.strokeStyle = "#f1c95b";
       const rx = Math.min(rect.x0, rect.x1);
       const ry = Math.min(rect.y0, rect.y1);
       g.fillRect(rx, ry, Math.abs(rect.x1 - rect.x0), Math.abs(rect.y1 - rect.y0));
@@ -282,7 +284,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
 
     if (progress !== null) {
       const x = GUTTER + progress * plotW();
-      g.strokeStyle = progressIsMarker ? "#ffc450" : "#ffffff";
+      g.strokeStyle = progressIsMarker ? "#f1c95b" : "#ffffff";
       g.setLineDash(progressIsMarker ? [4, 3] : []);
       g.beginPath();
       g.moveTo(x, 0);

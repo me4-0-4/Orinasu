@@ -94,7 +94,7 @@ export class Visualizer {
     const h = Math.max(rect.height, 80);
     this.analyser.getByteTimeDomainData(this.timeData as any);
 
-    ctx.fillStyle = "#0c0d12";
+    ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, w, h);
     ctx.strokeStyle = "#3ee6b0";
     ctx.lineWidth = 1.5;
@@ -117,12 +117,12 @@ export class Visualizer {
     const h = Math.max(rect.height, 80);
     this.analyser.getByteFrequencyData(this.freqData as any);
 
-    ctx.fillStyle = "#0c0d12";
+    ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, w, h);
     const barCount = 64;
     const binsPerBar = Math.floor(this.freqData.length / barCount);
     const barWidth = w / barCount;
-    ctx.fillStyle = "#ff6f4d";
+    ctx.fillStyle = "#ff8f73";
     for (let i = 0; i < barCount; i++) {
       let sum = 0;
       for (let j = 0; j < binsPerBar; j++) sum += this.freqData[i * binsPerBar + j];
@@ -139,7 +139,7 @@ export class Visualizer {
     const h = Math.max(rect.height, 80);
     const params = this.getParams();
 
-    ctx.fillStyle = "#0c0d12";
+    ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, w, h);
 
     const { freqs, magDb } = computeFilterCurve(
@@ -149,7 +149,7 @@ export class Visualizer {
       params.filter.resonance,
     );
 
-    ctx.strokeStyle = "#5eb4ff";
+    ctx.strokeStyle = "#78a9ff";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     const minDb = -36;
@@ -166,7 +166,7 @@ export class Visualizer {
     // カットオフの位置に目印
     const cutoffT =
       (Math.log10(params.filter.cutoff) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20));
-    ctx.strokeStyle = "#5eb4ff55";
+    ctx.strokeStyle = "#78a9ff55";
     ctx.beginPath();
     ctx.moveTo(cutoffT * w, 0);
     ctx.lineTo(cutoffT * w, h);
@@ -180,7 +180,7 @@ export class Visualizer {
     const h = Math.max(rect.height, 80);
     const { attack, decay, sustain, release } = this.getParams().ampEnv;
 
-    ctx.fillStyle = "#0c0d12";
+    ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, w, h);
 
     const holdSeconds = 0.3;
@@ -194,7 +194,7 @@ export class Visualizer {
     const yPeak = 4;
     const ySustain = h - 4 - sustain * (h - 8);
 
-    ctx.strokeStyle = "#ffd166";
+    ctx.strokeStyle = "#f1c95b";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(0, y0);
