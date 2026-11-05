@@ -96,7 +96,7 @@ export class Visualizer {
 
     ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = "#78a9ff";
+    ctx.strokeStyle = "#e0e0e0"; // 波形は操作ではないので差し色（青）を使わず、明るい灰色にする
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     const step = w / this.timeData.length;

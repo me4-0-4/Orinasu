@@ -550,12 +550,13 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     const css = getComputedStyle(document.documentElement);
-    const green = css.getPropertyValue("--accent").trim() || "#78a9ff";
+    // 波形は操作ではないので差し色（青）を使わず、文字の副の色（明るい灰色）で描く
+    const wave = css.getPropertyValue("--text-dim").trim() || "#c6c6c6";
     const orange = css.getPropertyValue("--accent-orange").trim() || "#ff8f73";
     const dim = css.getPropertyValue("--border").trim() || "#474747";
     const x = (sec: number): number => (sec / Math.max(1e-6, s.durationSec)) * w;
 
-    g.fillStyle = s.blob ? green : dim;
+    g.fillStyle = s.blob ? wave : dim;
     const n = s.peaks.length;
     const mid = h / 2;
     for (let i = 0; i < n; i++) {
