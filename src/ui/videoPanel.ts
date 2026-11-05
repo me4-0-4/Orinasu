@@ -119,7 +119,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   let L = new Layout(v);
   let sel: number | null = null;
   let tab: "look" | "panels" | "base" | "top" = "look";
-  let clean = false, auto = false, colorOpen = false;
+  let clean = false, auto = false, colorOpen = false, moreOpen = false;
   // 素材の棚：自分の素材が1つも無いあいだは、見本を並べる
   const samples = makeSamples();
   const mats: Material[] = [...samples];
@@ -439,6 +439,11 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   }
 
   // ---- ツールバー ----
+  // 「⋯」のメニューは、外をタップしたら閉じる
+  document.addEventListener("pointerdown", (e) => {
+    const more = board.querySelector<HTMLDetailsElement>("details.vid-more");
+    if (more?.open && !more.contains(e.target as Node)) more.open = false;
+  });
   function buildBoard(): void {
     const change = (fn: () => void) => () => {
       fn();
@@ -448,13 +453,19 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     const island = (...kids: Node[]): HTMLElement => el("div", { class: "tp-island" }, ...kids);
     const segs = el("div", { class: "vid-segs", role: "group", "aria-label": "比率" },
       ...(Object.keys(FRAMES) as Aspect[]).map((a) => el("button", { type: "button", class: "vid-seg" + (v.aspect === a ? " on" : ""), "aria-pressed": v.aspect === a ? "true" : "false", on: change(() => { v.aspect = a; sizeStage(); }) }, ASPECT_LABEL[a])));
+    // あまり押さない切り替え。PC幅ではバーに並べ、スマホ幅では「⋯」のメニューに畳む（CSS で出し分ける）
+    const options = (): HTMLElement[] => [
+      lamp("8小節ごとに振り直す", auto, () => { auto = !auto; refresh(); }),
+      lamp("書き出しの見え方", clean, () => { clean = !clean; refresh(); }),
+      lamp(`${ASPECT_LABEL[v.aspect]} だけ直す`, L.only, () => { L.only = !L.only; refresh(); }, "warn"),
+    ];
+    const more = el("details", { class: "vid-more" }, el("summary", { class: "vid-key", "aria-label": "ほかの切り替え" }, "⋯"), el("div", { class: "vid-more-menu" }, ...options()));
+    more.open = moreOpen;
+    more.addEventListener("toggle", () => (moreOpen = more.open));
     board.replaceChildren(
       island(el("span", { class: "tp-label" }, "比率"), segs),
-      island(key("振り直す", shuffle), lamp("8小節ごとに振り直す", auto, () => { auto = !auto; refresh(); })),
-      island(
-        lamp("書き出しの見え方", clean, () => { clean = !clean; refresh(); }),
-        lamp(`${ASPECT_LABEL[v.aspect]} だけ直す`, L.only, () => { L.only = !L.only; refresh(); }, "warn"),
-      ),
+      island(key("振り直す", shuffle), more),
+      island(...options()),
       el("div", { class: "vid-export" }, ...exportControls()),
     );
   }
@@ -575,15 +586,7 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
 
   /** 見た目：配色（見本から選ぶ・細かく変える）、名札、効果。 */
   function lookInsp(): void {
-    const swatches = el("div", { class: "vid-swatches" });
-    for (const [k, p] of Object.entries(PRESETS)) {
-      const chips = el("span", { class: "vid-swatch-chips", "aria-hidden": "true" }, ...(["bg", "panel", "ink", "a1", "a2"] as const).map((c) => {
-        const chip = el("i");
-        chip.style.background = p[c];
-        return chip;
-      }));
-      swatches.append(el("button", { type: "button", class: "vid-swatch" + (v.preset === k ? " on" : ""), "aria-pressed": v.preset === k ? "true" : "false", on: edit(() => { v.preset = k; v.colors = { ...p } as unknown as Colors; }) }, chips, el("span", { class: "vid-swatch-name" }, p.name)));
-    }
+    const swatches = row(...Object.entries(PRESETS).map(([k, p]) => lamp(p.name, v.preset === k, edit(() => { v.preset = k; v.colors = { ...p } as unknown as Colors; }))));
     const colors = el("div", { class: "vid-colors" },
       ...COLOR_KEYS.map(([k, label]) => {
         const id = `vid-c-${k}`, inp = el("input", { type: "color", id });

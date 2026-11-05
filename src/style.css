@@ -1977,6 +1977,62 @@ body[data-tab="video"] .app-footer {
   border-bottom: 1px solid var(--border);
   flex: none;
 }
+.vid-bar {
+  position: relative;
+}
+/* 「⋯」のメニュー：スマホ幅だけ出す。開くとバーの下いっぱいに広がる（画面の外にはみ出さない） */
+.vid-more {
+  display: none;
+}
+.vid-more > summary {
+  list-style: none;
+  min-width: 40px;
+  justify-content: center;
+}
+.vid-more > summary::-webkit-details-marker {
+  display: none;
+}
+.vid-more[open] > summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.vid-more-menu {
+  position: absolute;
+  top: 100%;
+  left: 8px;
+  right: 8px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+@media (max-width: 720px) {
+  .vid-bar {
+    padding: 8px;
+    gap: 8px;
+  }
+  .vid-bar > .tp-island:first-child > .tp-label,
+  .vid-bar > .tp-island:nth-child(3) {
+    display: none;
+  }
+  .vid-more {
+    display: block;
+  }
+  /* 書き出しは2行目にまとめて、横いっぱいに */
+  .vid-export {
+    flex: 1 0 100%;
+    margin-left: 0;
+  }
+  .vid-export .vid-key:last-child {
+    flex: 1;
+    justify-content: center;
+  }
+}
 .vid-export {
   display: flex;
   align-items: center;
@@ -2015,47 +2071,6 @@ body[data-tab="video"] .app-footer {
   background: var(--accent-surface);
   border-color: var(--accent);
   color: var(--accent);
-}
-/* 配色の見本 */
-.vid-swatches {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
-  gap: 8px;
-}
-.vid-swatch {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-dim);
-  font-size: var(--fs-s);
-  text-align: left;
-  cursor: pointer;
-}
-.vid-swatch:hover {
-  border-color: var(--text-dim);
-  color: var(--text);
-}
-.vid-swatch.on {
-  border-color: var(--accent);
-  outline: 1px solid var(--accent);
-  outline-offset: -2px;
-  color: var(--text);
-}
-.vid-swatch-chips {
-  display: flex;
-  height: 28px;
-}
-.vid-swatch-chips i {
-  flex: 1;
-}
-.vid-swatch-chips i:first-child {
-  flex: 2;
-}
-.vid-swatch-name {
-  padding: 0 4px;
 }
 .vid-custom > summary {
   cursor: pointer;
