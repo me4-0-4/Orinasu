@@ -170,7 +170,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
         get: () => sampler()?.mode ?? "keys",
         // パッド型は、すぐ離しても断片の終わりまで鳴るほうが叩きやすい
         set: (v) => change(v === "pads" ? { mode: v, hold: "oneshot" } : { mode: v, hold: "gate" }),
-        hint: () => "鍵盤型：右の鍵盤ほど高く（速く）鳴る。パッド型：C4（PCキーボードの A）から右へ、断片が1つずつ並ぶ。左の鍵盤には後ろの断片が並ぶ",
+        hint: () => "鍵盤型：右の鍵盤ほど高く（速く）鳴ります。パッド型：C4（PCキーボードの A）から右へ断片が1つずつ並び、左の鍵盤には後ろの断片が並びます",
       }),
     },
     {
@@ -518,7 +518,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     waveNote.textContent = placing
       ? "波形をタップした所を1拍目にします"
       : padSlices(s)
-        ? `黄色い線が切れ目（${padSlices(s)!.length}個。ドラッグで動かせる）。断片を押すと、その断片だけ鳴らします`
+        ? `黄色い線が切れ目（${padSlices(s)!.length}個。ドラッグで動かせます）。断片を押すと、その断片だけ鳴らします`
         : `波形をタップすると、そこから鳴らします。オレンジの線が1拍目（${formatSeconds(s.downbeatSec ?? 0)}）`;
     const bars = barsOf(s);
     const useBars = soundBars(s);
@@ -550,12 +550,13 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     const css = getComputedStyle(document.documentElement);
-    const green = css.getPropertyValue("--accent-green").trim() || "#3ee6b0";
-    const orange = css.getPropertyValue("--accent-orange").trim() || "#ff6f4d";
-    const dim = css.getPropertyValue("--border").trim() || "#2a2c36";
+    // 波形は操作ではないので差し色（青）を使わず、文字の副の色（明るい灰色）で描く
+    const wave = css.getPropertyValue("--text-dim").trim() || "#c6c6c6";
+    const orange = css.getPropertyValue("--accent-orange").trim() || "#ff8f73";
+    const dim = css.getPropertyValue("--border").trim() || "#474747";
     const x = (sec: number): number => (sec / Math.max(1e-6, s.durationSec)) * w;
 
-    g.fillStyle = s.blob ? green : dim;
+    g.fillStyle = s.blob ? wave : dim;
     const n = s.peaks.length;
     const mid = h / 2;
     for (let i = 0; i < n; i++) {
@@ -581,7 +582,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
       // パッド型の切れ目と、その断片を鳴らす鍵盤の名前
       const slices = padSlices(s);
       if (slices) {
-        const yellow = css.getPropertyValue("--accent-yellow").trim() || "#ffd166";
+        const yellow = css.getPropertyValue("--accent-yellow").trim() || "#f1c95b";
         g.font = "10px system-ui, sans-serif";
         slices.forEach((v, i) => {
           const px = Math.round(v * w);
@@ -770,7 +771,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     const s = selected();
     if (!s) return;
     const where = signedIn ? "この端末とクラウドから" : "この端末から";
-    if (!window.confirm(`音「${s.name}」を${where}消す？`)) return;
+    if (!window.confirm(`音「${s.name}」を${where}消しますか？`)) return;
     stop();
     selectedId = null;
     await library.remove(s.id);

@@ -35,7 +35,11 @@ export interface VideoSettings {
   /** 名札：札（左上の白黒反転）／耳（左端の縦書き）／なし。 */
   label: "fuda" | "mimi" | "none";
   lang: "ja" | "en";
-  fx: { led: boolean; zure: boolean; glitch: boolean; sumi: boolean; halftone: boolean; weave: boolean };
+  fx: {
+    led: boolean; zure: boolean; glitch: boolean; sumi: boolean; halftone: boolean; weave: boolean;
+    /** 走査線・周辺減光・キックで明滅・キックで揺れ・粒子・フィルで反転。 */
+    scan: boolean; vignette: boolean; flash: boolean; shake: boolean; grain: boolean; invert: boolean;
+  };
   tree: TreeNode;
   floats: Leaf[];
   ov: Record<Aspect, Record<string, Override>>;
@@ -65,7 +69,7 @@ export function defaultVideo(text = ""): VideoSettings {
     colors: clone(PRESETS.shuden),
     label: "fuda",
     lang: "ja",
-    fx: { led: false, zure: true, glitch: true, sumi: true, halftone: false, weave: false },
+    fx: { led: false, zure: true, glitch: true, sumi: true, halftone: false, weave: false, scan: false, vignette: false, flash: false, shake: false, grain: false, invert: false },
     tree,
     floats: [],
     ov: { tall: {}, square: {}, wide: {} },

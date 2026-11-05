@@ -128,6 +128,9 @@ export function choice<T extends string>(opts: {
   };
 }
 
+/** はじめは閉じておく見出し（あまり触らないもの）。開け閉めしたあとは、その状態を覚える。 */
+const CLOSED_AT_FIRST = new Set(["groups"]);
+
 /** 開け閉めできる見出し（中身はその下）。開け閉めは覚えておく。 */
 export function section(id: string, title: string, ...children: HTMLElement[]): HTMLDetailsElement {
   const d = el("details", "ins-section");
@@ -135,9 +138,10 @@ export function section(id: string, title: string, ...children: HTMLElement[]): 
   d.append(s, ...children);
   const key = `orinasu.mix.section.${id}`;
   try {
-    d.open = localStorage.getItem(key) !== "closed";
+    const saved = localStorage.getItem(key);
+    d.open = saved === null ? !CLOSED_AT_FIRST.has(id) : saved !== "closed";
   } catch {
-    d.open = true;
+    d.open = !CLOSED_AT_FIRST.has(id);
   }
   d.addEventListener("toggle", () => {
     try {

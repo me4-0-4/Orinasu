@@ -300,7 +300,7 @@ export class PianoRoll {
 
     const ctx = this.canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#0c0d12";
+    ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, width, realHeight);
 
     const total = this.totalBeats();
@@ -311,7 +311,7 @@ export class PianoRoll {
     for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
       const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
       if (isBlack) {
-        ctx.fillStyle = "#101014";
+        ctx.fillStyle = "#1c1c1c";
         ctx.fillRect(0, this.pitchToY(p), width, this.rowHeight);
       }
     }
@@ -320,7 +320,7 @@ export class PianoRoll {
     for (let b = 0; b <= total; b += 1) {
       const x = this.beatToX(b);
       const isBar = this.phrase ? b % this.phrase.beatsPerBar === 0 : false;
-      ctx.strokeStyle = isBar ? "#3a3c48" : "#22232b";
+      ctx.strokeStyle = isBar ? "#474747" : "#262626";
       ctx.lineWidth = isBar ? 1.5 : 1;
       ctx.beginPath();
       ctx.moveTo(x, HEADER_HEIGHT);
@@ -328,7 +328,7 @@ export class PianoRoll {
       ctx.stroke();
     }
     if (grid) {
-      ctx.strokeStyle = "#22232b88";
+      ctx.strokeStyle = "#26262688";
       ctx.lineWidth = 1;
       for (let b = 0; b < total; b += grid) {
         const x = this.beatToX(b);
@@ -340,16 +340,16 @@ export class PianoRoll {
     }
 
     // 左端：実際の鍵盤のように白鍵/黒鍵の帯を描き、どのCかが一目で分かるようにする
-    ctx.fillStyle = "#0c0d12";
+    ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, KEY_STRIP_WIDTH, realHeight);
     const blackKeyWidth = KEY_STRIP_WIDTH * 0.62;
     for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
       const y = this.pitchToY(p);
       const isBlack = [1, 3, 6, 8, 10].includes(p % 12);
-      ctx.fillStyle = isBlack ? "#1c1d24" : "#d8d9de";
+      ctx.fillStyle = isBlack ? "#262626" : "#d8d9de";
       ctx.fillRect(0, y, isBlack ? blackKeyWidth : KEY_STRIP_WIDTH, this.rowHeight);
       if (!isBlack) {
-        ctx.strokeStyle = "#0c0d1288";
+        ctx.strokeStyle = "#16161688";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, y + this.rowHeight + 0.5);
@@ -357,14 +357,14 @@ export class PianoRoll {
         ctx.stroke();
       }
     }
-    ctx.strokeStyle = "#3a3c48";
+    ctx.strokeStyle = "#474747";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(KEY_STRIP_WIDTH, 0);
     ctx.lineTo(KEY_STRIP_WIDTH, realHeight);
     ctx.stroke();
     // Cの鍵にだけオクターブ番号込みの音名を出す（「C」だけだと何番目のCか分からないため）
-    ctx.fillStyle = "#0c0d12";
+    ctx.fillStyle = "#161616";
     ctx.font = "9px sans-serif";
     ctx.textAlign = "left";
     for (let p = PITCH_MIN; p <= PITCH_MAX; p++) {
@@ -378,7 +378,7 @@ export class PianoRoll {
       for (const l of this.phrase.layers) {
         if (l.id === this.activeLayerId) continue;
         for (const note of l.notes) {
-          this.drawNote(ctx, l, note, "#5eb4ff66", "#5eb4ff99");
+          this.drawNote(ctx, l, note, "#c6c6c666", "#c6c6c699");
         }
       }
     }
@@ -391,8 +391,8 @@ export class PianoRoll {
           ctx,
           layer,
           note,
-          selected ? "#3ee6b0" : "#3ee6b0cc",
-          selected ? "#e9e9ee" : "#0c0d12",
+          selected ? "#78a9ff" : "#78a9ffcc",
+          selected ? "#f4f4f4" : "#161616",
         );
       }
     }
@@ -400,7 +400,7 @@ export class PianoRoll {
     // 再生位置
     if (this.playheadBeats !== null) {
       const x = this.beatToX(this.playheadBeats);
-      ctx.strokeStyle = "#ff6f4d";
+      ctx.strokeStyle = "#ff8f73";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(x, 0);
@@ -408,7 +408,7 @@ export class PianoRoll {
       ctx.stroke();
     }
 
-    ctx.fillStyle = "#9a9ba6";
+    ctx.fillStyle = "#c6c6c6";
     ctx.font = "10px sans-serif";
     for (let b = 0; b < total; b += this.phrase?.beatsPerBar ?? 4) {
       ctx.fillText(`${b / (this.phrase?.beatsPerBar ?? 4) + 1}`, this.beatToX(b) + 3, 13);

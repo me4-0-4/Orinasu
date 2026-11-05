@@ -468,7 +468,7 @@ const userPresetUi = buildUserPresets({
     void saveUserPreset(preset).then(reloadUserPresets);
   },
   onDelete: (preset) => {
-    if (!window.confirm(`音色「${preset.name}」を削除する？`)) return;
+    if (!window.confirm(`音色「${preset.name}」を削除しますか？`)) return;
     void deleteUserPreset(preset.id).then(reloadUserPresets);
   },
 });
@@ -1074,7 +1074,7 @@ scaleLockButton.addEventListener("click", () => setScaleLock(!currentPhrase?.sca
 const arpButton = document.createElement("button");
 arpButton.type = "button";
 arpButton.className = "layer-toggle";
-arpButton.textContent = "ARP";
+arpButton.textContent = "アルペジオ";
 arpButton.title = "アルペジエーターのオン/オフ";
 arpButton.addEventListener("click", () => changeArp({ enabled: !arp.enabled }));
 

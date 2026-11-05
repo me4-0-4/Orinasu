@@ -181,7 +181,7 @@ export function buildSynthPanel(
 
   // アンプエンベロープ
   const ampA = new Knob({
-    label: "Attack",
+    label: "アタック",
     min: 0,
     max: 3,
     value: params.ampEnv.attack,
@@ -193,7 +193,7 @@ export function buildSynthPanel(
     },
   });
   const ampD = new Knob({
-    label: "Decay",
+    label: "ディケイ",
     min: 0,
     max: 3,
     value: params.ampEnv.decay,
@@ -205,7 +205,7 @@ export function buildSynthPanel(
     },
   });
   const ampS = new Knob({
-    label: "Sustain",
+    label: "サステイン",
     min: 0,
     max: 1,
     value: params.ampEnv.sustain,
@@ -216,7 +216,7 @@ export function buildSynthPanel(
     },
   });
   const ampR = new Knob({
-    label: "Release",
+    label: "リリース",
     min: 0,
     max: 4,
     value: params.ampEnv.release,
@@ -227,11 +227,11 @@ export function buildSynthPanel(
       emit();
     },
   });
-  const ampEnvGroupEl = group("アンプ Envelope", [ampA.el, ampD.el, ampS.el, ampR.el]);
+  const ampEnvGroupEl = group("アンプ・エンベロープ", [ampA.el, ampD.el, ampS.el, ampR.el]);
 
   // フィルターエンベロープ
   const fEnvA = new Knob({
-    label: "Attack",
+    label: "アタック",
     min: 0,
     max: 3,
     value: params.filterEnv.attack,
@@ -243,7 +243,7 @@ export function buildSynthPanel(
     },
   });
   const fEnvD = new Knob({
-    label: "Decay",
+    label: "ディケイ",
     min: 0,
     max: 3,
     value: params.filterEnv.decay,
@@ -255,7 +255,7 @@ export function buildSynthPanel(
     },
   });
   const fEnvS = new Knob({
-    label: "Sustain",
+    label: "サステイン",
     min: 0,
     max: 1,
     value: params.filterEnv.sustain,
@@ -266,7 +266,7 @@ export function buildSynthPanel(
     },
   });
   const fEnvR = new Knob({
-    label: "Release",
+    label: "リリース",
     min: 0,
     max: 4,
     value: params.filterEnv.release,
@@ -277,7 +277,7 @@ export function buildSynthPanel(
       emit();
     },
   });
-  const filterEnvGroupEl = group("フィルター Envelope", [
+  const filterEnvGroupEl = group("フィルター・エンベロープ", [
     fEnvA.el,
     fEnvD.el,
     fEnvS.el,
