@@ -378,7 +378,7 @@ export class PianoRoll {
       for (const l of this.phrase.layers) {
         if (l.id === this.activeLayerId) continue;
         for (const note of l.notes) {
-          this.drawNote(ctx, l, note, "#78a9ff66", "#78a9ff99");
+          this.drawNote(ctx, l, note, "#c6c6c666", "#c6c6c699");
         }
       }
     }
@@ -391,7 +391,7 @@ export class PianoRoll {
           ctx,
           layer,
           note,
-          selected ? "#3ee6b0" : "#3ee6b0cc",
+          selected ? "#78a9ff" : "#78a9ffcc",
           selected ? "#f4f4f4" : "#161616",
         );
       }

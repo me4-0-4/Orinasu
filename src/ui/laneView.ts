@@ -141,7 +141,7 @@ export function buildLaneView(handlers: LaneViewHandlers): LaneView {
     g.clearRect(0, 0, width, height);
     const dim = css("--text-dim", "#c6c6c6");
     const border = css("--border", "#474747");
-    const green = css("--accent-green", "#3ee6b0");
+    const green = css("--accent", "#78a9ff");
     g.font = '11px "IBM Plex Sans JP", sans-serif';
     g.textBaseline = "middle";
 

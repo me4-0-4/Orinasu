@@ -9,13 +9,13 @@
   /* 文字 */
   --text: #f4f4f4;
   --text-dim: #c6c6c6;
-  /* 差し色：緑は「押せる・選ばれている」だけ。ほかは意味のあるときだけ */
-  --accent-green: #3ee6b0;
-  --accent-surface: #173a2f;
-  --accent-tint: var(--accent-tint);
+  /* 差し色：青（Carbon blue 40）は「押せる・選ばれている」だけ。ほかは意味のあるときだけ */
+  --accent: #78a9ff;
+  --accent-surface: #1c2b4a;
+  --accent-tint: rgba(120, 169, 255, 0.12);
   --accent-orange: #ff8f73;
   --danger-surface: #47221a;
-  --accent-blue: #78a9ff;
+  --guide-root: #be95ff; /* 鍵盤とコード案の「ルート・ベース」の印 */
   --accent-yellow: #f1c95b;
   --warn-surface: #3d3214;
   --warn-tint: rgba(241, 201, 91, 0.06);
@@ -48,7 +48,7 @@ textarea {
 
 input[type="range"],
 input[type="checkbox"] {
-  accent-color: var(--accent-green);
+  accent-color: var(--accent);
 }
 
 ::selection {
@@ -58,11 +58,11 @@ input[type="checkbox"] {
 
 input,
 textarea {
-  caret-color: var(--accent-green);
+  caret-color: var(--accent);
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-green);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -123,8 +123,8 @@ body {
 
 .audio-start-button {
   background: var(--accent-surface);
-  color: var(--accent-green);
-  border: 1px solid var(--accent-green);
+  color: var(--accent);
+  border: 1px solid var(--accent);
   padding: 8px 16px;
   font-size: var(--fs-m);
   font-weight: 700;
@@ -175,7 +175,7 @@ body {
 
 .tab-button.active {
   color: var(--text);
-  border-bottom-color: var(--accent-green);
+  border-bottom-color: var(--accent);
 }
 
 .app-main {
@@ -236,7 +236,7 @@ body {
 }
 
 .preset-button:hover {
-  border-color: var(--accent-green);
+  border-color: var(--accent);
 }
 
 .synth-panel {
@@ -319,7 +319,7 @@ body {
   left: 50%;
   width: 2px;
   height: 38%;
-  background: var(--accent-green);
+  background: var(--accent);
   transform-origin: bottom center;
   transform: translateX(-50%) rotate(var(--angle, 0deg));
   border-radius: 0;
@@ -540,8 +540,8 @@ body[data-tab="video"] .app-footer {
 
 .layer-toggle.on {
   background: var(--accent-surface);
-  border-color: var(--accent-green);
-  color: var(--accent-green);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .quantize-select {
@@ -625,8 +625,8 @@ body[data-tab="video"] .app-footer {
 }
 
 .phrase-row.active .phrase-name-button {
-  border-color: var(--accent-green);
-  color: var(--accent-green);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .phrase-name-button {
@@ -747,8 +747,8 @@ body[data-tab="video"] .app-footer {
 
 .key-candidate.selected,
 .preset-button.on {
-  border-color: var(--accent-green);
-  color: var(--accent-green);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .arp-toggle {
@@ -775,7 +775,7 @@ body[data-tab="video"] .app-footer {
 }
 
 .chord-card.selected {
-  border-top-color: var(--accent-blue);
+  border-top-color: var(--accent);
 }
 
 .chord-card.locked {
@@ -800,7 +800,7 @@ body[data-tab="video"] .app-footer {
 
 .chord-bass {
   font-size: var(--fs-xs);
-  color: var(--accent-blue);
+  color: var(--guide-root);
 }
 
 .chord-actions {
@@ -937,7 +937,7 @@ body[data-tab="video"] .app-footer {
 .layer-volume {
   width: 72px;
   flex: none;
-  accent-color: var(--accent-green);
+  accent-color: var(--accent);
 }
 
 .user-presets {
@@ -1136,8 +1136,8 @@ body[data-tab="video"] .app-footer {
 
 .roll-button {
   background: var(--accent-surface);
-  color: var(--accent-green);
-  border: 1px solid var(--accent-green);
+  color: var(--accent);
+  border: 1px solid var(--accent);
   padding: 8px 24px;
   font-size: var(--fs-l);
   font-weight: 700;
@@ -1296,7 +1296,7 @@ body[data-tab="video"] .app-footer {
 }
 .fx-item.selected {
   background: var(--accent-tint);
-  border-color: var(--accent-green);
+  border-color: var(--accent);
 }
 .fx-item.bypassed .fx-item-name {
   color: var(--text-dim);
@@ -1608,7 +1608,7 @@ body[data-tab="video"] .app-footer {
   display: block;
   height: 100%;
   width: 0;
-  background: var(--accent-green);
+  background: var(--accent);
 }
 .arr-meter > i.hot {
   background: var(--accent-yellow);
@@ -1677,8 +1677,8 @@ body[data-tab="video"] .app-footer {
 }
 .arr-fx.on {
   background: var(--accent-surface);
-  border-color: var(--accent-green);
-  color: var(--accent-green);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .arr-head-env .arr-btn.on {
   background: var(--warn-surface);
@@ -1739,7 +1739,7 @@ body[data-tab="video"] .app-footer {
 .ins-crumb {
   background: transparent;
   border: none;
-  color: var(--accent-green);
+  color: var(--accent);
   cursor: pointer;
   font-size: var(--fs-m);
   padding: 0;
@@ -1811,7 +1811,7 @@ body[data-tab="video"] .app-footer {
   transform: rotate(-45deg);
 }
 .ins-summary:hover {
-  color: var(--accent-green);
+  color: var(--accent);
 }
 .ins-row {
   display: grid;
@@ -1960,7 +1960,7 @@ body[data-tab="video"] .app-footer {
 }
 
 /* ---- 映像タブ ----
-   配電盤（上）・映像（左）・インスペクタ（右）。オン／オフはランプの点灯で、選んでいるものは緑で示す。箱は作らず罫線で区切る */
+   配電盤（上）・映像（左）・インスペクタ（右）。オン／オフはランプの点灯で、選んでいるものは青で示す。箱は作らず罫線で区切る */
 .video-tab.active {
   flex-direction: column;
   gap: 0;
@@ -2033,7 +2033,7 @@ body[data-tab="video"] .app-footer {
 .vid-key:focus-visible,
 .vid-tab:focus-visible,
 .vid-kind:focus-visible {
-  outline: 2px solid var(--accent-green);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .vid-sw[aria-pressed="true"] {
@@ -2047,7 +2047,7 @@ body[data-tab="video"] .app-footer {
   flex: none;
 }
 .vid-sw[aria-pressed="true"] .vid-lamp {
-  background: var(--accent-green);
+  background: var(--accent);
 }
 .vid-sw.warn[aria-pressed="true"] .vid-lamp {
   background: var(--accent-orange);
@@ -2188,10 +2188,10 @@ body[data-tab="video"] .app-footer {
   cursor: pointer;
 }
 .vid-play:hover {
-  border-color: var(--accent-green);
+  border-color: var(--accent);
 }
 .vid-play:focus-visible {
-  outline: 2px solid var(--accent-green);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .vid-play:disabled {
@@ -2201,7 +2201,7 @@ body[data-tab="video"] .app-footer {
 .vid-scrub {
   flex: 1;
   min-width: 0;
-  accent-color: var(--accent-green);
+  accent-color: var(--accent);
 }
 .vid-time {
   flex: none;
@@ -2222,7 +2222,7 @@ body[data-tab="video"] .app-footer {
 .vid-tm.bl { left: -18px; bottom: -18px; border-right-width: 1px; border-top-width: 1px; }
 .vid-tm.br { right: -18px; bottom: -18px; border-left-width: 1px; border-top-width: 1px; }
 .vid-stage.clean .vid-tm {
-  border-color: var(--accent-green);
+  border-color: var(--accent);
 }
 .vid-ov {
   position: absolute;
@@ -2240,7 +2240,7 @@ body[data-tab="video"] .app-footer {
   border-color: var(--text-dim);
 }
 .vid-pnl.sel {
-  border: 2px solid var(--accent-green);
+  border: 2px solid var(--accent);
 }
 .vid-pnl.float {
   z-index: 3;
@@ -2249,7 +2249,7 @@ body[data-tab="video"] .app-footer {
   border: 1px dashed var(--text-dim);
 }
 .vid-pnl.blank.sel {
-  border: 2px solid var(--accent-green);
+  border: 2px solid var(--accent);
 }
 .vid-pnl.lifted {
   opacity: 0.35;
@@ -2260,7 +2260,7 @@ body[data-tab="video"] .app-footer {
   bottom: -6px;
   width: 12px;
   height: 12px;
-  background: var(--accent-green);
+  background: var(--accent);
   cursor: nwse-resize;
 }
 .vid-blank {
@@ -2303,7 +2303,7 @@ body[data-tab="video"] .app-footer {
 }
 .vid-dv::after {
   content: "";
-  background: var(--accent-green);
+  background: var(--accent);
   opacity: 0;
 }
 .vid-dv.h { cursor: ew-resize; }
@@ -2322,7 +2322,7 @@ body[data-tab="video"] .app-footer {
   z-index: 5;
   pointer-events: none;
   background: var(--accent-tint);
-  border: 2px solid var(--accent-green);
+  border: 2px solid var(--accent);
   font-size: var(--fs-s);
   color: var(--text);
 }
@@ -2332,8 +2332,8 @@ body[data-tab="video"] .app-footer {
   pointer-events: none;
   padding: 4px 8px;
   background: var(--accent-surface);
-  border: 1px solid var(--accent-green);
-  color: var(--accent-green);
+  border: 1px solid var(--accent);
+  color: var(--accent);
   font-size: var(--fs-s);
   white-space: nowrap;
   transform: translate(-50%, -140%);
@@ -2363,7 +2363,7 @@ body[data-tab="video"] .app-footer {
 }
 .vid-tab[aria-selected="true"] {
   color: var(--text);
-  border-bottom-color: var(--accent-green);
+  border-bottom-color: var(--accent);
 }
 .vid-isec {
   display: grid;
@@ -2384,7 +2384,7 @@ body[data-tab="video"] .app-footer {
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
   font-size: var(--fs-s);
-  color: var(--accent-green);
+  color: var(--accent);
 }
 .vid-sls,
 .vid-splits,
@@ -2403,7 +2403,7 @@ body[data-tab="video"] .app-footer {
 }
 .vid-sl input {
   width: 100%;
-  accent-color: var(--accent-green);
+  accent-color: var(--accent);
 }
 .vid-sv {
   text-align: right;
@@ -2515,7 +2515,7 @@ body[data-tab="video"] .app-footer {
 }
 
 .snd-shelf.snd-drop {
-  border-color: var(--accent-green);
+  border-color: var(--accent);
 }
 
 .snd-import {
@@ -2566,7 +2566,7 @@ body[data-tab="video"] .app-footer {
 }
 
 .snd-item.active {
-  border-color: var(--accent-green);
+  border-color: var(--accent);
   background: var(--accent-surface);
 }
 

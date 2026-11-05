@@ -83,7 +83,7 @@ export class PianoKeyboard {
     const g = this.guide;
     if (!g) return null;
     const pc = ((note % 12) + 12) % 12;
-    if (g.root === pc) return isBlack ? "#4589ff" : "#78a9ff";
+    if (g.root === pc) return isBlack ? "#8a3ffc" : "#be95ff";
     if (g.chordTones.has(pc)) return isBlack ? "#b8963f" : "#f1c95b";
     return null;
   }
@@ -154,7 +154,7 @@ export class PianoKeyboard {
     for (const key of this.keys) {
       if (key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
-      ctx.fillStyle = active ? "#3ee6b0" : (this.guideColor(key.note, false) ?? "#f4f4f4");
+      ctx.fillStyle = active ? "#78a9ff" : (this.guideColor(key.note, false) ?? "#f4f4f4");
       ctx.strokeStyle = "#161616";
       ctx.lineWidth = 1;
       ctx.fillRect(key.x, 0, key.width, this.height);
@@ -164,7 +164,7 @@ export class PianoKeyboard {
         ctx.fillRect(key.x, 0, key.width, this.height);
       }
       if (this.guide?.bassTones.has(((key.note % 12) + 12) % 12)) {
-        ctx.fillStyle = "#4589ff";
+        ctx.fillStyle = "#8a3ffc";
         ctx.fillRect(key.x + key.width / 2 - 3, this.height - 24, 6, 6);
       }
 
@@ -177,7 +177,7 @@ export class PianoKeyboard {
     for (const key of this.keys) {
       if (!key.isBlack) continue;
       const active = this.activeNotes.has(key.note);
-      ctx.fillStyle = active ? "#2bbd8f" : (this.guideColor(key.note, true) ?? "#1c1c1c");
+      ctx.fillStyle = active ? "#4589ff" : (this.guideColor(key.note, true) ?? "#1c1c1c");
       const blackHeight = this.height * 0.62;
       ctx.fillRect(key.x, 0, key.width, blackHeight);
       if (!active && this.isOutOfScale(key.note)) {
@@ -185,7 +185,7 @@ export class PianoKeyboard {
         ctx.fillRect(key.x, 0, key.width, blackHeight);
       }
       if (this.guide?.bassTones.has(((key.note % 12) + 12) % 12)) {
-        ctx.fillStyle = "#78a9ff";
+        ctx.fillStyle = "#be95ff";
         ctx.fillRect(key.x + key.width / 2 - 3, blackHeight - 22, 6, 6);
       }
 

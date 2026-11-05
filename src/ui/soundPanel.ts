@@ -550,7 +550,7 @@ export function buildSoundPanel(deps: SoundPanelDeps): SoundPanel {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     const css = getComputedStyle(document.documentElement);
-    const green = css.getPropertyValue("--accent-green").trim() || "#3ee6b0";
+    const green = css.getPropertyValue("--accent").trim() || "#78a9ff";
     const orange = css.getPropertyValue("--accent-orange").trim() || "#ff8f73";
     const dim = css.getPropertyValue("--border").trim() || "#474747";
     const x = (sec: number): number => (sec / Math.max(1e-6, s.durationSec)) * w;

@@ -19,7 +19,7 @@ export function nextRecommendation(input: RecommendInput): string {
     return "次のおすすめ：コード。右の「コード案を出す」で、構成音が鍵盤に光ります。";
   }
   if (!has("bass")) {
-    return "次のおすすめ：ベース。レイヤーをベースにして、青く光るルートの音を重ねてください。";
+    return "次のおすすめ：ベース。レイヤーをベースにして、紫に光るルートの音を重ねてください。";
   }
   if (!has("drums")) {
     return "次のおすすめ：ドラム。「ドラム候補を置く」か、パッドを叩いて録音してください。";

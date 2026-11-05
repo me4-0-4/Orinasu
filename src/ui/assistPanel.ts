@@ -150,7 +150,7 @@ export function buildAssistPanel(handlers: AssistHandlers): AssistPanel {
   // --- コード ---
   const chordSec = section(
     "コード案",
-    "音は置かず、鍵盤の光り方で示します。黄＝構成音、青＝ルート、青い点＝ベースの音。",
+    "音は置かず、鍵盤の光り方で示します。黄＝構成音、紫＝ルート、紫の点＝ベースの音。",
   );
   const chordControls = document.createElement("div");
   chordControls.className = "assist-row";

@@ -96,7 +96,7 @@ export class Visualizer {
 
     ctx.fillStyle = "#161616";
     ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = "#3ee6b0";
+    ctx.strokeStyle = "#78a9ff";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     const step = w / this.timeData.length;
@@ -149,7 +149,7 @@ export class Visualizer {
       params.filter.resonance,
     );
 
-    ctx.strokeStyle = "#78a9ff";
+    ctx.strokeStyle = "#be95ff";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     const minDb = -36;
@@ -166,7 +166,7 @@ export class Visualizer {
     // カットオフの位置に目印
     const cutoffT =
       (Math.log10(params.filter.cutoff) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20));
-    ctx.strokeStyle = "#78a9ff55";
+    ctx.strokeStyle = "#be95ff55";
     ctx.beginPath();
     ctx.moveTo(cutoffT * w, 0);
     ctx.lineTo(cutoffT * w, h);
