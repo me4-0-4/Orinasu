@@ -85,15 +85,13 @@ const KEYS_RANDOM = PANEL_ORDER.filter((k) => k !== "sozai");
 
 /**
  * 映像タブ。刻むタブで作った曲に合わせて、パネル・素材・大きな文字の3つの層を重ねて描く。
- * - 上：配電盤（比率・配色・名札・効果・再生・直す範囲）
+ * - 上：ツールバー（比率｜振り直し｜見え方・直す範囲｜書き出し）
  * - 左：映像（パネルをタップで選ぶ、ドラッグで入れ替え・割り込み、境目をドラッグ）
- * - 右：インスペクタ（素材｜パネル｜上）
+ * - 右：インスペクタ（見た目｜パネル｜素材｜文字）
  */
 export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   const root = el("div", { class: "tab-panel video-tab" });
-  const board = el("div", { class: "vid-board" });
-  const colorsBox = el("div", { class: "vid-colors" });
-  colorsBox.hidden = true;
+  const board = el("div", { class: "vid-bar" });
   const canvas = el("canvas", { class: "vid-canvas" });
   const ov = el("div", { class: "vid-ov" });
   const stage = el("div", { class: "vid-stage" }, el("i", { class: "vid-tm tl" }), el("i", { class: "vid-tm tr" }), el("i", { class: "vid-tm bl" }), el("i", { class: "vid-tm br" }), canvas, ov);
@@ -114,13 +112,13 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   const transport = el("div", { class: "vid-transport" }, playBtn, stopBtn, scrub, timeLabel);
   const stageWrap = el("div", { class: "vid-stagewrap" }, songBar, stage, note, transport);
   const insp = el("aside", { class: "vid-insp" });
-  root.append(board, colorsBox, el("div", { class: "vid-main" }, stageWrap, insp));
+  root.append(board, el("div", { class: "vid-main" }, stageWrap, insp));
 
   const target = new FrameTarget(canvas);
   let v: VideoSettings = defaultVideo();
   let L = new Layout(v);
   let sel: number | null = null;
-  let tab: "base" | "panels" | "top" = "panels";
+  let tab: "look" | "panels" | "base" | "top" = "look";
   let clean = false, auto = false, colorOpen = false;
   // 素材の棚：自分の素材が1つも無いあいだは、見本を並べる
   const samples = makeSamples();
@@ -440,50 +438,24 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     });
   }
 
-  // ---- 配電盤 ----
+  // ---- ツールバー ----
   function buildBoard(): void {
-    const group = (label: string, ...kids: Node[]): HTMLElement => el("fieldset", { class: "vid-grp" }, el("legend", {}, label), el("div", { class: "vid-grp-in" }, ...kids));
     const change = (fn: () => void) => () => {
       fn();
       saveSoon();
       refresh();
     };
+    const island = (...kids: Node[]): HTMLElement => el("div", { class: "tp-island" }, ...kids);
+    const segs = el("div", { class: "vid-segs", role: "group", "aria-label": "比率" },
+      ...(Object.keys(FRAMES) as Aspect[]).map((a) => el("button", { type: "button", class: "vid-seg" + (v.aspect === a ? " on" : ""), "aria-pressed": v.aspect === a ? "true" : "false", on: change(() => { v.aspect = a; sizeStage(); }) }, ASPECT_LABEL[a])));
     board.replaceChildren(
-      group("比率", ...(Object.keys(FRAMES) as Aspect[]).map((a) => lamp(ASPECT_LABEL[a], v.aspect === a, change(() => { v.aspect = a; sizeStage(); })))),
-      group("配色",
-        ...Object.entries(PRESETS).map(([k, p]) => lamp(p.name, v.preset === k, change(() => { v.preset = k; v.colors = { ...p } as unknown as Colors; }))),
-        lamp("自分で", colorOpen, () => { colorOpen = !colorOpen; refresh(); }),
-      ),
-      group("名札",
-        ...([["fuda", "札"], ["mimi", "耳"], ["none", "なし"]] as const).map(([k, l]) => lamp(l, v.label === k, change(() => (v.label = k)))),
-        el("span", { class: "vid-sep" }),
-        lamp("和", v.lang === "ja", change(() => (v.lang = "ja"))),
-        lamp("英", v.lang === "en", change(() => (v.lang = "en"))),
-      ),
-      group("効果", ...([["led", "LED"], ["zure", "版ズレ"], ["glitch", "グリッチ"], ["sumi", "墨"], ["halftone", "網点"], ["weave", "織り目"]] as const).map(([k, l]) => lamp(l, v.fx[k], change(() => (v.fx[k] = !v.fx[k]))))),
-      group("振り直し",
-        key("振り直す", shuffle),
-        lamp("8小節ごと", auto, () => { auto = !auto; refresh(); }),
-      ),
-      group("書き出し", ...exportControls()),
-      group("直す範囲",
-        lamp(`${ASPECT_LABEL[v.aspect]} だけ直す`, L.only, () => { L.only = !L.only; refresh(); }, "warn"),
+      island(el("span", { class: "tp-label" }, "比率"), segs),
+      island(key("振り直す", shuffle), lamp("8小節ごとに振り直す", auto, () => { auto = !auto; refresh(); })),
+      island(
         lamp("書き出しの見え方", clean, () => { clean = !clean; refresh(); }),
+        lamp(`${ASPECT_LABEL[v.aspect]} だけ直す`, L.only, () => { L.only = !L.only; refresh(); }, "warn"),
       ),
-    );
-    colorsBox.hidden = !colorOpen;
-    colorsBox.replaceChildren(
-      ...COLOR_KEYS.map(([k, label]) => {
-        const id = `vid-c-${k}`, inp = el("input", { type: "color", id });
-        inp.value = v.colors[k as keyof Colors];
-        inp.addEventListener("input", () => {
-          v.colors[k as keyof Colors] = inp.value;
-          v.preset = "custom";
-        });
-        inp.addEventListener("change", () => { saveSoon(); buildBoard(); });
-        return el("label", { class: "vid-cin", for: id }, inp, el("span", {}, label));
-      }),
-      key("元に戻す", change(() => { const p = PRESETS[v.preset as keyof typeof PRESETS] ?? PRESETS.shuden; v.colors = { ...p } as unknown as Colors; }), "tx"),
+      el("div", { class: "vid-export" }, ...exportControls()),
     );
   }
 
@@ -586,11 +558,12 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
   // ---- インスペクタ ----
   function renderInspector(): void {
     const tabs = el("div", { class: "vid-tabs", role: "tablist" });
-    for (const [k, l] of [["base", "素材"], ["panels", "パネル"], ["top", "上"]] as const) {
+    for (const [k, l] of [["look", "見た目"], ["panels", "パネル"], ["base", "素材"], ["top", "文字"]] as const) {
       tabs.append(el("button", { type: "button", class: "vid-tab", role: "tab", "aria-selected": tab === k ? "true" : "false", on: () => { tab = k; renderInspector(); } }, l));
     }
     insp.replaceChildren(tabs);
-    if (tab === "base") baseInsp();
+    if (tab === "look") lookInsp();
+    else if (tab === "base") baseInsp();
     else if (tab === "top") topInsp();
     else panelInsp();
   }
@@ -599,6 +572,50 @@ export function buildVideoPanel(deps: VideoPanelDeps): VideoPanel {
     saveSoon();
     refresh();
   };
+
+  /** 見た目：配色（見本から選ぶ・細かく変える）、名札、効果。 */
+  function lookInsp(): void {
+    const swatches = el("div", { class: "vid-swatches" });
+    for (const [k, p] of Object.entries(PRESETS)) {
+      const chips = el("span", { class: "vid-swatch-chips", "aria-hidden": "true" }, ...(["bg", "panel", "ink", "a1", "a2"] as const).map((c) => {
+        const chip = el("i");
+        chip.style.background = p[c];
+        return chip;
+      }));
+      swatches.append(el("button", { type: "button", class: "vid-swatch" + (v.preset === k ? " on" : ""), "aria-pressed": v.preset === k ? "true" : "false", on: edit(() => { v.preset = k; v.colors = { ...p } as unknown as Colors; }) }, chips, el("span", { class: "vid-swatch-name" }, p.name)));
+    }
+    const colors = el("div", { class: "vid-colors" },
+      ...COLOR_KEYS.map(([k, label]) => {
+        const id = `vid-c-${k}`, inp = el("input", { type: "color", id });
+        inp.value = v.colors[k as keyof Colors];
+        inp.addEventListener("input", () => {
+          v.colors[k as keyof Colors] = inp.value;
+          v.preset = "custom";
+        });
+        inp.addEventListener("change", () => { saveSoon(); renderInspector(); });
+        return el("label", { class: "vid-cin", for: id }, inp, el("span", {}, label));
+      }),
+      key("見本の色に戻す", edit(() => { const p = PRESETS[v.preset as keyof typeof PRESETS] ?? PRESETS.shuden; v.colors = { ...p } as unknown as Colors; }), "tx"),
+    );
+    const custom = el("details", { class: "vid-custom" }, el("summary", {}, "色を細かく変える"), colors);
+    custom.open = colorOpen;
+    custom.addEventListener("toggle", () => (colorOpen = custom.open));
+    insp.append(section("配色", swatches, custom));
+    insp.append(section("名札", row(
+      ...([["fuda", "札"], ["mimi", "耳"], ["none", "なし"]] as const).map(([k, l]) => lamp(l, v.label === k, edit(() => (v.label = k)))),
+      el("span", { class: "vid-sep" }),
+      lamp("和", v.lang === "ja", edit(() => (v.lang = "ja"))),
+      lamp("英", v.lang === "en", edit(() => (v.lang = "en"))),
+    )));
+    type FxKey = keyof VideoSettings["fx"];
+    const fxRows: [string, [FxKey, string][]][] = [
+      ["いつも", [["led", "LED"], ["halftone", "網点"], ["weave", "織り目"], ["scan", "走査線"], ["grain", "粒子"], ["vignette", "周辺減光"]]],
+      ["キック", [["zure", "版ズレ"], ["flash", "明滅"], ["shake", "揺れ"]]],
+      ["フィル", [["glitch", "グリッチ"], ["sumi", "墨"], ["invert", "反転"]]],
+    ];
+    insp.append(section("効果", el("div", { class: "vid-kinds" }, ...fxRows.map(([g, list]) =>
+      el("div", { class: "vid-kind-row" }, el("span", { class: "vid-kind-g" }, g), el("div", { class: "vid-kind-list" }, ...list.map(([k, l]) => lamp(l, v.fx[k], edit(() => (v.fx[k] = !v.fx[k]))))))))));
+  }
 
   function baseInsp(): void {
     const B = v.layers.base;

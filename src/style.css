@@ -1966,30 +1966,109 @@ body[data-tab="video"] .app-footer {
   gap: 0;
   overflow: auto;
 }
-.vid-board {
+/* 上のツールバー：比率｜振り直し｜見え方・直す範囲｜書き出し（右寄せ） */
+.vid-bar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  background: var(--panel);
   border-bottom: 1px solid var(--border);
   flex: none;
 }
-.vid-grp {
-  border: 0;
-  border-right: 1px solid var(--border);
-  margin: 0;
-  padding: 8px 12px 12px;
-  min-width: 0;
+.vid-export {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
 }
-.vid-grp:last-child {
-  border-right: 0;
+.vid-export select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: var(--fs-s);
 }
-.vid-grp legend {
-  float: left;
-  width: 100%;
-  padding: 0;
-  margin-bottom: 8px;
-  font-family: var(--font-sans);
+/* 比率の切り替え（つながったボタン） */
+.vid-segs {
+  display: inline-flex;
+}
+.vid-seg {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-m);
+  cursor: pointer;
+}
+.vid-seg + .vid-seg {
+  margin-left: -1px;
+}
+.vid-seg:hover {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+.vid-seg.on {
+  position: relative;
+  background: var(--accent-surface);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* 配色の見本 */
+.vid-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+.vid-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-s);
+  text-align: left;
+  cursor: pointer;
+}
+.vid-swatch:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+.vid-swatch.on {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+  color: var(--text);
+}
+.vid-swatch-chips {
+  display: flex;
+  height: 28px;
+}
+.vid-swatch-chips i {
+  flex: 1;
+}
+.vid-swatch-chips i:first-child {
+  flex: 2;
+}
+.vid-swatch-name {
+  padding: 0 4px;
+}
+.vid-custom > summary {
+  cursor: pointer;
+  padding: 4px 0;
   font-size: var(--fs-s);
   color: var(--text-dim);
+}
+.vid-custom > summary:hover {
+  color: var(--text);
+}
+.vid-custom .vid-colors {
+  padding: 8px 0 0;
+  border-bottom: none;
 }
 .vid-grp-in,
 .vid-row {

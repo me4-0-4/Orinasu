@@ -41,6 +41,21 @@ export function renderFrame(target: FrameTarget, v: VideoSettings, layout: Layou
   drawFrame(f);
 }
 
+/** 粒子の模様（128 画素四方。白と黒の点を、うすく散らしたもの）。1回だけ作る。 */
+let grainCv: HTMLCanvasElement | null = null;
+function grainTile(): HTMLCanvasElement {
+  if (grainCv) return grainCv;
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const g = c.getContext("2d")!, img = g.createImageData(128, 128);
+  for (let i = 0; i < 128 * 128; i++) {
+    const r = noise(i, 7), v = r > .5 ? 255 : 0;
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = Math.round(Math.abs(r - .5) * 2 * 60);
+  }
+  g.putImageData(img, 0, 0);
+  return (grainCv = c);
+}
 const patCache: Record<string, CanvasPattern> = {};
 function dotPattern(key: string, cell: number, r: number, col: string, hole: boolean): CanvasPattern { // hole=true：穴だけ抜いた網（LED）／false：点（網点）
   const k = key + cell + r + col + hole; if (patCache[k]) return patCache[k];
@@ -275,6 +290,9 @@ function drawFrame(f: Feat): void {
   ctx.fillStyle = P0.bg; ctx.fillRect(0, 0, g.VW, g.VH);
   if (fx.weave) { ctx.strokeStyle = P0.line; ctx.globalAlpha = .28; ctx.lineWidth = u * .05; for (let x = 0; x < g.VW; x += u * .9) line(ctx, x, 0, x, g.VH); for (let y = 0; y < g.VH; y += u * .9) line(ctx, 0, y, g.VW, y); ctx.globalAlpha = 1; }
   if (fx.halftone) { const lv = Math.round(f.loud * 5); ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const cell = Math.max(4, Math.round(u * 1.1 * devScale)); ctx.fillStyle = dotPattern("ht", cell, cell * (.12 + lv * .07), P0.line, false); ctx.fillRect(0, 0, cv.width, cv.height); ctx.restore(); }
+  // 揺れ：キックの直後だけ、地より上の層を少しずらす（下の帯は揺らさない）
+  const shake = fx.shake ? f.kick * u * .9 : 0;
+  if (shake > u * .05) { const k = Math.floor(S * 4); ctx.translate((noise(k, 101) - .5) * 2 * shake, (noise(k, 102) - .5) * 2 * shake); }
   drawBase(f, P0, g, u);
   if (V.layers.panels.show) out.forEach(o => {
     const pk = L.eff(o.leaf, "panel") ?? o.leaf.panel; if (pk === "blank" || !PANELS[pk]) return;
@@ -308,6 +326,9 @@ function drawFrame(f: Feat): void {
     const led = L.eff(o.leaf, "led"); if (led == null ? (fx.led || def.led) : led) ledify(x, y, w, h, P, u);
   });
   drawTop(f, P0, g, u);
+  if (shake > u * .05) ctx.setTransform(devScale, 0, 0, devScale, 0, 0);
+  // 明滅：強いキックで、画面を文字の色で一瞬うすく塗る
+  if (fx.flash && f.kick > .3) { ctx.fillStyle = P0.ink; ctx.globalAlpha = (f.kick - .3) * .3; ctx.fillRect(0, 0, g.VW, g.VH); ctx.globalAlpha = 1; }
   if (fx.sumi && f.isFill) { ctx.globalAlpha = .92; brush(ctx, g.VW * .02, g.VH * (.3 + .4 * noise(f.bar, 41)), g.VW * .98, g.VH * (.3 + .4 * noise(f.bar, 42)), Math.min(g.VW, g.VH) * .09, Math.min(1, f.fillAmt * 3), f.bar * 13, isDark(P0.bg) ? P0.ink : P0.ink); ctx.globalAlpha = 1; }
   // 版ズレはキックの直後だけ（画面を丸ごと描き直すので、ずっと掛けると重い）
   const zure = fx.zure && f.kick > .35 ? f.kick * u * .7 : 0, gl = fx.glitch ? f.fillAmt : 0;
@@ -323,6 +344,14 @@ function drawFrame(f: Feat): void {
     }
     ctx.restore();
   }
+  // 反転：フィルの間、拍の頭ごとに一瞬だけ色を反転する
+  if (fx.invert && f.isFill && (S % 4) < 1) { ctx.save(); ctx.globalCompositeOperation = "difference"; ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, g.VW, g.VH); ctx.restore(); }
+  // 走査線：細い横線を、地の色でうすく重ねる
+  if (fx.scan) { ctx.fillStyle = P0.bg; ctx.globalAlpha = .22; for (let y = 0; y < g.VH; y += u * .6) ctx.fillRect(0, y, g.VW, u * .22); ctx.globalAlpha = 1; }
+  // 粒子：細かい砂の模様を、コマごとにずらして重ねる
+  if (fx.grain) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const k = Math.floor(S * 8); ctx.translate(-noise(k, 111) * 128, -noise(k, 112) * 128); ctx.fillStyle = ctx.createPattern(grainTile(), "repeat")!; ctx.globalAlpha = .28; ctx.fillRect(0, 0, cv.width + 128, cv.height + 128); ctx.restore(); }
+  // 周辺減光：四隅に向かって、地の色で暗くする
+  if (fx.vignette) { const rg = ctx.createRadialGradient(g.VW / 2, g.VH / 2, Math.min(g.VW, g.VH) * .35, g.VW / 2, g.VH / 2, Math.hypot(g.VW, g.VH) / 2); const [vr, vg, vb] = isDark(P0.bg) ? [0, 0, 0] : hex2rgb(P0.ink), va = isDark(P0.bg) ? .6 : .18; rg.addColorStop(0, `rgba(${vr},${vg},${vb},0)`); rg.addColorStop(1, `rgba(${vr},${vg},${vb},${va})`); ctx.fillStyle = rg; ctx.fillRect(0, 0, g.VW, g.VH); }
   // 下の帯：区切りのある進み具合
   const by = g.VH - u * 1.9, n = 64, bw = (g.VW - u * 6) / n, done = S / TL.totalSteps * n, t = S / TL.totalSteps * TL.seconds;
   for (let i = 0; i < n; i++) { ctx.fillStyle = i < done ? (i % 16 === 15 ? P0.a2 : P0.a1) : P0.line; ctx.fillRect(u * 3 + i * bw + bw * .12, by, bw * .76, u * .55); }

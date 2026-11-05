@@ -98,6 +98,16 @@ export const PRESETS = {
   sumi: { name: "墨", bg: "#0d0d0f", panel: "#151517", ink: "#f3f1ec", line: "#2a2a2d", a1: "#e23b2e", a2: "#ff6b7a" },
   gofun: { name: "胡粉", bg: "#f3f1ec", panel: "#fbfaf7", ink: "#0d0d0f", line: "#d6d2c8", a1: "#e23b2e", a2: "#2740a8" },
   warabanshi: { name: "藁半紙", bg: "#efebdd", panel: "#f6f3e8", ink: "#16151a", line: "#d3cdb8", a1: "#2740a8", a2: "#ff6b7a" },
+  aizome: { name: "藍染", bg: "#0b1426", panel: "#111c33", ink: "#e8edf5", line: "#22304d", a1: "#f2b84b", a2: "#ff6b7a" },
+  yozakura: { name: "夜桜", bg: "#120c12", panel: "#1b131b", ink: "#f5e9ef", line: "#2e222c", a1: "#ff7aa2", a2: "#b39cff" },
+  tasogare: { name: "黄昏", bg: "#1d1530", panel: "#261c3d", ink: "#f3e9ff", line: "#3a2d58", a1: "#ff9e64", a2: "#ff5c8a" },
+  aojashin: { name: "青写真", bg: "#0d2a5c", panel: "#123270", ink: "#e6efff", line: "#2c4e8f", a1: "#ffffff", a2: "#ffcf4a" },
+  shirokuro: { name: "白黒", bg: "#000000", panel: "#0a0a0a", ink: "#ffffff", line: "#262626", a1: "#ffffff", a2: "#9a9a9a" },
+  sakura: { name: "桜", bg: "#fbf3f2", panel: "#fffafa", ink: "#2b1d22", line: "#ead6d6", a1: "#d94f70", a2: "#3c5aa8" },
+  shinbun: { name: "新聞", bg: "#ecebe6", panel: "#f5f4f0", ink: "#111111", line: "#c9c7bf", a1: "#111111", a2: "#d0312d" },
+  matcha: { name: "抹茶", bg: "#eef0e2", panel: "#f6f7ee", ink: "#1f2a16", line: "#d3d8bf", a1: "#4f7a28", a2: "#c2452d" },
+  soda: { name: "ソーダ", bg: "#eef6ff", panel: "#f8fbff", ink: "#0b2140", line: "#cfe0f3", a1: "#1f6feb", a2: "#ff6b7a" },
+  sabi: { name: "錆", bg: "#1a1512", panel: "#231c18", ink: "#efe4d6", line: "#3a2f28", a1: "#d9773a", a2: "#8fa3b8" },
 };
 export const COLOR_KEYS = [["bg", "地"], ["panel", "パネル"], ["ink", "文字"], ["line", "細い線"], ["a1", "差し色1"], ["a2", "差し色2"]];
 export function hex2rgb(h: string): number[] { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
@@ -693,6 +703,121 @@ Object.assign(PANELS, {
         ctx.restore();
       }
       const fl = Math.max(0, 1 - (f.S - f.lastChop.s)); ctx.fillStyle = P.a1; ctx.globalAlpha = fl * .25; ctx.fillRect(c.x, c.y, c.w, c.h); ctx.globalAlpha = 1;
+    } },
+
+  // ---------- 追加のパネル ----------
+  keys: { ja: "鍵盤", en: "KEYS", g: "音", draw(ctx, c, f, P, u) {
+      const BLACK = [1, 3, 6, 8, 10], lo = Math.max(24, Math.floor(Math.min(...PITCHES) / 12) * 12), hi = Math.max(lo + 24, Math.ceil((Math.max(...PITCHES) + 1) / 12) * 12);
+      const whites: number[] = []; for (let p = lo; p < hi; p++) if (!BLACK.includes(p % 12)) whites.push(p);
+      const ww = c.w / whites.length, kh = Math.min(c.h - u * 2, ww * 6), y = c.y + c.h - kh;
+      const on = new Map<number, number>(); for (const a of f.active) on.set(a.p, a.tr);
+      // 白鍵は明るい色・黒鍵は暗い色にする（明るい配色でも鍵盤が反転しないように）
+      const dark = isDark(P.bg), wk = dark ? P.ink : P.panel, bk = dark ? P.bg : P.ink;
+      whites.forEach((p, i) => {
+        const tr = on.get(p), x = c.x + i * ww + ww * .06;
+        ctx.fillStyle = tr == null ? wk : trackColor(P, tr); ctx.globalAlpha = tr == null && dark ? .85 : 1; ctx.fillRect(x, y, ww * .88, kh);
+        if (!dark) { ctx.globalAlpha = 1; ctx.strokeStyle = P.line; ctx.lineWidth = u * .08; ctx.strokeRect(x, y, ww * .88, kh); }
+      });
+      ctx.globalAlpha = 1;
+      for (let p = lo; p < hi; p++) {
+        if (!BLACK.includes(p % 12)) continue;
+        const wi = whites.indexOf(p - 1); if (wi < 0) continue;
+        const tr = on.get(p); ctx.fillStyle = tr == null ? bk : trackColor(P, tr); ctx.fillRect(c.x + (wi + 1) * ww - ww * .3, y, ww * .6, kh * .6);
+      }
+      ctx.fillStyle = P.dim; ctx.font = `${u * .9}px ${DOT}`;
+      whites.forEach((p, i) => { if (p % 12 === 0) ctx.fillText(pfull(p), c.x + i * ww, y - u * .5); });
+    } },
+
+  metro: { ja: "振り子", en: "METRO", g: "拍", draw(ctx, c, f, P, u) {
+      // 拍の頭で端に来て、拍の真ん中で真下を通る（拍ごとに向きが替わる）
+      const inBeat = (f.S % 4) / 4, side = f.beat % 2 ? -1 : 1, a = side * Math.cos(inBeat * Math.PI) * .55;
+      const px = c.x + c.w / 2, py = c.y + u * 1.2, L = Math.max(u * 3, Math.min(c.h - u * 4, c.w * .9));
+      ctx.strokeStyle = P.line; ctx.lineWidth = u * .12; ctx.beginPath(); ctx.arc(px, py, L, Math.PI / 2 - .62, Math.PI / 2 + .62); ctx.stroke();
+      for (let k = -4; k <= 4; k++) { const t = Math.PI / 2 + k * .15; line(ctx, px + Math.cos(t) * L * .95, py + Math.sin(t) * L * .95, px + Math.cos(t) * L * 1.03, py + Math.sin(t) * L * 1.03); }
+      const bx = px + Math.sin(a) * L, by = py + Math.cos(a) * L, punch = Math.pow(1 - inBeat, 3);
+      ctx.strokeStyle = P.ink; ctx.lineWidth = u * .25; line(ctx, px, py, bx, by);
+      ctx.fillStyle = P.ink; circle(ctx, px, py, u * .5); ctx.fill();
+      ctx.fillStyle = f.beat === 0 ? P.a1 : P.ink; circle(ctx, bx, by, u * (1.3 + punch * .9)); ctx.fill();
+      for (let b = 0; b < BEATS; b++) { ctx.fillStyle = b === f.beat ? P.a1 : P.line; circle(ctx, px + (b - (BEATS - 1) / 2) * u * 2.2, c.y + c.h - u * .8, u * .5); ctx.fill(); }
+    } },
+
+  level: { ja: "音量", en: "LEVEL", g: "響き", draw(ctx, c, f, P, u) {
+      const n = f.hist.length, h = c.h - u * 1.8, X = (i: number): number => c.x + c.w * i / (n - 1), Y = (v: number): number => c.y + h - v * h;
+      ctx.strokeStyle = P.line; ctx.lineWidth = u * .06; for (let i = 1; i < 4; i++) line(ctx, c.x, c.y + h * i / 4, c.x + c.w, c.y + h * i / 4);
+      ctx.beginPath(); ctx.moveTo(c.x, c.y + h); f.hist.forEach((v, i) => ctx.lineTo(X(i), Y(v))); ctx.lineTo(c.x + c.w, c.y + h); ctx.closePath();
+      ctx.fillStyle = P.a1; ctx.globalAlpha = .22; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.beginPath(); f.hist.forEach((v, i) => (i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v)))); ctx.strokeStyle = P.a1; ctx.lineWidth = u * .2; ctx.stroke();
+      const v = f.hist[n - 1] ?? 0; ctx.fillStyle = P.ink; circle(ctx, c.x + c.w, Y(v), u * .5); ctx.fill();
+      ctx.fillStyle = P.dim; ctx.font = `${u * .9}px ${DOT}`; ctx.fillText(String(Math.round(v * 100)).padStart(3, "0"), c.x, c.y + c.h - u * .2);
+    } },
+
+  count: { ja: "拍", en: "COUNT", g: "文字", draw(ctx, c, f, P, u) {
+      const inBeat = (f.S % 4) / 4, fs = Math.min(c.h * .72, c.w * .6), n = SPB, w = c.w / n;
+      for (let s = 0; s < n; s++) { ctx.fillStyle = s <= f.step ? (s % 4 === 0 ? P.a1 : P.ink) : P.line; ctx.fillRect(c.x + s * w + w * .15, c.y, w * .7, u * .4); }
+      ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = `${fs}px ${DOT}`;
+      ctx.fillStyle = f.beat === 0 ? P.a1 : P.ink; ctx.globalAlpha = .35 + .65 * (1 - inBeat);
+      ctx.fillText(String(f.beat + 1), c.x + c.w / 2, c.y + c.h / 2);
+      ctx.globalAlpha = 1; ctx.fillStyle = P.dim; ctx.font = `${u * 1}px ${SANS}`;
+      ctx.fillText(rt.lang === "ja" ? `第${f.bar + 1}小節` : `BAR ${f.bar + 1}`, c.x + c.w / 2, c.y + c.h - u * .8);
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    } },
+
+  rain: { ja: "雨", en: "RAIN", g: "響き", draw(ctx, c, f, P, u, lf) {
+      const st = rt.parts[lf.id] || (rt.parts[lf.id] = { drops: [], rings: [], prevS: f.S }), dt = rt.frameDt;
+      if (rt.playing && dt > 0) {
+        for (const e of events) {
+          if (e.tr === 3 || !passed(st.prevS, f.S, e.s)) continue;
+          const x = e.p >= 0 ? (e.p - 36) / 48 : .1 + .8 * noise(e.s, 7);
+          st.drops.push({ x: Math.min(.98, Math.max(.02, x)), y: 0, v: .9 + e.vel * .8, tr: e.tr });
+        }
+        if (st.drops.length > 300) st.drops.splice(0, st.drops.length - 300);
+        for (const d of st.drops) { d.y += d.v * dt; if (d.y >= 1) st.rings.push({ x: d.x, t: 0, tr: d.tr }); }
+        st.drops = st.drops.filter((d: { y: number }) => d.y < 1);
+        for (const r of st.rings) r.t += dt;
+        st.rings = st.rings.filter((r: { t: number }) => r.t < 1).slice(-120);
+      }
+      st.prevS = f.S;
+      const gy = c.y + c.h - u * .6;
+      ctx.lineWidth = u * .16;
+      for (const d of st.drops) { const x = c.x + d.x * c.w, y = c.y + d.y * (gy - c.y); ctx.strokeStyle = trackColor(P, d.tr); line(ctx, x, y - u * 1.6, x, y); }
+      ctx.strokeStyle = P.line; line(ctx, c.x, gy, c.x + c.w, gy);
+      for (const r of st.rings) { ctx.strokeStyle = trackColor(P, r.tr); ctx.globalAlpha = 1 - r.t; ctx.beginPath(); ctx.ellipse(c.x + r.x * c.w, gy, u * (.5 + r.t * 4), u * (.2 + r.t), 0, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.globalAlpha = 1;
+    } },
+
+  share: { ja: "配分", en: "SHARE", g: "その他", draw(ctx, c, f, P, u) {
+      const sum = [0, 0, 0, 0];
+      for (const e of events) { if (e.s > f.S) break; sum[e.tr] += Math.min(e.len, f.S - e.s) * e.vel; }
+      const tot = sum.reduce((a, b) => a + b, 0), R = Math.min(c.w, c.h) * .42, cx = c.x + (c.w > c.h * 1.6 ? R + u : c.w / 2), cy = c.y + c.h / 2;
+      ctx.lineWidth = R * .32;
+      if (tot <= 0) { ctx.strokeStyle = P.line; circle(ctx, cx, cy, R * .8); ctx.stroke(); }
+      let a0 = -Math.PI / 2;
+      sum.forEach((v, t) => { if (tot <= 0) return; const a1 = a0 + v / tot * Math.PI * 2; if (v > 0) { ctx.strokeStyle = trackColor(P, t); ctx.beginPath(); ctx.arc(cx, cy, R * .8, a0, a1); ctx.stroke(); } a0 = a1; });
+      const lx = cx + R + u * 2;
+      if (c.x + c.w - lx > u * 9) {
+        ctx.font = `${u * 1.1}px ${DOT}`;
+        sum.forEach((v, t) => { const y = cy + (t - 1.5) * u * 2.4; ctx.fillStyle = trackColor(P, t); ctx.fillRect(lx, y - u * .8, u * .9, u * .9); ctx.fillStyle = P.ink; ctx.fillText(`${TRACKS[t][rt.lang]} ${tot > 0 ? Math.round(v / tot * 100) : 0}%`, lx + u * 1.5, y); });
+      }
+    } },
+
+  fifths: { ja: "五度圏", en: "FIFTHS", g: "音", draw(ctx, c, f, P, u) {
+      const cx = c.x + c.w / 2, cy = c.y + c.h / 2, R = Math.min(c.w, c.h) * .4;
+      const pos = (pc: number): [number, number] => { const a = -Math.PI / 2 + ((pc * 7) % 12) / 12 * Math.PI * 2; return [cx + Math.cos(a) * R, cy + Math.sin(a) * R]; };
+      ctx.strokeStyle = P.line; ctx.lineWidth = u * .1; circle(ctx, cx, cy, R); ctx.stroke();
+      const on = [...new Set(f.active.filter((a) => a.p >= 0).map((a) => a.p % 12))].sort((a, b) => ((a * 7) % 12) - ((b * 7) % 12));
+      if (on.length > 1) {
+        ctx.beginPath(); on.forEach((pc, i) => { const [x, y] = pos(pc); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.closePath();
+        ctx.fillStyle = P.a1; ctx.globalAlpha = .2; ctx.fill(); ctx.globalAlpha = 1; ctx.strokeStyle = P.a1; ctx.lineWidth = u * .25; ctx.stroke();
+      }
+      ctx.font = `${u * 1.1}px ${DOT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      for (let pc = 0; pc < 12; pc++) {
+        const [x, y] = pos(pc), lit = on.includes(pc);
+        ctx.fillStyle = lit ? P.a1 : P.bg; circle(ctx, x, y, u * (lit ? 1.6 : 1.2)); ctx.fill();
+        ctx.strokeStyle = lit ? P.a1 : P.dim; ctx.lineWidth = u * .1; ctx.stroke();
+        ctx.fillStyle = lit ? P.bg : P.dim; ctx.fillText(pname(pc), x, y);
+      }
+      ctx.fillStyle = P.ink; ctx.font = `${u * 1.4}px ${SANS}`; ctx.fillText(rt.lang === "ja" ? rt.song.keyJa : rt.song.key, cx, cy);
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
     } },
 } satisfies Record<string, PanelDef>);
 const WG: Record<string, string> = { threads: "音", weave: "響き", punch: "拍", spools: "響き", stitch: "拍", ripple: "拍", ayatori: "音", strings: "音", wheel: "拍", fibers: "響き", stripes: "響き", swatch: "音", title: "文字", sozai: "その他" };
