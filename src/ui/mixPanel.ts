@@ -1057,16 +1057,11 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     await loadLibrary();
   }
 
+  // よく使う順：素材 → 刻み方 → ドラムループ → 細かい刻み方 → 置く音 → 仕上げ → グループ → 保存
+  const baseShapeKeys: ShapeKey[] = ["busy", "breaks", "onBeat", "size", "hold"];
+  const detailShapeOrder: ShapeKey[] = ["fills", "fx", "vary", "repeat", "crisp", "motion", "pan"];
+  const shapeEl = (key: ShapeKey): HTMLElement => songShape[shapeDefs.findIndex(([k]) => k === key)].c.el;
   songPanel.append(
-    section(
-      "library",
-      "保存した曲",
-      note("いまの曲は自動で残ります。曲の中身は刻み方（種と設定）なので、素材のフレーズを直すと、保存した曲の音も変わります。"),
-      libraryButtons,
-      libraryStatus,
-      libraryEmpty,
-      libraryList,
-    ),
     section("material", "素材", note("1つのフレーズが、1つのトラックになります。"), materialEmpty, materialList),
     section(
       "chop",
@@ -1074,11 +1069,12 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
       styleChoice.el,
       turnsChoice.el,
       cutChoice.el,
-      ...songShape.map((s) => s.c.el),
       shapeButtons,
+      ...baseShapeKeys.map(shapeEl),
       swingKnob.el,
     ),
     section("drums", "ドラムループ", drumChoice.el, bedKnob.el, pumpKnob.el),
+    section("chopDetail", "フィルと細かい刻み方", ...detailShapeOrder.map(shapeEl)),
     section(
       "drops",
       "置く音",
@@ -1090,7 +1086,17 @@ export function buildMixPanel(deps: MixPanelDeps): MixPanel {
     ),
     section("finish", "仕上げ", sfxKnob.el, padKnob.el, dryChoice.el, button("マスターのFXを開く", () => openTrackFx("master"), "preset-button")),
     section("groups", "グループ", note("断片をいくつか選んで「グループにする」と、刻み方・ミュート・FXをまとめて変えられます。"), groupList),
-    section("info", "曲の情報", nameRow, keyInfo),
+    section(
+      "library",
+      "曲の保存",
+      note("いまの曲は自動で残ります。曲の中身は刻み方（種と設定）なので、素材のフレーズを直すと、保存した曲の音も変わります。"),
+      nameRow,
+      keyInfo,
+      libraryButtons,
+      libraryStatus,
+      libraryEmpty,
+      libraryList,
+    ),
   );
 
   // --- トラック ---

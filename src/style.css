@@ -1775,20 +1775,43 @@ body[data-tab="video"] .app-footer {
   color: var(--text-dim);
 }
 .ins-section {
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--panel);
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
 }
 .ins-section > :not(summary) {
-  margin: 0 12px 8px;
+  margin: 0 0 12px;
 }
+/* 見出しの行：左に名前、右に開け閉めの山形（Carbon のアコーディオン） */
 .ins-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   cursor: pointer;
-  padding: 8px 12px;
-  font-size: var(--fs-s);
+  padding: 12px 4px 12px 0;
+  font-size: var(--fs-m);
   color: var(--text);
   font-weight: 600;
-  list-style-position: inside;
+  list-style: none;
+}
+.ins-summary::-webkit-details-marker {
+  display: none;
+}
+.ins-summary::after {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--text-dim);
+  border-bottom: 1.5px solid var(--text-dim);
+  transform: translateY(-2px) rotate(45deg);
+}
+.ins-section:not([open]) > .ins-summary::after {
+  transform: rotate(-45deg);
+}
+.ins-summary:hover {
+  color: var(--accent-green);
 }
 .ins-row {
   display: grid;
